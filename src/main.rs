@@ -1,10 +1,14 @@
+use anyhow::{Result, bail};
 use log::debug;
-use octocrab::{Octocrab, params};
+use octocrab::{Octocrab, issues::IssueHandler, params};
 use pr::Pr;
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    crossterm::event::{KeyEvent, KeyModifiers},
+    crossterm::{
+        event::{KeyEvent, KeyModifiers},
+        terminal,
+    },
     layout::Constraint,
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, Cell, Row, Table, TableState},
@@ -17,7 +21,7 @@ use ratatui::{
     },
     style::palette::tailwind,
 };
-use std::{error::Error, io};
+use std::{env, io};
 use tokio::runtime::Runtime;
 
 mod pr;
@@ -108,25 +112,34 @@ impl App {
         }
     }
 
+    fn octocrab(&self) -> Result<Octocrab> {
+        Ok(Octocrab::builder()
+            .personal_token(
+                env::var("GITHUB_TOKEN").expect("GITHUB_TOKEN environment variable must be set"),
+            )
+            .build()?)
+    }
+
     fn repo(&self) -> &Repo {
         &self.recent_repos[self.selected_repo]
     }
 
-    fn fetch_data(&mut self) {
-        let rt = Runtime::new().unwrap();
-        let github_data = rt
-            .block_on(fetch_github_data(&self.repo(), &self.filter))
-            .unwrap();
+    /// Fetch data from GitHub for the selected repository and filter
+    async fn fetch_data(&mut self) -> Result<()> {
+        let github_data = fetch_github_data(&self.octocrab()?, &self.repo(), &self.filter).await?;
         self.prs = github_data;
+
+        Ok(())
     }
 
+    /// Move to the next PR in the list
     fn next(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
-                if i >= self.prs.len() - 1 {
-                    0
-                } else {
+                if i < self.prs.len() - 1 {
                     i + 1
+                } else {
+                    i
                 }
             }
             None => 0,
@@ -134,13 +147,14 @@ impl App {
         self.state.select(Some(i));
     }
 
+    /// Move to the previous PR in the list
     fn previous(&mut self) {
         let i = match self.state.selected() {
             Some(i) => {
-                if i == 0 {
-                    self.prs.len() - 1
-                } else {
+                if i > 0 {
                     i - 1
+                } else {
+                    i
                 }
             }
             None => 0,
@@ -148,7 +162,8 @@ impl App {
         self.state.select(Some(i));
     }
 
-    fn select(&mut self) {
+    /// Toggle the selection of the currently selected PR
+    fn select_toggle(&mut self) {
         let i = self.state.selected().unwrap_or(0);
         if self.selected_prs.contains(&i) {
             self.selected_prs.retain(|&x| x != i);
@@ -159,33 +174,57 @@ impl App {
 
     /// todo: This should be opening a pop-up dialog to let the user type in a org, repo, and branch
     /// Here is the cheap version that just cycles through the recent repos
-    fn select_next_repo(&mut self) -> io::Result<()> {
+    async fn select_next_repo(&mut self) -> Result<()> {
         self.selected_repo = (self.selected_repo + 1) % (self.recent_repos.len() - 1);
-        self.fetch_data();
-        self.state.select(Some(0));
+        self.select_repo().await?;
 
         Ok(())
     }
 
-    fn exit(&mut self) -> ! {
-        // This is a no-op for now, but could be used to clean up resources or save state
-        debug!("Exiting...");
-        std::process::exit(0);
+    async fn select_repo(&mut self) -> Result<()> {
+        // This function is a placeholder for future implementation
+        // It could be used to select a specific repo from a list or input
+        self.selected_prs.clear();
+        self.fetch_data().await?;
+        self.state.select(Some(0));
+        debug!("Selecting repo: {}", self.repo().repo);
+        Ok(())
+    }
+
+    /// Exit the application
+    fn exit(&mut self) -> Result<()> {
+        bail!("Exiting the application")
     }
 
     /// Rebase the selected PRs
-    fn rebase(&mut self) -> io::Result<()> {
-        // This is a placeholder for the rebase functionality
-        // In a real application, you would implement the logic to rebase the selected PRs
+    async fn rebase(&mut self) -> Result<()> {
+        // for all selected PRs, authored by `dependabot` we rebase by adding the commend `@dependabot rebase`
+
+        let octocrab = self.octocrab()?;
+        for &pr_index in &self.selected_prs {
+            if let Some(pr) = self.prs.get(pr_index) {
+                if pr.author.starts_with("dependabot") {
+                    debug!("Rebasing PR #{}", pr.number);
+
+                    comment(&octocrab, self.repo(), pr, "@dependabot rebase").await?;
+                } else {
+                    debug!("Skipping PR #{} authored by {}", pr.number, pr.author);
+                }
+            } else {
+                debug!("No PR found at index {}", pr_index);
+            }
+        }
         debug!("Rebasing selected PRs: {:?}", self.selected_prs);
 
         Ok(())
     }
 }
 
-async fn fetch_github_data<'a>(repo: &Repo, filter: &PrFilter) -> Result<Vec<Pr>, Box<dyn Error>> {
-    let octocrab = Octocrab::builder().build()?;
-
+async fn fetch_github_data<'a>(
+    octocrab: &Octocrab,
+    repo: &Repo,
+    filter: &PrFilter,
+) -> Result<Vec<Pr>> {
     // Fetch some repos from the Rust organization as an example
     let page = octocrab
         .pulls(&repo.org, &repo.repo)
@@ -213,7 +252,8 @@ async fn fetch_github_data<'a>(repo: &Repo, filter: &PrFilter) -> Result<Vec<Pr>
     Ok(prs)
 }
 
-fn main() -> Result<(), Box<dyn Error>> {
+#[tokio::main]
+async fn main() -> Result<()> {
     // Set up terminal
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -223,8 +263,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // Create app state
     let mut app = App::new();
-    app.fetch_data();
-    app.state.select(Some(0));
+    app.select_repo().await?;
 
     // Main loop
     loop {
@@ -284,7 +323,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             f.render_stateful_widget(table, size, &mut app.state);
         })?;
 
-        if let Err(e) = handle_events(&mut app) {
+        if let Err(e) = handle_events(&mut app).await {
             debug!("Error handling events: {}", e);
             break;
         }
@@ -302,19 +341,38 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn handle_events(app: &mut App) -> io::Result<()> {
+async fn handle_events(app: &mut App) -> Result<()> {
     match event::read()? {
-        Event::Key(key) if key.kind == KeyEventKind::Press => handle_key_event(app, key),
+        Event::Key(key) if key.kind == KeyEventKind::Press => handle_key_event(app, key).await,
         _ => Ok(()),
     }
 }
 
-fn handle_key_event(app: &mut App, key: KeyEvent) -> io::Result<()> {
+async fn handle_key_event(app: &mut App, key: KeyEvent) -> Result<()> {
     // let shift_pressed = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
         KeyCode::Char('q') => app.exit(),
-        KeyCode::Char('r') => app.rebase(),
-        KeyCode::Char('/') => app.select_next_repo(),
+        KeyCode::Char('r') => app.rebase().await,
+        KeyCode::Char('/') => app.select_next_repo().await,
+        KeyCode::Char('j') | KeyCode::Down => {
+            app.next();
+            Ok(())
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            app.previous();
+            Ok(())
+        }
+        KeyCode::Char(' ') => {
+            app.select_toggle();
+            Ok(())
+        }
         _ => Ok(()),
     }
+}
+
+async fn comment(octocrab: &Octocrab, repo: &Repo, pr: &Pr, body: &str) -> Result<()> {
+    let issue = octocrab.issues(&repo.org, &repo.repo);
+    issue.create_comment(pr.number as _, body).await?;
+
+    Ok(())
 }
