@@ -497,24 +497,14 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
     let repo_data = app.get_current_repo_data();
     let selected_count = repo_data.selected_prs.len();
 
-    // Build context-sensitive action hints (using owned Strings)
-    let mut actions: Vec<(String, String, Color)> = Vec::new();
+    // Split into context-sensitive (left) and global actions (right)
+    let mut context_actions: Vec<(String, String, Color)> = Vec::new();
+    let mut global_actions: Vec<(String, String, Color)> = Vec::new();
 
-    // Always available actions
-    actions.push(("q".to_string(), "Quit".to_string(), app.colors.header_bg));
-    actions.push(("Ctrl+r".to_string(), "Refresh".to_string(), app.colors.header_bg));
-    actions.push(("Tab".to_string(), "Switch Project".to_string(), app.colors.header_bg));
-
-    // Navigation actions (when PRs are available)
-    if !repo_data.prs.is_empty() {
-        actions.push(("↑↓/jk".to_string(), "Navigate".to_string(), app.colors.header_bg));
-        actions.push(("Space".to_string(), "Select".to_string(), app.colors.header_bg));
-    }
-
-    // Context-sensitive actions based on selection
+    // Context-sensitive actions (what can I do NOW with this selection)
     if selected_count > 0 {
         // Highlight merge action when PRs are selected
-        actions.push((
+        context_actions.push((
             "m".to_string(),
             format!("Merge ({})", selected_count),
             tailwind::GREEN.c700,
@@ -528,43 +518,77 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
         });
 
         if has_dependabot {
-            actions.push((
+            context_actions.push((
                 "r".to_string(),
                 format!("Rebase ({})", selected_count),
                 tailwind::BLUE.c700,
             ));
         }
+    } else if !repo_data.prs.is_empty() {
+        // When nothing selected, show how to select
+        context_actions.push((
+            "Space".to_string(),
+            "Select".to_string(),
+            tailwind::AMBER.c600,
+        ));
     }
 
-    // Create action tiles (similar to zellij)
-    let mut spans = Vec::new();
-    for (i, (key, label, bg_color)) in actions.iter().enumerate() {
-        if i > 0 {
-            spans.push(Span::raw(" "));
+    // Global actions (always available, less emphasized)
+    global_actions.push(("↑↓/jk".to_string(), "Navigate".to_string(), app.colors.header_bg));
+    global_actions.push(("Tab".to_string(), "Switch Project".to_string(), app.colors.header_bg));
+    global_actions.push(("Ctrl+r".to_string(), "Refresh".to_string(), app.colors.header_bg));
+    global_actions.push(("q".to_string(), "Quit".to_string(), app.colors.header_bg));
+
+    // Helper function to create action spans
+    let create_action_spans = |actions: &[(String, String, Color)]| -> Vec<Span> {
+        let mut spans = Vec::new();
+        for (i, (key, label, bg_color)) in actions.iter().enumerate() {
+            if i > 0 {
+                spans.push(Span::raw(" "));
+            }
+
+            // Key part (highlighted)
+            spans.push(Span::styled(
+                format!(" {} ", key),
+                Style::default()
+                    .fg(Color::White)
+                    .bg(*bg_color)
+                    .add_modifier(Modifier::BOLD),
+            ));
+
+            // Label part
+            spans.push(Span::styled(
+                format!(" {} ", label),
+                Style::default().fg(app.colors.row_fg),
+            ));
         }
+        spans
+    };
 
-        // Key part (highlighted)
-        spans.push(Span::styled(
-            format!(" {} ", key),
-            Style::default()
-                .fg(Color::White)
-                .bg(*bg_color)
-                .add_modifier(Modifier::BOLD),
-        ));
+    // Split the area into left and right sections
+    let sections = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(50), // Left: context-sensitive
+            Constraint::Percentage(50), // Right: global actions
+        ])
+        .split(area);
 
-        // Label part
-        spans.push(Span::styled(
-            format!(" {} ", label),
-            Style::default().fg(app.colors.row_fg),
-        ));
-    }
+    // Render context-sensitive actions (left-aligned)
+    let context_spans = create_action_spans(&context_actions);
+    let context_line = Line::from(context_spans);
+    let context_paragraph = Paragraph::new(context_line)
+        .block(Block::default().borders(Borders::ALL).title("Actions"))
+        .alignment(ratatui::layout::Alignment::Left);
+    f.render_widget(context_paragraph, sections[0]);
 
-    let action_line = Line::from(spans);
-    let action_paragraph = Paragraph::new(action_line)
-        .block(Block::default().borders(Borders::ALL))
-        .alignment(ratatui::layout::Alignment::Center);
-
-    f.render_widget(action_paragraph, area);
+    // Render global actions (right-aligned)
+    let global_spans = create_action_spans(&global_actions);
+    let global_line = Line::from(global_spans);
+    let global_paragraph = Paragraph::new(global_line)
+        .block(Block::default().borders(Borders::ALL).title("Global"))
+        .alignment(ratatui::layout::Alignment::Right);
+    f.render_widget(global_paragraph, sections[1]);
 }
 
 #[tokio::main]
