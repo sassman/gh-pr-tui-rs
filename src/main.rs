@@ -1439,28 +1439,46 @@ async fn fetch_github_data<'a>(
     repo: &Repo,
     filter: &PrFilter,
 ) -> Result<Vec<Pr>> {
-    // Fetch some repos from the Rust organization as an example
-    let page = octocrab
-        .pulls(&repo.org, &repo.repo)
-        .list()
-        .state(params::State::Open)
-        .head(&repo.branch)
-        .sort(params::pulls::Sort::Updated)
-        .direction(params::Direction::Ascending)
-        .per_page(50)
-        .send()
-        .await?;
-
     let mut prs = Vec::new();
+    let mut page_num = 1u32;
+    const MAX_PRS: usize = 50;
+    const PER_PAGE: u8 = 30;
 
-    for pr in page.items.into_iter().filter(|pr| {
-        pr.title
-            .as_ref()
-            .unwrap_or(&"".to_string())
-            .contains(&filter.title)
-    }) {
-        let pr = Pr::from_pull_request(&pr, repo, &octocrab).await;
-        prs.push(pr);
+    // Fetch pages until we have 50 PRs or run out of pages
+    loop {
+        let page = octocrab
+            .pulls(&repo.org, &repo.repo)
+            .list()
+            .state(params::State::Open)
+            .head(&repo.branch)
+            .sort(params::pulls::Sort::Updated)
+            .direction(params::Direction::Ascending)
+            .per_page(PER_PAGE)
+            .page(page_num)
+            .send()
+            .await?;
+
+        let page_is_empty = page.items.is_empty();
+
+        for pr in page.items.into_iter().filter(|pr| {
+            pr.title
+                .as_ref()
+                .unwrap_or(&"".to_string())
+                .contains(&filter.title)
+        }) {
+            if prs.len() >= MAX_PRS {
+                break;
+            }
+            let pr = Pr::from_pull_request(&pr, repo, &octocrab).await;
+            prs.push(pr);
+        }
+
+        // Stop if we have enough PRs or if the page was empty
+        if prs.len() >= MAX_PRS || page_is_empty {
+            break;
+        }
+
+        page_num += 1;
     }
 
     Ok(prs)
