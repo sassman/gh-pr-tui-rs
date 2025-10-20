@@ -79,6 +79,7 @@ enum BootstrapState {
 
 struct App {
     action_tx: mpsc::UnboundedSender<Action>,
+    task_tx: mpsc::UnboundedSender<BackgroundTask>,
     should_quit: bool,
     state: TableState,
     prs: Vec<Pr>,
@@ -147,7 +148,6 @@ fn shutdown() -> Result<()> {
     crossterm::terminal::disable_raw_mode()?;
     Ok(())
 }
-#[derive(PartialEq)]
 enum Action {
     Bootstrap,
     Rebase,
@@ -160,22 +160,62 @@ enum Action {
     NavigateToPreviousPr,
     MergeSelectedPrs,
 
+    // Background task completion notifications
+    BootstrapComplete(Result<BootstrapResult, String>),
+    RepoDataLoaded(usize, Result<Vec<Pr>, String>),
+    RefreshComplete(Result<Vec<Pr>, String>),
+    RebaseComplete(Result<(), String>),
+    MergeComplete(Result<(), String>),
+
     Quit,
     None,
 }
 
+// Result types for background tasks
+struct BootstrapResult {
+    repos: Vec<Repo>,
+    selected_repo: usize,
+}
+
+// Background task definitions
+enum BackgroundTask {
+    LoadAllRepos {
+        repos: Vec<Repo>,
+        filter: PrFilter,
+        octocrab: Octocrab,
+    },
+    LoadSingleRepo {
+        repo_index: usize,
+        repo: Repo,
+        filter: PrFilter,
+        octocrab: Octocrab,
+    },
+    Rebase {
+        repo: Repo,
+        prs: Vec<Pr>,
+        selected_indices: Vec<usize>,
+        octocrab: Octocrab,
+    },
+    Merge {
+        repo: Repo,
+        prs: Vec<Pr>,
+        selected_indices: Vec<usize>,
+        octocrab: Octocrab,
+    },
+}
+
 async fn update(app: &mut App, msg: Action) -> Result<Action> {
     match msg {
-        Action::Quit => app.should_quit = true, // You can handle cleanup and exit here
+        Action::Quit => app.should_quit = true,
+
         Action::Bootstrap => {
-            // Stage 1: Loading repositories
+            // Stage 1: Loading repositories (fast, synchronous)
             app.bootstrap_state = BootstrapState::LoadingRepositories;
 
             match loading_recent_repos() {
                 Ok(repos) => {
                     app.recent_repos = repos;
 
-                    // Ensure we have at least one repo
                     if app.recent_repos.is_empty() {
                         app.bootstrap_state = BootstrapState::Error(
                             "No repositories configured. Add repositories to .recent-repositories.json".to_string()
@@ -189,13 +229,12 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
                 }
             }
 
-            // Stage 2: Restoring session
+            // Stage 2: Restoring session (fast, synchronous)
             app.bootstrap_state = BootstrapState::RestoringSession;
 
             let restored = if let Ok(state) = load_persisted_state() {
                 if let Err(err) = app.restore_session(state).await {
                     debug!("Failed to restore session: {}", err);
-                    // Don't fail the bootstrap, just log and continue
                     false
                 } else {
                     true
@@ -204,29 +243,121 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
                 false
             };
 
-            // If we didn't restore a session, select the first repo by default
             if !restored {
                 app.selected_repo = 0;
             }
 
-            // Stage 3: Loading PRs
+            // Stage 3: Loading PRs (slow, move to background)
             app.bootstrap_state = BootstrapState::LoadingPRs;
 
-            match app.load_all_repos().await {
-                Ok(_) => {
-                    app.bootstrap_state = BootstrapState::Completed;
+            // Set all repos to loading state
+            for i in 0..app.recent_repos.len() {
+                let data = app.repo_data.entry(i).or_default();
+                data.loading_state = LoadingState::Loading;
+            }
+
+            // Trigger background loading
+            let _ = app.task_tx.send(BackgroundTask::LoadAllRepos {
+                repos: app.recent_repos.clone(),
+                filter: app.filter.clone(),
+                octocrab: app.octocrab()?,
+            });
+        }
+
+        Action::RepoDataLoaded(index, result) => {
+            // Handle completion of background repo loading
+            let data = app.repo_data.entry(index).or_default();
+            match result {
+                Ok(prs) => {
+                    data.prs = prs;
+                    data.loading_state = LoadingState::Loaded;
+                    if data.table_state.selected().is_none() && !data.prs.is_empty() {
+                        data.table_state.select(Some(0));
+                    }
                 }
                 Err(err) => {
-                    app.bootstrap_state = BootstrapState::Error(format!("Failed to load PRs: {}", err));
+                    data.loading_state = LoadingState::Error(err);
                 }
             }
+
+            // Load current repo state if this is the selected repo
+            if index == app.selected_repo {
+                app.load_repo_state();
+            }
+
+            // Check if all repos are done loading
+            let all_loaded = app.repo_data.len() == app.recent_repos.len()
+                && app.repo_data.values().all(|d| {
+                    matches!(d.loading_state, LoadingState::Loaded | LoadingState::Error(_))
+                });
+
+            if all_loaded && app.bootstrap_state == BootstrapState::LoadingPRs {
+                app.bootstrap_state = BootstrapState::Completed;
+            }
         }
-        Action::Rebase => {
-            app.rebase().await?;
-        }
+
         Action::RefreshCurrentRepo => {
-            app.refresh_current_repo().await?;
+            // Trigger background refresh
+            if let Some(repo) = app.repo().cloned() {
+                app.loading_state = LoadingState::Loading;
+                let data = app.repo_data.entry(app.selected_repo).or_default();
+                data.loading_state = LoadingState::Loading;
+
+                let _ = app.task_tx.send(BackgroundTask::LoadSingleRepo {
+                    repo_index: app.selected_repo,
+                    repo,
+                    filter: app.filter.clone(),
+                    octocrab: app.octocrab()?,
+                });
+            }
         }
+
+        Action::Rebase => {
+            // Trigger background rebase
+            if let Some(repo) = app.repo().cloned() {
+                let repo_data = app.get_current_repo_data();
+                let _ = app.task_tx.send(BackgroundTask::Rebase {
+                    repo,
+                    prs: repo_data.prs.clone(),
+                    selected_indices: repo_data.selected_prs.clone(),
+                    octocrab: app.octocrab()?,
+                });
+            }
+        }
+
+        Action::RebaseComplete(result) => {
+            match result {
+                Ok(_) => debug!("Rebase completed successfully"),
+                Err(err) => debug!("Rebase failed: {}", err),
+            }
+        }
+
+        Action::MergeSelectedPrs => {
+            // Trigger background merge
+            if let Some(repo) = app.repo().cloned() {
+                let repo_data = app.get_current_repo_data();
+                let _ = app.task_tx.send(BackgroundTask::Merge {
+                    repo,
+                    prs: repo_data.prs.clone(),
+                    selected_indices: repo_data.selected_prs.clone(),
+                    octocrab: app.octocrab()?,
+                });
+            }
+        }
+
+        Action::MergeComplete(result) => {
+            match result {
+                Ok(_) => {
+                    debug!("Merge completed successfully");
+                    // Clear selections after successful merge
+                    app.selected_prs.clear();
+                    let data = app.repo_data.entry(app.selected_repo).or_default();
+                    data.selected_prs.clear();
+                }
+                Err(err) => debug!("Merge failed: {}", err),
+            }
+        }
+
         Action::SelectNextRepo => {
             app.select_next_repo();
         }
@@ -245,9 +376,7 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
         Action::NavigateToPreviousPr => {
             app.previous();
         }
-        Action::MergeSelectedPrs => {
-            app.merge().await?;
-        }
+
         _ => {}
     };
     Ok(Action::None)
@@ -273,14 +402,84 @@ fn start_event_handler(
     })
 }
 
+/// Background task worker that processes heavy operations without blocking UI
+fn start_task_worker(
+    mut task_rx: mpsc::UnboundedReceiver<BackgroundTask>,
+    action_tx: mpsc::UnboundedSender<Action>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(task) = task_rx.recv().await {
+            match task {
+                BackgroundTask::LoadAllRepos { repos, filter, octocrab } => {
+                    // Spawn parallel tasks for each repo
+                    let mut tasks = Vec::new();
+                    for (index, repo) in repos.iter().enumerate() {
+                        let octocrab = octocrab.clone();
+                        let repo = repo.clone();
+                        let filter = filter.clone();
+
+                        let task = tokio::spawn(async move {
+                            let result = fetch_github_data(&octocrab, &repo, &filter).await
+                                .map_err(|e| e.to_string());
+                            (index, result)
+                        });
+                        tasks.push(task);
+                    }
+
+                    // Collect results and send back to UI thread
+                    for task in tasks {
+                        if let Ok((index, result)) = task.await {
+                            let _ = action_tx.send(Action::RepoDataLoaded(index, result));
+                        }
+                    }
+                }
+                BackgroundTask::LoadSingleRepo { repo_index, repo, filter, octocrab } => {
+                    let result = fetch_github_data(&octocrab, &repo, &filter).await
+                        .map_err(|e| e.to_string());
+                    let _ = action_tx.send(Action::RepoDataLoaded(repo_index, result));
+                }
+                BackgroundTask::Rebase { repo, prs, selected_indices, octocrab } => {
+                    let mut success = true;
+                    for &idx in &selected_indices {
+                        if let Some(pr) = prs.get(idx) {
+                            if pr.author.starts_with("dependabot") {
+                                if let Err(_) = comment(&octocrab, &repo, pr, "@dependabot rebase").await {
+                                    success = false;
+                                }
+                            }
+                        }
+                    }
+                    let result = if success { Ok(()) } else { Err("Some rebases failed".to_string()) };
+                    let _ = action_tx.send(Action::RebaseComplete(result));
+                }
+                BackgroundTask::Merge { repo, prs, selected_indices, octocrab } => {
+                    let mut success = true;
+                    for &idx in &selected_indices {
+                        if let Some(pr) = prs.get(idx) {
+                            if let Err(_) = merge(&octocrab, &repo, pr).await {
+                                success = false;
+                            }
+                        }
+                    }
+                    let result = if success { Ok(()) } else { Err("Some merges failed".to_string()) };
+                    let _ = action_tx.send(Action::MergeComplete(result));
+                }
+            }
+        }
+    })
+}
+
 async fn run() -> Result<()> {
     let mut t = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel();
+    let (task_tx, task_rx) = mpsc::unbounded_channel();
 
-    let mut app = App::new(action_tx);
+    let mut app = App::new(action_tx.clone(), task_tx);
 
-    let task = start_event_handler(&app, app.action_tx.clone());
+    let event_task = start_event_handler(&app, app.action_tx.clone());
+    let worker_task = start_task_worker(task_rx, action_tx.clone());
+
     app.action_tx
         .send(Action::Bootstrap)
         .expect("Failed to send bootstrap action");
@@ -310,7 +509,8 @@ async fn run() -> Result<()> {
         }
     }
 
-    task.abort();
+    event_task.abort();
+    worker_task.abort();
 
     Ok(())
 }
@@ -601,9 +801,10 @@ async fn main() -> Result<()> {
 }
 
 impl App {
-    fn new(action_tx: mpsc::UnboundedSender<Action>) -> App {
+    fn new(action_tx: mpsc::UnboundedSender<Action>, task_tx: mpsc::UnboundedSender<BackgroundTask>) -> App {
         App {
             action_tx,
+            task_tx,
             should_quit: false,
             state: TableState::default(),
             prs: Vec::new(),
