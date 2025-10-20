@@ -354,12 +354,13 @@ fn ui(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Split the layout: tabs on top, table below
+    // Split the layout: tabs on top, table in middle, action panel at bottom
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Tabs
             Constraint::Min(0),    // Table
+            Constraint::Length(3), // Action panel
         ])
         .split(f.area());
 
@@ -486,6 +487,84 @@ fn ui(f: &mut Frame, app: &mut App) {
         let table_state = &mut app.get_current_repo_data_mut().table_state;
         f.render_stateful_widget(table, chunks[1], table_state);
     }
+
+    // Render context-sensitive action panel at the bottom
+    render_action_panel(f, app, chunks[2]);
+}
+
+/// Render the bottom action panel with context-sensitive shortcuts
+fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
+    let repo_data = app.get_current_repo_data();
+    let selected_count = repo_data.selected_prs.len();
+
+    // Build context-sensitive action hints (using owned Strings)
+    let mut actions: Vec<(String, String, Color)> = Vec::new();
+
+    // Always available actions
+    actions.push(("q".to_string(), "Quit".to_string(), app.colors.header_bg));
+    actions.push(("Ctrl+r".to_string(), "Refresh".to_string(), app.colors.header_bg));
+    actions.push(("Tab".to_string(), "Switch Project".to_string(), app.colors.header_bg));
+
+    // Navigation actions (when PRs are available)
+    if !repo_data.prs.is_empty() {
+        actions.push(("↑↓/jk".to_string(), "Navigate".to_string(), app.colors.header_bg));
+        actions.push(("Space".to_string(), "Select".to_string(), app.colors.header_bg));
+    }
+
+    // Context-sensitive actions based on selection
+    if selected_count > 0 {
+        // Highlight merge action when PRs are selected
+        actions.push((
+            "m".to_string(),
+            format!("Merge ({})", selected_count),
+            tailwind::GREEN.c700,
+        ));
+
+        // Check if any selected PRs are from dependabot
+        let has_dependabot = repo_data.selected_prs.iter().any(|&idx| {
+            repo_data.prs.get(idx)
+                .map(|pr| pr.author.starts_with("dependabot"))
+                .unwrap_or(false)
+        });
+
+        if has_dependabot {
+            actions.push((
+                "r".to_string(),
+                format!("Rebase ({})", selected_count),
+                tailwind::BLUE.c700,
+            ));
+        }
+    }
+
+    // Create action tiles (similar to zellij)
+    let mut spans = Vec::new();
+    for (i, (key, label, bg_color)) in actions.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::raw(" "));
+        }
+
+        // Key part (highlighted)
+        spans.push(Span::styled(
+            format!(" {} ", key),
+            Style::default()
+                .fg(Color::White)
+                .bg(*bg_color)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+        // Label part
+        spans.push(Span::styled(
+            format!(" {} ", label),
+            Style::default().fg(app.colors.row_fg),
+        ));
+    }
+
+    let action_line = Line::from(spans);
+    let action_paragraph = Paragraph::new(action_line)
+        .block(Block::default().borders(Borders::ALL))
+        .alignment(ratatui::layout::Alignment::Center);
+
+    f.render_widget(action_paragraph, area);
 }
 
 #[tokio::main]
