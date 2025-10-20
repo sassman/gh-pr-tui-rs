@@ -92,6 +92,21 @@ struct App {
     bootstrap_state: BootstrapState,
     // Tabbed view: store PRs and state for each repo
     repo_data: std::collections::HashMap<usize, RepoData>,
+    // Background task status
+    task_status: Option<TaskStatus>,
+}
+
+#[derive(Debug, Clone)]
+struct TaskStatus {
+    message: String,
+    status_type: TaskStatusType,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum TaskStatusType {
+    Running,   // ⏳ In progress
+    Success,   // ✓ Completed successfully
+    Error,     // ✗ Failed
 }
 
 #[derive(Debug, Clone, Default)]
@@ -259,6 +274,12 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
             // Stage 3: Loading PRs (slow, move to background)
             app.bootstrap_state = BootstrapState::LoadingPRs;
 
+            // Set status
+            app.task_status = Some(TaskStatus {
+                message: format!("Loading PRs from {} repositories...", app.recent_repos.len()),
+                status_type: TaskStatusType::Running,
+            });
+
             // Set all repos to loading state
             for i in 0..app.recent_repos.len() {
                 let data = app.repo_data.entry(i).or_default();
@@ -316,6 +337,11 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
 
             if all_loaded && app.bootstrap_state == BootstrapState::LoadingPRs {
                 app.bootstrap_state = BootstrapState::Completed;
+                // Clear loading status and show success
+                app.task_status = Some(TaskStatus {
+                    message: "All repositories loaded successfully".to_string(),
+                    status_type: TaskStatusType::Success,
+                });
             }
         }
 
@@ -357,6 +383,11 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
                 app.loading_state = LoadingState::Loading;
                 let data = app.repo_data.entry(app.selected_repo).or_default();
                 data.loading_state = LoadingState::Loading;
+
+                app.task_status = Some(TaskStatus {
+                    message: format!("Refreshing {}/{}...", repo.org, repo.repo),
+                    status_type: TaskStatusType::Running,
+                });
 
                 let _ = app.task_tx.send(BackgroundTask::LoadSingleRepo {
                     repo_index: app.selected_repo,
@@ -400,6 +431,12 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
                     (selected_indices, repo_data.prs.clone())
                 };
 
+                // Set status to show rebase is starting
+                app.task_status = Some(TaskStatus {
+                    message: format!("Rebasing {} PR(s)...", selected_indices.len()),
+                    status_type: TaskStatusType::Running,
+                });
+
                 let _ = app.task_tx.send(BackgroundTask::Rebase {
                     repo,
                     prs: prs_clone,
@@ -411,8 +448,20 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
 
         Action::RebaseComplete(result) => {
             match result {
-                Ok(_) => debug!("Rebase completed successfully"),
-                Err(err) => debug!("Rebase failed: {}", err),
+                Ok(_) => {
+                    debug!("Rebase completed successfully");
+                    app.task_status = Some(TaskStatus {
+                        message: "Rebase completed successfully".to_string(),
+                        status_type: TaskStatusType::Success,
+                    });
+                }
+                Err(err) => {
+                    debug!("Rebase failed: {}", err);
+                    app.task_status = Some(TaskStatus {
+                        message: format!("Rebase failed: {}", err),
+                        status_type: TaskStatusType::Error,
+                    });
+                }
             }
         }
 
@@ -420,6 +469,13 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
             // Trigger background merge
             if let Some(repo) = app.repo().cloned() {
                 let repo_data = app.get_current_repo_data();
+                let selected_count = repo_data.selected_prs.len();
+
+                app.task_status = Some(TaskStatus {
+                    message: format!("Merging {} PR(s)...", selected_count),
+                    status_type: TaskStatusType::Running,
+                });
+
                 let _ = app.task_tx.send(BackgroundTask::Merge {
                     repo,
                     prs: repo_data.prs.clone(),
@@ -433,12 +489,22 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
             match result {
                 Ok(_) => {
                     debug!("Merge completed successfully");
+                    app.task_status = Some(TaskStatus {
+                        message: "Merge completed successfully".to_string(),
+                        status_type: TaskStatusType::Success,
+                    });
                     // Clear selections after successful merge
                     app.selected_prs.clear();
                     let data = app.repo_data.entry(app.selected_repo).or_default();
                     data.selected_prs.clear();
                 }
-                Err(err) => debug!("Merge failed: {}", err),
+                Err(err) => {
+                    debug!("Merge failed: {}", err);
+                    app.task_status = Some(TaskStatus {
+                        message: format!("Merge failed: {}", err),
+                        status_type: TaskStatusType::Error,
+                    });
+                }
             }
         }
 
@@ -736,13 +802,14 @@ fn ui(f: &mut Frame, app: &mut App) {
         return;
     }
 
-    // Split the layout: tabs on top, table in middle, action panel at bottom
+    // Split the layout: tabs on top, table in middle, action panel and status at bottom
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Tabs
             Constraint::Min(0),    // Table
             Constraint::Length(3), // Action panel
+            Constraint::Length(1), // Status line
         ])
         .split(f.area());
 
@@ -874,6 +941,9 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     // Render context-sensitive action panel at the bottom
     render_action_panel(f, app, chunks[2]);
+
+    // Render status line at the very bottom
+    render_status_line(f, app, chunks[3]);
 }
 
 /// Render the bottom action panel with context-sensitive shortcuts
@@ -994,6 +1064,29 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(global_paragraph, sections[1]);
 }
 
+/// Render the status line showing background task progress
+fn render_status_line(f: &mut Frame, app: &App, area: Rect) {
+    if let Some(ref status) = app.task_status {
+        let (icon, color) = match status.status_type {
+            TaskStatusType::Running => ("⏳", Color::Yellow),
+            TaskStatusType::Success => ("✓", Color::Green),
+            TaskStatusType::Error => ("✗", Color::Red),
+        };
+
+        let status_text = format!(" {} {}", icon, status.message);
+        let status_span = Span::styled(
+            status_text,
+            Style::default()
+                .fg(color)
+                .add_modifier(Modifier::BOLD),
+        );
+
+        let paragraph = Paragraph::new(Line::from(status_span))
+            .style(Style::default().bg(app.colors.buffer_bg));
+        f.render_widget(paragraph, area);
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     initialize_panic_handler();
@@ -1021,6 +1114,7 @@ impl App {
             loading_state: LoadingState::Idle,
             bootstrap_state: BootstrapState::NotStarted,
             repo_data: std::collections::HashMap::new(),
+            task_status: None,
         }
     }
 
