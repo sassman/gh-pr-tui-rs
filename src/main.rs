@@ -604,20 +604,20 @@ fn start_task_worker(
                     let mut success = true;
                     for &idx in &selected_indices {
                         if let Some(pr) = prs.get(idx) {
-                            // Try to update the branch (GitHub API endpoint for "Update branch")
-                            // This performs a rebase/merge to bring the PR branch up to date with base
-                            let update_result = octocrab
-                                .pulls(&repo.org, &repo.repo)
-                                .update_branch(pr.number as u64)
-                                .await;
+                            // For dependabot PRs, use comment-based rebase
+                            if pr.author.starts_with("dependabot") {
+                                if let Err(_) = comment(&octocrab, &repo, pr, "@dependabot rebase").await {
+                                    success = false;
+                                }
+                            } else {
+                                // For regular PRs, use GitHub's update_branch API
+                                // This performs a rebase/merge to bring the PR branch up to date with base
+                                let update_result = octocrab
+                                    .pulls(&repo.org, &repo.repo)
+                                    .update_branch(pr.number as u64)
+                                    .await;
 
-                            if update_result.is_err() {
-                                // Fallback: For dependabot PRs, use @dependabot rebase comment
-                                if pr.author.starts_with("dependabot") {
-                                    if let Err(_) = comment(&octocrab, &repo, pr, "@dependabot rebase").await {
-                                        success = false;
-                                    }
-                                } else {
+                                if update_result.is_err() {
                                     success = false;
                                 }
                             }
