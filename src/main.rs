@@ -1,24 +1,33 @@
 use anyhow::{Context, Result, bail};
-use log::debug;
 use octocrab::{Octocrab, params};
 use ratatui::{
     crossterm::{
         self,
-        event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
+        event::{self, Event, KeyEvent, KeyEventKind},
     },
+    layout::Margin,
     prelude::*,
     style::palette::tailwind,
     widgets::*,
 };
 use serde::{Deserialize, Serialize};
-use std::{env, fs::File, io::BufReader};
+use std::{env, fs::File, io::BufReader, path::PathBuf};
 use tokio::sync::mpsc;
+
+// Import debug from the log crate using :: prefix to disambiguate from our log module
+use ::log::debug;
 
 use crate::gh::{comment, merge};
 use crate::pr::Pr;
+use crate::log::{LogPanel, LogSection, PrContext};
+use crate::config::Config;
+use crate::shortcuts::Action;
 
 mod gh;
 mod pr;
+mod log;
+mod config;
+mod shortcuts;
 
 const PALETTES: [tailwind::Palette; 4] = [
     tailwind::BLUE,
@@ -94,6 +103,16 @@ struct App {
     repo_data: std::collections::HashMap<usize, RepoData>,
     // Background task status
     task_status: Option<TaskStatus>,
+    // Log viewer panel
+    log_panel: Option<LogPanel>,
+    // Spinner animation frame counter
+    spinner_frame: usize,
+    // User configuration
+    config: Config,
+    // Shortcuts panel visibility and scroll state
+    show_shortcuts: bool,
+    shortcuts_scroll: usize,
+    shortcuts_max_scroll: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -104,9 +123,9 @@ struct TaskStatus {
 
 #[derive(Debug, Clone, PartialEq)]
 enum TaskStatusType {
-    Running,   // ⏳ In progress
-    Success,   // ✓ Completed successfully
-    Error,     // ✗ Failed
+    Running, // ⏳ In progress
+    Success, // ✓ Completed successfully
+    Error,   // ✗ Failed
 }
 
 #[derive(Debug, Clone, Default)]
@@ -131,10 +150,10 @@ struct Repo {
 
 #[derive(Debug, Serialize, Deserialize, Eq, Clone, PartialEq)]
 enum PrFilter {
-    None,      // Show all PRs
-    Feat,      // Show only "feat:" PRs
-    Fix,       // Show only "fix:" PRs
-    Chore,     // Show only "chore:" PRs
+    None,  // Show all PRs
+    Feat,  // Show only "feat:" PRs
+    Fix,   // Show only "fix:" PRs
+    Chore, // Show only "chore:" PRs
 }
 
 impl PrFilter {
@@ -195,38 +214,6 @@ fn shutdown() -> Result<()> {
     crossterm::terminal::disable_raw_mode()?;
     Ok(())
 }
-enum Action {
-    Bootstrap,
-    Rebase,
-    RefreshCurrentRepo,
-    CycleFilter,
-    SelectNextRepo,
-    SelectPreviousRepo,
-    SelectRepoByIndex(usize),
-    TogglePrSelection,
-    NavigateToNextPr,
-    NavigateToPreviousPr,
-    MergeSelectedPrs,
-    OpenCurrentPrInBrowser,
-
-    // Background task completion notifications
-    BootstrapComplete(Result<BootstrapResult, String>),
-    RepoDataLoaded(usize, Result<Vec<Pr>, String>),
-    RefreshComplete(Result<Vec<Pr>, String>),
-    MergeStatusUpdated(usize, usize, crate::pr::MergeableStatus), // repo_index, pr_number, status
-    RebaseStatusUpdated(usize, usize, bool), // repo_index, pr_number, needs_rebase
-    RebaseComplete(Result<(), String>),
-    MergeComplete(Result<(), String>),
-
-    Quit,
-    None,
-}
-
-// Result types for background tasks
-struct BootstrapResult {
-    repos: Vec<Repo>,
-    selected_repo: usize,
-}
 
 // Background task definitions
 enum BackgroundTask {
@@ -259,9 +246,37 @@ enum BackgroundTask {
         selected_indices: Vec<usize>,
         octocrab: Octocrab,
     },
+    FetchBuildLogs {
+        repo: Repo,
+        pr_number: usize,
+        head_sha: String,
+        octocrab: Octocrab,
+        pr_context: PrContext,
+    },
+    OpenPRInIDE {
+        repo: Repo,
+        pr_number: usize,
+        ide_command: String,
+        temp_dir: String,
+    },
 }
 
 async fn update(app: &mut App, msg: Action) -> Result<Action> {
+    // When shortcuts panel is open, remap navigation to shortcuts scrolling
+    let msg = if app.show_shortcuts {
+        match msg {
+            Action::NavigateToNextPr => Action::ScrollShortcutsDown,
+            Action::NavigateToPreviousPr => Action::ScrollShortcutsUp,
+            Action::ToggleShortcuts | Action::CloseLogPanel | Action::Quit => msg,
+            _ => {
+                // Ignore all other actions when shortcuts panel is open
+                return Ok(Action::None);
+            }
+        }
+    } else {
+        msg
+    };
+
     match msg {
         Action::Quit => app.should_quit = true,
 
@@ -281,7 +296,8 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
                     }
                 }
                 Err(err) => {
-                    app.bootstrap_state = BootstrapState::Error(format!("Failed to load repositories: {}", err));
+                    app.bootstrap_state =
+                        BootstrapState::Error(format!("Failed to load repositories: {}", err));
                     return Ok(Action::None);
                 }
             }
@@ -309,7 +325,10 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
 
             // Set status
             app.task_status = Some(TaskStatus {
-                message: format!("Loading PRs from {} repositories...", app.recent_repos.len()),
+                message: format!(
+                    "Loading PRs from {} repositories...",
+                    app.recent_repos.len()
+                ),
                 status_type: TaskStatusType::Running,
             });
 
@@ -365,7 +384,10 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
             // Check if all repos are done loading
             let all_loaded = app.repo_data.len() == app.recent_repos.len()
                 && app.repo_data.values().all(|d| {
-                    matches!(d.loading_state, LoadingState::Loaded | LoadingState::Error(_))
+                    matches!(
+                        d.loading_state,
+                        LoadingState::Loaded | LoadingState::Error(_)
+                    )
                 });
 
             if all_loaded && app.bootstrap_state == BootstrapState::LoadingPRs {
@@ -467,7 +489,8 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
                         repo_data.selected_prs.clone()
                     } else {
                         // Auto-select all PRs that need rebase
-                        let prs_needing_rebase: Vec<usize> = repo_data.prs
+                        let prs_needing_rebase: Vec<usize> = repo_data
+                            .prs
                             .iter()
                             .enumerate()
                             .filter(|(_, pr)| pr.needs_rebase)
@@ -502,24 +525,22 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
             }
         }
 
-        Action::RebaseComplete(result) => {
-            match result {
-                Ok(_) => {
-                    debug!("Rebase completed successfully");
-                    app.task_status = Some(TaskStatus {
-                        message: "Rebase completed successfully".to_string(),
-                        status_type: TaskStatusType::Success,
-                    });
-                }
-                Err(err) => {
-                    debug!("Rebase failed: {}", err);
-                    app.task_status = Some(TaskStatus {
-                        message: format!("Rebase failed: {}", err),
-                        status_type: TaskStatusType::Error,
-                    });
-                }
+        Action::RebaseComplete(result) => match result {
+            Ok(_) => {
+                debug!("Rebase completed successfully");
+                app.task_status = Some(TaskStatus {
+                    message: "Rebase completed successfully".to_string(),
+                    status_type: TaskStatusType::Success,
+                });
             }
-        }
+            Err(err) => {
+                debug!("Rebase failed: {}", err);
+                app.task_status = Some(TaskStatus {
+                    message: format!("Rebase failed: {}", err),
+                    status_type: TaskStatusType::Error,
+                });
+            }
+        },
 
         Action::MergeSelectedPrs => {
             // Trigger background merge
@@ -572,27 +593,172 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
                 if !repo_data.selected_prs.is_empty() {
                     for &idx in &repo_data.selected_prs {
                         if let Some(pr) = repo_data.prs.get(idx) {
-                            let url = format!("https://github.com/{}/{}/pull/{}", repo.org, repo.repo, pr.number);
+                            let url = format!(
+                                "https://github.com/{}/{}/pull/{}",
+                                repo.org, repo.repo, pr.number
+                            );
                             #[cfg(target_os = "macos")]
                             let _ = std::process::Command::new("open").arg(&url).spawn();
                             #[cfg(target_os = "linux")]
                             let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
                             #[cfg(target_os = "windows")]
-                            let _ = std::process::Command::new("cmd").args(&["/C", "start", &url]).spawn();
+                            let _ = std::process::Command::new("cmd")
+                                .args(&["/C", "start", &url])
+                                .spawn();
                         }
                     }
                 } else if let Some(selected_idx) = repo_data.table_state.selected() {
                     // If no multi-selection, open the currently focused PR
                     if let Some(pr) = repo_data.prs.get(selected_idx) {
-                        let url = format!("https://github.com/{}/{}/pull/{}", repo.org, repo.repo, pr.number);
+                        let url = format!(
+                            "https://github.com/{}/{}/pull/{}",
+                            repo.org, repo.repo, pr.number
+                        );
                         #[cfg(target_os = "macos")]
                         let _ = std::process::Command::new("open").arg(&url).spawn();
                         #[cfg(target_os = "linux")]
                         let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
                         #[cfg(target_os = "windows")]
-                        let _ = std::process::Command::new("cmd").args(&["/C", "start", &url]).spawn();
+                        let _ = std::process::Command::new("cmd")
+                            .args(&["/C", "start", &url])
+                            .spawn();
                     }
                 }
+            }
+        }
+
+        Action::OpenBuildLogs => {
+            // Open logs for any PR - we'll check for failures in the background task
+            if let Some(repo) = app.repo().cloned() {
+                let repo_data = app.get_current_repo_data();
+                if let Some(selected_idx) = repo_data.table_state.selected() {
+                    if let Some(pr) = repo_data.prs.get(selected_idx) {
+                        app.task_status = Some(TaskStatus {
+                            message: "Loading build logs...".to_string(),
+                            status_type: TaskStatusType::Running,
+                        });
+
+                        let pr_context = PrContext {
+                            number: pr.number,
+                            title: pr.title.clone(),
+                            author: pr.author.clone(),
+                        };
+
+                        let _ = app.task_tx.send(BackgroundTask::FetchBuildLogs {
+                            repo,
+                            pr_number: pr.number,
+                            head_sha: "HEAD".to_string(), // Placeholder - will fetch in background task
+                            octocrab: app.octocrab().unwrap_or_else(|_| Octocrab::default()),
+                            pr_context,
+                        });
+                    }
+                }
+            }
+        }
+
+        Action::OpenInIDE => {
+            // Open PR in configured IDE
+            if let Some(repo) = app.repo().cloned() {
+                let repo_data = app.get_current_repo_data();
+                if let Some(selected_idx) = repo_data.table_state.selected() {
+                    if let Some(pr) = repo_data.prs.get(selected_idx) {
+                        app.task_status = Some(TaskStatus {
+                            message: format!("Opening PR #{} in IDE...", pr.number),
+                            status_type: TaskStatusType::Running,
+                        });
+
+                        let _ = app.task_tx.send(BackgroundTask::OpenPRInIDE {
+                            repo,
+                            pr_number: pr.number,
+                            ide_command: app.config.ide_command.clone(),
+                            temp_dir: app.config.temp_dir.clone(),
+                        });
+                    }
+                }
+            }
+        }
+
+        Action::IDEOpenComplete(result) => {
+            app.task_status = Some(match result {
+                Ok(()) => TaskStatus {
+                    message: "IDE opened successfully".to_string(),
+                    status_type: TaskStatusType::Success,
+                },
+                Err(err) => TaskStatus {
+                    message: format!("Failed to open IDE: {}", err),
+                    status_type: TaskStatusType::Error,
+                },
+            });
+        }
+
+        Action::CloseLogPanel => {
+            // Context-aware: close shortcuts panel first if open, otherwise close log panel
+            if app.show_shortcuts {
+                app.show_shortcuts = false;
+            } else {
+                app.log_panel = None;
+            }
+        }
+
+        Action::ToggleShortcuts => {
+            app.show_shortcuts = !app.show_shortcuts;
+            // Reset scroll when opening
+            if app.show_shortcuts {
+                app.shortcuts_scroll = 0;
+            }
+        }
+
+        Action::ScrollShortcutsUp => {
+            app.shortcuts_scroll = app.shortcuts_scroll.saturating_sub(1);
+        }
+
+        Action::ScrollShortcutsDown => {
+            // Only increment if we haven't reached the bottom
+            // max_scroll is calculated during rendering based on actual content/viewport size
+            if app.shortcuts_scroll < app.shortcuts_max_scroll {
+                app.shortcuts_scroll += 1;
+            }
+        }
+
+        Action::NextLogSection => {
+            if let Some(ref mut panel) = app.log_panel {
+                if panel.current_section + 1 < panel.log_sections.len() {
+                    panel.current_section += 1;
+                    // Jump to the start of this section
+                    panel.scroll_offset = panel.log_sections[..panel.current_section]
+                        .iter()
+                        .map(|s| s.error_lines.len() + 3) // +3 for header and separator
+                        .sum();
+                }
+            }
+        }
+
+        Action::ToggleTimestamps => {
+            if let Some(ref mut panel) = app.log_panel {
+                panel.show_timestamps = !panel.show_timestamps;
+            }
+        }
+
+        Action::BuildLogsLoaded(log_sections, pr_context) => {
+            if !log_sections.is_empty() {
+                let section_count = log_sections.len();
+                app.log_panel = Some(LogPanel {
+                    log_sections,
+                    scroll_offset: 0,
+                    current_section: 0,
+                    horizontal_scroll: 0,
+                    pr_context,
+                    show_timestamps: false,
+                });
+                app.task_status = Some(TaskStatus {
+                    message: format!("Build logs loaded ({} check run(s))", section_count),
+                    status_type: TaskStatusType::Success,
+                });
+            } else {
+                app.task_status = Some(TaskStatus {
+                    message: "No check runs found for this PR".to_string(),
+                    status_type: TaskStatusType::Error,
+                });
             }
         }
 
@@ -607,12 +773,40 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
         }
         Action::TogglePrSelection => {
             app.select_toggle();
-        }
-        Action::NavigateToNextPr => {
+            // Move to next PR after toggling selection for easier bulk selection
             app.next();
         }
+        Action::NavigateToNextPr => {
+            // If log panel is open, scroll down instead
+            if app.log_panel.is_some() {
+                if let Some(ref mut panel) = app.log_panel {
+                    panel.scroll_offset = panel.scroll_offset.saturating_add(1);
+                }
+            } else {
+                app.next();
+            }
+        }
         Action::NavigateToPreviousPr => {
-            app.previous();
+            // If log panel is open, scroll up instead
+            if app.log_panel.is_some() {
+                if let Some(ref mut panel) = app.log_panel {
+                    panel.scroll_offset = panel.scroll_offset.saturating_sub(1);
+                }
+            } else {
+                app.previous();
+            }
+        }
+        Action::ScrollLogPanelLeft => {
+            // Only handle if log panel is open
+            if let Some(ref mut panel) = app.log_panel {
+                panel.horizontal_scroll = panel.horizontal_scroll.saturating_sub(5);
+            }
+        }
+        Action::ScrollLogPanelRight => {
+            // Only handle if log panel is open
+            if let Some(ref mut panel) = app.log_panel {
+                panel.horizontal_scroll = panel.horizontal_scroll.saturating_add(5);
+            }
         }
 
         _ => {}
@@ -648,7 +842,11 @@ fn start_task_worker(
     tokio::spawn(async move {
         while let Some(task) = task_rx.recv().await {
             match task {
-                BackgroundTask::LoadAllRepos { repos, filter, octocrab } => {
+                BackgroundTask::LoadAllRepos {
+                    repos,
+                    filter,
+                    octocrab,
+                } => {
                     // Spawn parallel tasks for each repo
                     let mut tasks = Vec::new();
                     for (index, repo) in repos.iter().enumerate() {
@@ -657,7 +855,8 @@ fn start_task_worker(
                         let filter = filter.clone();
 
                         let task = tokio::spawn(async move {
-                            let result = fetch_github_data(&octocrab, &repo, &filter).await
+                            let result = fetch_github_data(&octocrab, &repo, &filter)
+                                .await
                                 .map_err(|e| e.to_string());
                             (index, result)
                         });
@@ -671,12 +870,23 @@ fn start_task_worker(
                         }
                     }
                 }
-                BackgroundTask::LoadSingleRepo { repo_index, repo, filter, octocrab } => {
-                    let result = fetch_github_data(&octocrab, &repo, &filter).await
+                BackgroundTask::LoadSingleRepo {
+                    repo_index,
+                    repo,
+                    filter,
+                    octocrab,
+                } => {
+                    let result = fetch_github_data(&octocrab, &repo, &filter)
+                        .await
                         .map_err(|e| e.to_string());
                     let _ = action_tx.send(Action::RepoDataLoaded(repo_index, result));
                 }
-                BackgroundTask::CheckMergeStatus { repo_index, repo, pr_numbers, octocrab } => {
+                BackgroundTask::CheckMergeStatus {
+                    repo_index,
+                    repo,
+                    pr_numbers,
+                    octocrab,
+                } => {
                     // Check merge status for each PR in parallel
                     let mut tasks = Vec::new();
                     for pr_number in pr_numbers {
@@ -688,34 +898,130 @@ fn start_task_worker(
                             use crate::pr::MergeableStatus;
 
                             // Fetch detailed PR info to get mergeable status and rebase status
-                            match octocrab.pulls(&repo.org, &repo.repo).get(pr_number as u64).await {
+                            match octocrab
+                                .pulls(&repo.org, &repo.repo)
+                                .get(pr_number as u64)
+                                .await
+                            {
                                 Ok(pr_detail) => {
+                                    // Check if PR needs rebase (Behind state means PR is behind base branch)
+                                    let needs_rebase =
+                                        if let Some(ref state) = pr_detail.mergeable_state {
+                                            matches!(
+                                                state,
+                                                octocrab::models::pulls::MergeableState::Behind
+                                            )
+                                        } else {
+                                            false
+                                        };
+
+                                    // Check CI/build status by fetching check runs
+                                    let head_sha = pr_detail.head.sha.clone();
+
+                                    // Use the REST API directly to get check runs
+                                    let check_runs_url = format!(
+                                        "/repos/{}/{}/commits/{}/check-runs",
+                                        repo.org, repo.repo, head_sha
+                                    );
+
+                                    #[derive(Debug, serde::Deserialize)]
+                                    struct CheckRunsResponse {
+                                        check_runs: Vec<CheckRun>,
+                                    }
+
+                                    #[derive(Debug, serde::Deserialize)]
+                                    struct CheckRun {
+                                        status: String,
+                                        conclusion: Option<String>,
+                                    }
+
+                                    let (ci_failed, ci_in_progress) = match octocrab.get::<CheckRunsResponse, _, ()>(&check_runs_url, None::<&()>).await {
+                                        Ok(response) => {
+                                            // Check if any check run failed
+                                            let failed = response.check_runs.iter().any(|check| {
+                                                check.status == "completed" &&
+                                                (check.conclusion.as_deref() == Some("failure")
+                                                    || check.conclusion.as_deref() == Some("cancelled")
+                                                    || check.conclusion.as_deref() == Some("timed_out"))
+                                            });
+                                            // Check if any check run is still in progress
+                                            let in_progress = response.check_runs.iter().any(|check| {
+                                                check.status == "queued" || check.status == "in_progress"
+                                            });
+                                            (failed, in_progress)
+                                        }
+                                        Err(_) => {
+                                            // Fallback: use mergeable_state "unstable" as indicator
+                                            let failed = if let Some(ref state) = pr_detail.mergeable_state {
+                                                matches!(
+                                                    state,
+                                                    octocrab::models::pulls::MergeableState::Unstable
+                                                )
+                                            } else {
+                                                false
+                                            };
+                                            (failed, false)
+                                        }
+                                    };
+
+                                    // Determine final status with priority:
+                                    // 1. Conflicted (mergeable=false && dirty)
+                                    // 2. BuildFailed (CI checks failed)
+                                    // 3. Checking (CI checks in progress)
+                                    // 4. NeedsRebase (branch is behind)
+                                    // 5. Blocked (other blocking reasons)
+                                    // 6. Ready (all good!)
                                     let status = match pr_detail.mergeable {
-                                        Some(true) => MergeableStatus::Mergeable,
                                         Some(false) => {
-                                            // Check if it's due to conflicts or blocks
+                                            // Not mergeable - check why
                                             if let Some(ref state) = pr_detail.mergeable_state {
                                                 match state {
                                                     octocrab::models::pulls::MergeableState::Dirty => MergeableStatus::Conflicted,
-                                                    octocrab::models::pulls::MergeableState::Blocked => MergeableStatus::Blocked,
+                                                    octocrab::models::pulls::MergeableState::Blocked => {
+                                                        if ci_failed {
+                                                            MergeableStatus::BuildFailed
+                                                        } else if ci_in_progress {
+                                                            MergeableStatus::Checking
+                                                        } else {
+                                                            MergeableStatus::Blocked
+                                                        }
+                                                    }
                                                     _ => MergeableStatus::Blocked,
                                                 }
                                             } else {
                                                 MergeableStatus::Conflicted
                                             }
                                         }
-                                        None => MergeableStatus::Unknown,
+                                        Some(true) => {
+                                            // Mergeable, but check for other issues
+                                            if ci_failed {
+                                                MergeableStatus::BuildFailed
+                                            } else if ci_in_progress {
+                                                MergeableStatus::Checking
+                                            } else if needs_rebase {
+                                                MergeableStatus::NeedsRebase
+                                            } else {
+                                                MergeableStatus::Ready
+                                            }
+                                        }
+                                        None => {
+                                            // mergeable status unknown - check if CI is running
+                                            if ci_in_progress {
+                                                MergeableStatus::Checking
+                                            } else {
+                                                MergeableStatus::Unknown
+                                            }
+                                        }
                                     };
 
-                                    // Check if PR needs rebase (Behind state means PR is behind base branch)
-                                    let needs_rebase = if let Some(ref state) = pr_detail.mergeable_state {
-                                        matches!(state, octocrab::models::pulls::MergeableState::Behind)
-                                    } else {
-                                        false
-                                    };
-
-                                    let _ = action_tx.send(Action::MergeStatusUpdated(repo_index, pr_number, status));
-                                    let _ = action_tx.send(Action::RebaseStatusUpdated(repo_index, pr_number, needs_rebase));
+                                    let _ = action_tx.send(Action::MergeStatusUpdated(
+                                        repo_index, pr_number, status,
+                                    ));
+                                    let _ = action_tx.send(Action::RebaseStatusUpdated(
+                                        repo_index,
+                                        pr_number,
+                                        needs_rebase,
+                                    ));
                                 }
                                 Err(_) => {
                                     // Failed to fetch, keep as unknown
@@ -730,13 +1036,20 @@ fn start_task_worker(
                         let _ = task.await;
                     }
                 }
-                BackgroundTask::Rebase { repo, prs, selected_indices, octocrab } => {
+                BackgroundTask::Rebase {
+                    repo,
+                    prs,
+                    selected_indices,
+                    octocrab,
+                } => {
                     let mut success = true;
                     for &idx in &selected_indices {
                         if let Some(pr) = prs.get(idx) {
                             // For dependabot PRs, use comment-based rebase
                             if pr.author.starts_with("dependabot") {
-                                if let Err(_) = comment(&octocrab, &repo, pr, "@dependabot rebase").await {
+                                if let Err(_) =
+                                    comment(&octocrab, &repo, pr, "@dependabot rebase").await
+                                {
                                     success = false;
                                 }
                             } else {
@@ -753,10 +1066,19 @@ fn start_task_worker(
                             }
                         }
                     }
-                    let result = if success { Ok(()) } else { Err("Some rebases failed".to_string()) };
+                    let result = if success {
+                        Ok(())
+                    } else {
+                        Err("Some rebases failed".to_string())
+                    };
                     let _ = action_tx.send(Action::RebaseComplete(result));
                 }
-                BackgroundTask::Merge { repo, prs, selected_indices, octocrab } => {
+                BackgroundTask::Merge {
+                    repo,
+                    prs,
+                    selected_indices,
+                    octocrab,
+                } => {
                     let mut success = true;
                     for &idx in &selected_indices {
                         if let Some(pr) = prs.get(idx) {
@@ -765,13 +1087,359 @@ fn start_task_worker(
                             }
                         }
                     }
-                    let result = if success { Ok(()) } else { Err("Some merges failed".to_string()) };
+                    let result = if success {
+                        Ok(())
+                    } else {
+                        Err("Some merges failed".to_string())
+                    };
                     let _ = action_tx.send(Action::MergeComplete(result));
+                }
+                BackgroundTask::FetchBuildLogs {
+                    repo,
+                    pr_number,
+                    head_sha: _,
+                    octocrab,
+                    pr_context,
+                } => {
+                    // First, get the PR details to get the actual head SHA
+                    let pr_details = match octocrab
+                        .pulls(&repo.org, &repo.repo)
+                        .get(pr_number as u64)
+                        .await
+                    {
+                        Ok(pr) => pr,
+                        Err(_) => {
+                            let _ = action_tx.send(Action::BuildLogsLoaded(vec![], pr_context));
+                            return;
+                        }
+                    };
+
+                    let head_sha = pr_details.head.sha.clone();
+
+                    // Get workflow runs for this commit using the REST API directly
+                    let url = format!(
+                        "/repos/{}/{}/actions/runs?head_sha={}",
+                        repo.org, repo.repo, head_sha
+                    );
+
+                    #[derive(Debug, serde::Deserialize)]
+                    struct WorkflowRunsResponse {
+                        workflow_runs: Vec<octocrab::models::workflows::Run>,
+                    }
+
+                    let workflow_runs: WorkflowRunsResponse =
+                        match octocrab.get(&url, None::<&()>).await {
+                            Ok(runs) => runs,
+                            Err(_) => {
+                                let _ = action_tx.send(Action::BuildLogsLoaded(vec![], pr_context));
+                                return;
+                            }
+                        };
+
+                    let mut log_sections = Vec::new();
+
+                    // Process each workflow run and download its logs
+                    for workflow_run in workflow_runs.workflow_runs {
+                        let conclusion_str =
+                            workflow_run.conclusion.as_deref().unwrap_or("in_progress");
+                        let workflow_name = workflow_run.name.clone();
+
+                        // Skip successful runs unless there are no failures
+                        let is_failed = matches!(
+                            conclusion_str,
+                            "failure" | "timed_out" | "action_required" | "cancelled"
+                        );
+
+                        if !is_failed && !log_sections.is_empty() {
+                            continue;
+                        }
+
+                        let mut metadata_lines = Vec::new();
+                        metadata_lines.push(format!("Workflow: {}", workflow_name));
+                        metadata_lines.push(format!("Run ID: {}", workflow_run.id));
+                        metadata_lines.push(format!("Run URL: {}", workflow_run.html_url));
+                        metadata_lines.push(format!("Conclusion: {}", conclusion_str));
+                        metadata_lines.push(format!("Started: {}", workflow_run.created_at));
+                        metadata_lines.push(format!("Updated: {}", workflow_run.updated_at));
+                        metadata_lines.push("".to_string());
+
+                        // Fetch jobs for this workflow run to get job IDs and URLs
+                        let jobs_url = format!(
+                            "/repos/{}/{}/actions/runs/{}/jobs",
+                            repo.org, repo.repo, workflow_run.id
+                        );
+
+                        #[derive(Debug, serde::Deserialize)]
+                        struct JobsResponse {
+                            jobs: Vec<WorkflowJob>,
+                        }
+
+                        #[derive(Debug, serde::Deserialize)]
+                        struct WorkflowJob {
+                            id: u64,
+                            name: String,
+                            html_url: String,
+                        }
+
+                        let jobs_response: Result<JobsResponse, _> =
+                            octocrab.get(&jobs_url, None::<&()>).await;
+
+                        // Try to download the workflow run logs (they come as a zip file)
+                        match octocrab
+                            .actions()
+                            .download_workflow_run_logs(
+                                &repo.org,
+                                &repo.repo,
+                                workflow_run.id.into(),
+                            )
+                            .await
+                        {
+                            Ok(log_data) => {
+                                // The log_data is a zip file as bytes
+                                // We need to extract and parse it
+                                match crate::log::parse_workflow_logs_zip(&log_data) {
+                                    Ok(job_logs) => {
+                                        // Process each job's logs separately
+                                        for job_log in job_logs {
+                                            // Try to find matching job URL by name
+                                            let job_url = if let Ok(ref jobs) = jobs_response {
+                                                jobs.jobs
+                                                    .iter()
+                                                    .find(|j| job_log.job_name.contains(&j.name))
+                                                    .map(|j| j.html_url.clone())
+                                            } else {
+                                                None
+                                            };
+
+                                            let mut job_metadata = metadata_lines.clone();
+                                            job_metadata.push(format!("Job: {}", job_log.job_name));
+                                            if let Some(url) = &job_url {
+                                                job_metadata.push(format!("Job URL: {}", url));
+                                            }
+                                            job_metadata.push("".to_string());
+
+                                            // Try to extract error context from this job's logs
+                                            let full_log_text = job_log.content.join("\n");
+                                            let error_context = crate::log::extract_error_context(
+                                                &full_log_text,
+                                                &job_log.job_name,
+                                            );
+
+                                            if !error_context.is_empty() {
+                                                // We found specific errors - create error context section
+                                                let mut error_lines = job_metadata.clone();
+                                                error_lines.push("Error Context:".to_string());
+                                                error_lines.push("".to_string());
+                                                error_lines.extend(error_context);
+
+                                                log_sections.push(LogSection {
+                                                    step_name: format!(
+                                                        "{} / {} - Errors",
+                                                        workflow_name, job_log.job_name
+                                                    ),
+                                                    error_lines,
+                                                    has_extracted_errors: true,
+                                                });
+
+                                                // Also create full log section (will be sorted to bottom)
+                                                let mut full_lines = job_metadata.clone();
+                                                full_lines.push("Full Job Logs:".to_string());
+                                                full_lines.push("".to_string());
+                                                full_lines.extend(job_log.content);
+
+                                                log_sections.push(LogSection {
+                                                    step_name: format!(
+                                                        "{} / {} - Full Log",
+                                                        workflow_name, job_log.job_name
+                                                    ),
+                                                    error_lines: full_lines,
+                                                    has_extracted_errors: false,
+                                                });
+                                            } else {
+                                                // No specific errors found - just show full log
+                                                let mut full_lines = job_metadata;
+                                                full_lines.push("Job Logs:".to_string());
+                                                full_lines.push("".to_string());
+                                                full_lines.extend(job_log.content);
+
+                                                log_sections.push(LogSection {
+                                                    step_name: format!(
+                                                        "{} / {}",
+                                                        workflow_name, job_log.job_name
+                                                    ),
+                                                    error_lines: full_lines,
+                                                    has_extracted_errors: false,
+                                                });
+                                            }
+                                        }
+                                    }
+                                    Err(err) => {
+                                        let mut error_lines = metadata_lines;
+                                        error_lines.push(format!("Failed to parse logs: {}", err));
+                                        error_lines.push("".to_string());
+                                        error_lines.push(format!(
+                                            "View logs at: {}",
+                                            workflow_run.html_url
+                                        ));
+
+                                        log_sections.push(LogSection {
+                                            step_name: format!(
+                                                "{} [{}]",
+                                                workflow_name, conclusion_str
+                                            ),
+                                            error_lines,
+                                            has_extracted_errors: false,
+                                        });
+                                    }
+                                }
+                            }
+                            Err(_) => {
+                                let mut error_lines = metadata_lines;
+                                error_lines.push("Unable to download logs via API".to_string());
+                                error_lines.push(
+                                    "This may require authentication or the logs may have expired."
+                                        .to_string(),
+                                );
+                                error_lines.push("".to_string());
+                                error_lines
+                                    .push(format!("View logs at: {}", workflow_run.html_url));
+
+                                log_sections.push(LogSection {
+                                    step_name: format!("{} [{}]", workflow_name, conclusion_str),
+                                    error_lines,
+                                    has_extracted_errors: false,
+                                });
+                            }
+                        }
+                    }
+
+                    // Sort sections: error contexts first, full logs last
+                    log_sections.sort_by_key(|section| !section.has_extracted_errors);
+
+                    // If we didn't find any workflow runs, add a helpful message
+                    if log_sections.is_empty() {
+                        log_sections.push(LogSection {
+                            step_name: "No Workflow Runs Found".to_string(),
+                            error_lines: vec![
+                                "This PR doesn't have any GitHub Actions workflow runs.".to_string(),
+                                "".to_string(),
+                                "This could mean:".to_string(),
+                                "- No GitHub Actions workflows configured for this repository".to_string(),
+                                "- Workflows haven't been triggered yet for this commit".to_string(),
+                                "- CI/CD is using a different system (CircleCI, Travis, Jenkins, etc.)".to_string(),
+                                "".to_string(),
+                                "Try opening the PR in browser (press Enter) to check for other CI systems.".to_string(),
+                            ],
+                            has_extracted_errors: false,
+                        });
+                    }
+
+                    let _ = action_tx.send(Action::BuildLogsLoaded(log_sections, pr_context));
+                }
+
+                BackgroundTask::OpenPRInIDE {
+                    repo,
+                    pr_number,
+                    ide_command,
+                    temp_dir,
+                } => {
+                    use std::process::Command;
+
+                    // Create temp directory if it doesn't exist
+                    if let Err(err) = std::fs::create_dir_all(&temp_dir) {
+                        let _ = action_tx.send(Action::IDEOpenComplete(Err(format!(
+                            "Failed to create temp directory: {}",
+                            err
+                        ))));
+                        return;
+                    }
+
+                    // Create unique directory for this PR
+                    let pr_dir = PathBuf::from(&temp_dir).join(format!(
+                        "{}-{}-pr-{}",
+                        repo.org, repo.repo, pr_number
+                    ));
+
+                    // Remove existing directory if present
+                    if pr_dir.exists() {
+                        if let Err(err) = std::fs::remove_dir_all(&pr_dir) {
+                            let _ = action_tx.send(Action::IDEOpenComplete(Err(format!(
+                                "Failed to remove existing directory: {}",
+                                err
+                            ))));
+                            return;
+                        }
+                    }
+
+                    // Clone the repository using gh repo clone (uses SSH by default)
+                    let clone_output = Command::new("gh")
+                        .args(&["repo", "clone", &format!("{}/{}", repo.org, repo.repo), &pr_dir.to_string_lossy()])
+                        .output();
+
+                    if let Err(err) = clone_output {
+                        let _ = action_tx.send(Action::IDEOpenComplete(Err(format!(
+                            "Failed to run gh repo clone: {}",
+                            err
+                        ))));
+                        return;
+                    }
+
+                    let clone_output = clone_output.unwrap();
+                    if !clone_output.status.success() {
+                        let stderr = String::from_utf8_lossy(&clone_output.stderr);
+                        let _ = action_tx.send(Action::IDEOpenComplete(Err(format!(
+                            "gh repo clone failed: {}",
+                            stderr
+                        ))));
+                        return;
+                    }
+
+                    // Now checkout the PR using gh pr checkout
+                    let checkout_output = Command::new("gh")
+                        .args(&["pr", "checkout", &pr_number.to_string()])
+                        .current_dir(&pr_dir)
+                        .output();
+
+                    if let Err(err) = checkout_output {
+                        let _ = action_tx.send(Action::IDEOpenComplete(Err(format!(
+                            "Failed to run gh pr checkout: {}",
+                            err
+                        ))));
+                        return;
+                    }
+
+                    let checkout_output = checkout_output.unwrap();
+                    if !checkout_output.status.success() {
+                        let stderr = String::from_utf8_lossy(&checkout_output.stderr);
+                        let _ = action_tx.send(Action::IDEOpenComplete(Err(format!(
+                            "gh pr checkout failed: {}",
+                            stderr
+                        ))));
+                        return;
+                    }
+
+                    // Open in IDE
+                    let ide_output = Command::new(&ide_command)
+                        .arg(&pr_dir)
+                        .spawn();
+
+                    match ide_output {
+                        Ok(_) => {
+                            let _ = action_tx.send(Action::IDEOpenComplete(Ok(())));
+                        }
+                        Err(err) => {
+                            let _ = action_tx.send(Action::IDEOpenComplete(Err(format!(
+                                "Failed to open IDE '{}': {}",
+                                ide_command, err
+                            ))));
+                        }
+                    }
                 }
             }
         }
     })
 }
+
 
 async fn run() -> Result<()> {
     let mut t = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
@@ -789,15 +1457,30 @@ async fn run() -> Result<()> {
         .expect("Failed to send bootstrap action");
 
     loop {
+        // Increment spinner frame for animation
+        app.spinner_frame = (app.spinner_frame + 1) % 10;
+
         t.draw(|f| {
             ui(f, &mut app);
         })?;
 
-        if let Some(action) = action_rx.recv().await {
-            if let Err(err) = update(&mut app, action).await {
-                app.loading_state = LoadingState::Error(err.to_string());
-                app.should_quit = true;
-                debug!("Error updating app: {}", err);
+        // Use timeout to ensure UI updates even without actions (for spinner and progress bar)
+        let action = tokio::time::timeout(
+            std::time::Duration::from_millis(100),
+            action_rx.recv()
+        ).await;
+
+        match action {
+            Ok(Some(action)) => {
+                if let Err(err) = update(&mut app, action).await {
+                    app.loading_state = LoadingState::Error(err.to_string());
+                    app.should_quit = true;
+                    debug!("Error updating app: {}", err);
+                }
+            }
+            Ok(None) => break, // Channel closed
+            Err(_) => {
+                // Timeout - just continue to redraw (for spinner animation and progress updates)
             }
         }
 
@@ -822,37 +1505,17 @@ async fn run() -> Result<()> {
 fn ui(f: &mut Frame, app: &mut App) {
     // Show bootstrap status if not completed
     if app.bootstrap_state != BootstrapState::Completed {
-        let message = match &app.bootstrap_state {
-            BootstrapState::NotStarted => "Initializing application...",
-            BootstrapState::LoadingRepositories => "Loading repositories...",
-            BootstrapState::RestoringSession => "Restoring session...",
-            BootstrapState::LoadingPRs => "Loading pull requests from all repositories...",
-            BootstrapState::Error(err) => {
-                // Return early for error to show it
-                f.render_widget(
-                    Paragraph::new(format!("Error: {}", err))
-                        .centered()
-                        .style(Style::default().fg(Color::Red)),
-                    f.area(),
-                );
-                return;
-            }
-            BootstrapState::Completed => unreachable!(),
-        };
-
-        f.render_widget(
-            Paragraph::new(message)
-                .centered()
-                .style(Style::default().fg(app.colors.row_fg)),
-            f.area(),
-        );
+        render_bootstrap_screen(f, app);
         return;
     }
 
     // If no repositories at all (shouldn't happen after bootstrap completes)
     if app.recent_repos.is_empty() {
         f.render_widget(
-            Paragraph::new("No repositories configured. Add repositories to .recent-repositories.json").centered(),
+            Paragraph::new(
+                "No repositories configured. Add repositories to .recent-repositories.json",
+            )
+            .centered(),
             f.area(),
         );
         return;
@@ -863,11 +1526,14 @@ fn ui(f: &mut Frame, app: &mut App) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(3), // Tabs
-            Constraint::Min(0),    // Table
+            Constraint::Min(0),    // Table (full width)
             Constraint::Length(3), // Action panel
             Constraint::Length(1), // Status line
         ])
         .split(f.area());
+
+    // Table always takes full width
+    let table_area = chunks[1];
 
     // Render tabs (always visible when there are repos)
     let tab_titles: Vec<Line> = app
@@ -875,15 +1541,20 @@ fn ui(f: &mut Frame, app: &mut App) {
         .iter()
         .enumerate()
         .map(|(i, repo)| {
-            let number = if i < 9 { format!("{} ", i + 1) } else { String::new() };
+            let number = if i < 9 {
+                format!("{} ", i + 1)
+            } else {
+                String::new()
+            };
             Line::from(format!("{}{}/{}", number, repo.org, repo.repo))
         })
         .collect();
 
     let tabs = Tabs::new(tab_titles)
-        .block(Block::default()
-            .borders(Borders::ALL)
-            .title(format!("Projects [Tab/1-9: switch, /: cycle] | Filter: {} [f: cycle]", app.filter.label())))
+        .block(Block::default().borders(Borders::ALL).title(format!(
+            "Projects [Tab/1-9: switch, /: cycle] | Filter: {} [f: cycle]",
+            app.filter.label()
+        )))
         .select(app.selected_repo)
         .style(Style::default().fg(app.colors.row_fg))
         .highlight_style(
@@ -899,7 +1570,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     let Some(selected_repo) = app.repo() else {
         f.render_widget(
             Paragraph::new("Error: Invalid repository selection").centered(),
-            chunks[1],
+            table_area,
         );
         return;
     };
@@ -936,7 +1607,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         .fg(app.colors.header_fg)
         .bg(app.colors.header_bg);
 
-    let header_cells = ["#PR", "Description", "Author", "#Comments", "Status", "Rebase"]
+    let header_cells = ["#PR", "Description", "Author", "#Comments", "Status"]
         .iter()
         .map(|h| Cell::from(*h).style(header_style));
 
@@ -961,7 +1632,7 @@ fn ui(f: &mut Frame, app: &mut App) {
             .style(Style::default().fg(app.colors.row_fg))
             .alignment(ratatui::layout::Alignment::Center);
 
-        f.render_widget(paragraph, chunks[1]);
+        f.render_widget(paragraph, table_area);
     } else {
         let rows = repo_data.prs.iter().enumerate().map(|(i, item)| {
             let color = match i % 2 {
@@ -979,12 +1650,11 @@ fn ui(f: &mut Frame, app: &mut App) {
         });
 
         let widths = [
-            Constraint::Percentage(8),   // #PR
-            Constraint::Percentage(57),  // Description
-            Constraint::Percentage(15),  // Author
-            Constraint::Percentage(10),  // #Comments
-            Constraint::Percentage(5),   // Status
-            Constraint::Percentage(5),   // Rebase
+            Constraint::Percentage(8),  // #PR
+            Constraint::Percentage(50), // Description
+            Constraint::Percentage(15), // Author
+            Constraint::Percentage(10), // #Comments
+            Constraint::Percentage(17), // Status (wider to show "✗ Build Failed" etc.)
         ];
 
         let table = Table::new(rows, widths)
@@ -994,7 +1664,7 @@ fn ui(f: &mut Frame, app: &mut App) {
 
         // Get mutable reference to the current repo's table state
         let table_state = &mut app.get_current_repo_data_mut().table_state;
-        f.render_stateful_widget(table, chunks[1], table_state);
+        f.render_stateful_widget(table, table_area, table_state);
     }
 
     // Render context-sensitive action panel at the bottom
@@ -1002,6 +1672,17 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     // Render status line at the very bottom
     render_status_line(f, app, chunks[3]);
+
+    // Render log panel LAST if it's open - covers only the table area
+    if let Some(ref panel) = app.log_panel {
+        crate::log::render_log_panel_card(f, panel, &app.colors, chunks[1]);
+    }
+
+    // Render shortcuts panel on top of everything if visible
+    if app.show_shortcuts {
+        let max_scroll = crate::shortcuts::render_shortcuts_panel(f, chunks[1], app.shortcuts_scroll);
+        app.shortcuts_max_scroll = max_scroll;
+    }
 }
 
 /// Render the bottom action panel with context-sensitive shortcuts
@@ -1009,28 +1690,52 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
     let repo_data = app.get_current_repo_data();
     let selected_count = repo_data.selected_prs.len();
 
-    // Split into context-sensitive (left) and global actions (right)
-    let mut context_actions: Vec<(String, String, Color)> = Vec::new();
-    let mut global_actions: Vec<(String, String, Color)> = Vec::new();
+    let mut actions: Vec<(String, String, Color)> = Vec::new();
 
-    // Context-sensitive actions (what can I do NOW with this selection)
-    if selected_count > 0 {
+    // If log panel is open, show log panel shortcuts
+    if app.log_panel.is_some() {
+        actions.push((
+            "↑↓/jk".to_string(),
+            "Scroll V".to_string(),
+            tailwind::CYAN.c600,
+        ));
+        actions.push((
+            "←→/h".to_string(),
+            "Scroll H".to_string(),
+            tailwind::CYAN.c600,
+        ));
+        actions.push((
+            "n".to_string(),
+            "Next Section".to_string(),
+            tailwind::CYAN.c600,
+        ));
+        actions.push((
+            "t".to_string(),
+            if app.log_panel.as_ref().map(|p| p.show_timestamps).unwrap_or(false) {
+                "Hide Timestamps".to_string()
+            } else {
+                "Show Timestamps".to_string()
+            },
+            tailwind::CYAN.c600,
+        ));
+        actions.push(("x/Esc".to_string(), "Close".to_string(), tailwind::RED.c600));
+    } else if selected_count > 0 {
         // Highlight merge action when PRs are selected
-        context_actions.push((
+        actions.push((
             "m".to_string(),
             format!("Merge ({})", selected_count),
             tailwind::GREEN.c700,
         ));
 
         // Show rebase action for manually selected PRs
-        context_actions.push((
+        actions.push((
             "r".to_string(),
             format!("Rebase ({})", selected_count),
             tailwind::BLUE.c700,
         ));
     } else if !repo_data.prs.is_empty() {
         // When nothing selected, show how to select
-        context_actions.push((
+        actions.push((
             "Space".to_string(),
             "Select".to_string(),
             tailwind::AMBER.c600,
@@ -1039,7 +1744,7 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
         // Check if there are PRs that need rebase - show auto-rebase option
         let prs_needing_rebase = repo_data.prs.iter().filter(|pr| pr.needs_rebase).count();
         if prs_needing_rebase > 0 {
-            context_actions.push((
+            actions.push((
                 "r".to_string(),
                 format!("Auto-rebase ({})", prs_needing_rebase),
                 tailwind::YELLOW.c600,
@@ -1050,26 +1755,40 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
     // Add Enter action when PR(s) are selected or focused
     if !repo_data.prs.is_empty() {
         if selected_count > 0 {
-            context_actions.push((
+            actions.push((
                 "Enter".to_string(),
                 format!("Open in Browser ({})", selected_count),
                 tailwind::PURPLE.c600,
             ));
-        } else if repo_data.table_state.selected().is_some() {
-            context_actions.push((
+        } else if let Some(selected_idx) = repo_data.table_state.selected() {
+            actions.push((
                 "Enter".to_string(),
                 "Open in Browser".to_string(),
                 tailwind::PURPLE.c600,
             ));
+
+            // Add "l" action for viewing build logs
+            if repo_data.prs.get(selected_idx).is_some() {
+                actions.push((
+                    "l".to_string(),
+                    "View Build Logs".to_string(),
+                    tailwind::ORANGE.c600,
+                ));
+                actions.push((
+                    "i".to_string(),
+                    "Open in IDE".to_string(),
+                    tailwind::INDIGO.c600,
+                ));
+            }
         }
     }
 
-    // Global actions (always available, less emphasized)
-    global_actions.push(("↑↓/jk".to_string(), "Navigate".to_string(), app.colors.header_bg));
-    global_actions.push(("f".to_string(), format!("Filter: {}", app.filter.label()), app.colors.header_bg));
-    global_actions.push(("Tab".to_string(), "Switch Project".to_string(), app.colors.header_bg));
-    global_actions.push(("Ctrl+r".to_string(), "Refresh".to_string(), app.colors.header_bg));
-    global_actions.push(("q".to_string(), "Quit".to_string(), app.colors.header_bg));
+    // Always add help shortcut at the end
+    actions.push((
+        "?".to_string(),
+        "Help".to_string(),
+        tailwind::SLATE.c600,
+    ));
 
     // Helper function to create action spans
     let create_action_spans = |actions: &[(String, String, Color)]| -> Vec<Span> {
@@ -1097,30 +1816,13 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
         spans
     };
 
-    // Split the area into left and right sections
-    let sections = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(50), // Left: context-sensitive
-            Constraint::Percentage(50), // Right: global actions
-        ])
-        .split(area);
-
-    // Render context-sensitive actions (left-aligned)
-    let context_spans = create_action_spans(&context_actions);
-    let context_line = Line::from(context_spans);
-    let context_paragraph = Paragraph::new(context_line)
+    // Render actions in full-width panel
+    let action_spans = create_action_spans(&actions);
+    let action_line = Line::from(action_spans);
+    let action_paragraph = Paragraph::new(action_line)
         .block(Block::default().borders(Borders::ALL).title("Actions"))
         .alignment(ratatui::layout::Alignment::Left);
-    f.render_widget(context_paragraph, sections[0]);
-
-    // Render global actions (right-aligned)
-    let global_spans = create_action_spans(&global_actions);
-    let global_line = Line::from(global_spans);
-    let global_paragraph = Paragraph::new(global_line)
-        .block(Block::default().borders(Borders::ALL).title("Global"))
-        .alignment(ratatui::layout::Alignment::Right);
-    f.render_widget(global_paragraph, sections[1]);
+    f.render_widget(action_paragraph, area);
 }
 
 /// Render the status line showing background task progress
@@ -1135,9 +1837,7 @@ fn render_status_line(f: &mut Frame, app: &App, area: Rect) {
         let status_text = format!(" {} {}", icon, status.message);
         let status_span = Span::styled(
             status_text,
-            Style::default()
-                .fg(color)
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         );
 
         let paragraph = Paragraph::new(Line::from(status_span))
@@ -1145,6 +1845,155 @@ fn render_status_line(f: &mut Frame, app: &App, area: Rect) {
         f.render_widget(paragraph, area);
     }
 }
+
+/// Render the fancy bootstrap loading screen
+fn render_bootstrap_screen(f: &mut Frame, app: &App) {
+    const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+    let area = f.area();
+
+    // Calculate a centered area for the bootstrap content
+    let centered_area = {
+        let width = 50.min(area.width);
+        let height = 12.min(area.height);
+        let x = (area.width.saturating_sub(width)) / 2;
+        let y = (area.height.saturating_sub(height)) / 2;
+        Rect {
+            x,
+            y,
+            width,
+            height,
+        }
+    };
+
+    // Clear background
+    f.render_widget(
+        Block::default().style(Style::default().bg(tailwind::SLATE.c950)),
+        area,
+    );
+
+    // Render the centered content box
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(tailwind::BLUE.c500))
+        .style(Style::default().bg(tailwind::SLATE.c900));
+
+    f.render_widget(block, centered_area);
+
+    // Split the centered area into sections for content
+    let inner = centered_area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1), // Title
+            Constraint::Length(1), // Title underline
+            Constraint::Length(1), // Spacing
+            Constraint::Length(1), // Spinner
+            Constraint::Length(1), // Spacing
+            Constraint::Length(1), // Progress bar
+            Constraint::Length(1), // Spacing
+            Constraint::Min(2),    // Status message
+        ])
+        .split(inner);
+
+    // Determine stage info
+    let (stage_message, progress, is_error) = match &app.bootstrap_state {
+        BootstrapState::NotStarted => ("Initializing application...", 0, false),
+        BootstrapState::LoadingRepositories => ("Loading repositories...", 25, false),
+        BootstrapState::RestoringSession => ("Restoring session...", 50, false),
+        BootstrapState::LoadingPRs => {
+            // Calculate progress based on loaded repos
+            let total_repos = app.recent_repos.len().max(1);
+            let loaded_repos = app
+                .repo_data
+                .values()
+                .filter(|d| {
+                    matches!(
+                        d.loading_state,
+                        LoadingState::Loaded | LoadingState::Error(_)
+                    )
+                })
+                .count();
+            let progress = 50 + ((loaded_repos * 50) / total_repos);
+            (
+                &format!(
+                    "Loading pull requests from\n{} repositories...",
+                    total_repos
+                )[..],
+                progress,
+                false,
+            )
+        }
+        BootstrapState::Error(err) => (&format!("Error: {}", err)[..], 0, true),
+        BootstrapState::Completed => unreachable!(),
+    };
+
+    // Title
+    let title = Paragraph::new("PR Bulk Review TUI")
+        .style(
+            Style::default()
+                .fg(tailwind::BLUE.c400)
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(title, chunks[0]);
+
+    // Title underline
+    let underline = Paragraph::new("─────────────────")
+        .style(Style::default().fg(tailwind::BLUE.c600))
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(underline, chunks[1]);
+
+    // Spinner (animated)
+    if !is_error {
+        let spinner = SPINNER_FRAMES[app.spinner_frame % SPINNER_FRAMES.len()];
+        let spinner_text = format!("{} Loading...", spinner);
+        let spinner_widget = Paragraph::new(spinner_text)
+            .style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(spinner_widget, chunks[3]);
+    } else {
+        let error_icon = Paragraph::new("✗ Error")
+            .style(Style::default().fg(Color::Red).add_modifier(Modifier::BOLD))
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(error_icon, chunks[3]);
+    }
+
+    // Progress bar
+    if !is_error {
+        let bar_width = chunks[5].width.saturating_sub(10) as usize; // Reserve space for percentage
+        let filled = (bar_width * progress) / 100;
+        let empty = bar_width.saturating_sub(filled);
+
+        let progress_bar = format!("{}{}  {}%", "▰".repeat(filled), "▱".repeat(empty), progress);
+
+        let bar_widget = Paragraph::new(progress_bar)
+            .style(Style::default().fg(tailwind::BLUE.c400))
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(bar_widget, chunks[5]);
+    }
+
+    // Status message
+    let message_style = if is_error {
+        Style::default().fg(Color::Red)
+    } else {
+        Style::default().fg(tailwind::SLATE.c300)
+    };
+
+    let message_widget = Paragraph::new(stage_message)
+        .style(message_style)
+        .alignment(ratatui::layout::Alignment::Center)
+        .wrap(Wrap { trim: true });
+    f.render_widget(message_widget, chunks[7]);
+}
+
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -1156,7 +2005,10 @@ async fn main() -> Result<()> {
 }
 
 impl App {
-    fn new(action_tx: mpsc::UnboundedSender<Action>, task_tx: mpsc::UnboundedSender<BackgroundTask>) -> App {
+    fn new(
+        action_tx: mpsc::UnboundedSender<Action>,
+        task_tx: mpsc::UnboundedSender<BackgroundTask>,
+    ) -> App {
         App {
             action_tx,
             task_tx,
@@ -1172,6 +2024,12 @@ impl App {
             bootstrap_state: BootstrapState::NotStarted,
             repo_data: std::collections::HashMap::new(),
             task_status: None,
+            log_panel: None,
+            spinner_frame: 0,
+            config: Config::load(),
+            show_shortcuts: false,
+            shortcuts_scroll: 0,
+            shortcuts_max_scroll: 0,
         }
     }
 
@@ -1518,7 +2376,10 @@ async fn fetch_github_data<'a>(
         let page_is_empty = page.items.is_empty();
 
         for pr in page.items.into_iter().filter(|pr| {
-            pr.title.as_ref().map(|t| filter.matches(t)).unwrap_or(false)
+            pr.title
+                .as_ref()
+                .map(|t| filter.matches(t))
+                .unwrap_or(false)
         }) {
             if prs.len() >= MAX_PRS {
                 break;
@@ -1546,36 +2407,8 @@ fn handle_events() -> Result<Action> {
 }
 
 fn handle_key_event(key: KeyEvent) -> Action {
-    use crossterm::event::KeyModifiers;
-    let shift_pressed = key.modifiers.contains(KeyModifiers::SHIFT);
-    let ctrl_pressed = key.modifiers.contains(KeyModifiers::CONTROL);
-
-    match key.code {
-        KeyCode::Char('q') => Action::Quit,
-        KeyCode::Char('f') => Action::CycleFilter,
-        KeyCode::Char('r') if ctrl_pressed => Action::RefreshCurrentRepo,
-        KeyCode::Char('r') => Action::Rebase,
-        KeyCode::Char('/') => Action::SelectNextRepo,
-        KeyCode::Tab if shift_pressed => Action::SelectPreviousRepo,
-        KeyCode::Tab => Action::SelectNextRepo,
-        KeyCode::BackTab => Action::SelectPreviousRepo, // Shift+Tab on some terminals
-        KeyCode::Char('j') | KeyCode::Down => Action::NavigateToNextPr,
-        KeyCode::Char('k') | KeyCode::Up => Action::NavigateToPreviousPr,
-        KeyCode::Char(' ') => Action::TogglePrSelection,
-        KeyCode::Char('m') => Action::MergeSelectedPrs,
-        KeyCode::Enter => Action::OpenCurrentPrInBrowser,
-        // Number keys 1-9 for direct tab selection
-        KeyCode::Char('1') => Action::SelectRepoByIndex(0),
-        KeyCode::Char('2') => Action::SelectRepoByIndex(1),
-        KeyCode::Char('3') => Action::SelectRepoByIndex(2),
-        KeyCode::Char('4') => Action::SelectRepoByIndex(3),
-        KeyCode::Char('5') => Action::SelectRepoByIndex(4),
-        KeyCode::Char('6') => Action::SelectRepoByIndex(5),
-        KeyCode::Char('7') => Action::SelectRepoByIndex(6),
-        KeyCode::Char('8') => Action::SelectRepoByIndex(7),
-        KeyCode::Char('9') => Action::SelectRepoByIndex(8),
-        _ => Action::None,
-    }
+    // Use the shortcuts module to find the action for this key
+    crate::shortcuts::find_action_for_key(&key)
 }
 
 /// loading recent repositories from a local config file, that is just json file

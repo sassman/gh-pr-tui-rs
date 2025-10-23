@@ -20,11 +20,13 @@ pub struct Pr {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MergeableStatus {
-    Unknown,      // Not yet checked
-    Checking,     // Background check in progress
-    Mergeable,    // ✓ Can be merged
-    Conflicted,   // ✗ Has conflicts
-    Blocked,      // ✗ Blocked by checks/reviews
+    Unknown,         // Not yet checked
+    Checking,        // Background check in progress
+    Ready,           // ✓ Ready to merge (no issues)
+    NeedsRebase,     // ↻ Branch is behind, needs rebase
+    BuildFailed,     // ✗ CI/build checks failed
+    Conflicted,      // ✗ Has merge conflicts
+    Blocked,         // ⊗ Blocked by reviews or other checks
 }
 
 impl Pr {
@@ -91,7 +93,9 @@ impl MergeableStatus {
         match self {
             MergeableStatus::Unknown => "?",
             MergeableStatus::Checking => "⋯",
-            MergeableStatus::Mergeable => "✓",
+            MergeableStatus::Ready => "✓",
+            MergeableStatus::NeedsRebase => "↻",
+            MergeableStatus::BuildFailed => "✗",
             MergeableStatus::Conflicted => "✗",
             MergeableStatus::Blocked => "⊗",
         }
@@ -102,9 +106,23 @@ impl MergeableStatus {
         match self {
             MergeableStatus::Unknown => Color::DarkGray,
             MergeableStatus::Checking => Color::Yellow,
-            MergeableStatus::Mergeable => Color::Green,
+            MergeableStatus::Ready => Color::Green,
+            MergeableStatus::NeedsRebase => Color::Yellow,
+            MergeableStatus::BuildFailed => Color::Red,
             MergeableStatus::Conflicted => Color::Red,
             MergeableStatus::Blocked => Color::Red,
+        }
+    }
+
+    pub fn label(&self) -> &str {
+        match self {
+            MergeableStatus::Unknown => "Unknown",
+            MergeableStatus::Checking => "Checking",
+            MergeableStatus::Ready => "Ready",
+            MergeableStatus::NeedsRebase => "Needs Rebase",
+            MergeableStatus::BuildFailed => "Build Failed",
+            MergeableStatus::Conflicted => "Conflicted",
+            MergeableStatus::Blocked => "Blocked",
         }
     }
 }
@@ -113,20 +131,17 @@ impl Into<Row<'static>> for &Pr {
     fn into(self) -> Row<'static> {
         use ratatui::widgets::Cell;
         use ratatui::style::Style;
-        use ratatui::style::Color;
 
-        let rebase_icon = if self.needs_rebase { "↻" } else { "" };
-        let rebase_color = if self.needs_rebase { Color::Yellow } else { Color::DarkGray };
+        // Show status with icon and label (e.g., "✓ Ready", "✗ Build Failed")
+        let status_text = format!("{} {}", self.mergeable.icon(), self.mergeable.label());
 
         Row::new(vec![
             Cell::from(self.number.to_string()),
             Cell::from(self.title.clone()),
             Cell::from(self.author.clone()),
             Cell::from(self.no_comments.to_string()),
-            Cell::from(self.mergeable.icon().to_string())
+            Cell::from(status_text)
                 .style(Style::default().fg(self.mergeable.color())),
-            Cell::from(rebase_icon.to_string())
-                .style(Style::default().fg(rebase_color)),
         ])
     }
 }
