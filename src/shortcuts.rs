@@ -291,7 +291,7 @@ pub fn find_action_for_key(key: &KeyEvent) -> Action {
 
 /// Render the shortcuts help panel as a centered floating window
 /// Returns the maximum scroll offset
-pub fn render_shortcuts_panel(f: &mut Frame, area: Rect, scroll_offset: usize) -> usize {
+pub fn render_shortcuts_panel(f: &mut Frame, area: Rect, scroll_offset: usize, theme: &crate::theme::Theme) -> usize {
     use ratatui::widgets::{Clear, Wrap};
 
     // Calculate centered area (80% width, 90% height)

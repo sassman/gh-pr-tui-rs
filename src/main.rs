@@ -17,17 +17,19 @@ use tokio::sync::mpsc;
 // Import debug from the log crate using :: prefix to disambiguate from our log module
 use ::log::debug;
 
-use crate::gh::{comment, merge};
-use crate::pr::Pr;
-use crate::log::{LogPanel, LogSection, PrContext};
 use crate::config::Config;
+use crate::gh::{comment, merge};
+use crate::log::{LogPanel, LogSection, PrContext};
+use crate::pr::Pr;
 use crate::shortcuts::Action;
+use crate::theme::Theme;
 
-mod gh;
-mod pr;
-mod log;
 mod config;
+mod gh;
+mod log;
+mod pr;
 mod shortcuts;
+mod theme;
 
 const PALETTES: [tailwind::Palette; 4] = [
     tailwind::BLUE,
@@ -113,6 +115,8 @@ struct App {
     show_shortcuts: bool,
     shortcuts_scroll: usize,
     shortcuts_max_scroll: usize,
+    // Application theme
+    theme: Theme,
 }
 
 #[derive(Debug, Clone)]
@@ -935,24 +939,37 @@ fn start_task_worker(
                                         conclusion: Option<String>,
                                     }
 
-                                    let (ci_failed, ci_in_progress) = match octocrab.get::<CheckRunsResponse, _, ()>(&check_runs_url, None::<&()>).await {
+                                    let (ci_failed, ci_in_progress) = match octocrab
+                                        .get::<CheckRunsResponse, _, ()>(
+                                            &check_runs_url,
+                                            None::<&()>,
+                                        )
+                                        .await
+                                    {
                                         Ok(response) => {
                                             // Check if any check run failed
                                             let failed = response.check_runs.iter().any(|check| {
-                                                check.status == "completed" &&
-                                                (check.conclusion.as_deref() == Some("failure")
-                                                    || check.conclusion.as_deref() == Some("cancelled")
-                                                    || check.conclusion.as_deref() == Some("timed_out"))
+                                                check.status == "completed"
+                                                    && (check.conclusion.as_deref()
+                                                        == Some("failure")
+                                                        || check.conclusion.as_deref()
+                                                            == Some("cancelled")
+                                                        || check.conclusion.as_deref()
+                                                            == Some("timed_out"))
                                             });
                                             // Check if any check run is still in progress
-                                            let in_progress = response.check_runs.iter().any(|check| {
-                                                check.status == "queued" || check.status == "in_progress"
-                                            });
+                                            let in_progress =
+                                                response.check_runs.iter().any(|check| {
+                                                    check.status == "queued"
+                                                        || check.status == "in_progress"
+                                                });
                                             (failed, in_progress)
                                         }
                                         Err(_) => {
                                             // Fallback: use mergeable_state "unstable" as indicator
-                                            let failed = if let Some(ref state) = pr_detail.mergeable_state {
+                                            let failed = if let Some(ref state) =
+                                                pr_detail.mergeable_state
+                                            {
                                                 matches!(
                                                     state,
                                                     octocrab::models::pulls::MergeableState::Unstable
@@ -981,7 +998,7 @@ fn start_task_worker(
                                                         if ci_failed {
                                                             MergeableStatus::BuildFailed
                                                         } else if ci_in_progress {
-                                                            MergeableStatus::Checking
+                                                            MergeableStatus::BuildInProgress
                                                         } else {
                                                             MergeableStatus::Blocked
                                                         }
@@ -997,7 +1014,7 @@ fn start_task_worker(
                                             if ci_failed {
                                                 MergeableStatus::BuildFailed
                                             } else if ci_in_progress {
-                                                MergeableStatus::Checking
+                                                MergeableStatus::BuildInProgress
                                             } else if needs_rebase {
                                                 MergeableStatus::NeedsRebase
                                             } else {
@@ -1007,7 +1024,7 @@ fn start_task_worker(
                                         None => {
                                             // mergeable status unknown - check if CI is running
                                             if ci_in_progress {
-                                                MergeableStatus::Checking
+                                                MergeableStatus::BuildInProgress
                                             } else {
                                                 MergeableStatus::Unknown
                                             }
@@ -1355,10 +1372,8 @@ fn start_task_worker(
                     }
 
                     // Create unique directory for this PR
-                    let pr_dir = PathBuf::from(&temp_dir).join(format!(
-                        "{}-{}-pr-{}",
-                        repo.org, repo.repo, pr_number
-                    ));
+                    let pr_dir = PathBuf::from(&temp_dir)
+                        .join(format!("{}-{}-pr-{}", repo.org, repo.repo, pr_number));
 
                     // Remove existing directory if present
                     if pr_dir.exists() {
@@ -1373,7 +1388,12 @@ fn start_task_worker(
 
                     // Clone the repository using gh repo clone (uses SSH by default)
                     let clone_output = Command::new("gh")
-                        .args(&["repo", "clone", &format!("{}/{}", repo.org, repo.repo), &pr_dir.to_string_lossy()])
+                        .args(&[
+                            "repo",
+                            "clone",
+                            &format!("{}/{}", repo.org, repo.repo),
+                            &pr_dir.to_string_lossy(),
+                        ])
                         .output();
 
                     if let Err(err) = clone_output {
@@ -1419,9 +1439,7 @@ fn start_task_worker(
                     }
 
                     // Open in IDE
-                    let ide_output = Command::new(&ide_command)
-                        .arg(&pr_dir)
-                        .spawn();
+                    let ide_output = Command::new(&ide_command).arg(&pr_dir).spawn();
 
                     match ide_output {
                         Ok(_) => {
@@ -1439,7 +1457,6 @@ fn start_task_worker(
         }
     })
 }
-
 
 async fn run() -> Result<()> {
     let mut t = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
@@ -1465,10 +1482,8 @@ async fn run() -> Result<()> {
         })?;
 
         // Use timeout to ensure UI updates even without actions (for spinner and progress bar)
-        let action = tokio::time::timeout(
-            std::time::Duration::from_millis(100),
-            action_rx.recv()
-        ).await;
+        let action =
+            tokio::time::timeout(std::time::Duration::from_millis(100), action_rx.recv()).await;
 
         match action {
             Ok(Some(action)) => {
@@ -1680,7 +1695,8 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     // Render shortcuts panel on top of everything if visible
     if app.show_shortcuts {
-        let max_scroll = crate::shortcuts::render_shortcuts_panel(f, chunks[1], app.shortcuts_scroll);
+        let max_scroll =
+            crate::shortcuts::render_shortcuts_panel(f, chunks[1], app.shortcuts_scroll, &app.theme);
         app.shortcuts_max_scroll = max_scroll;
     }
 }
@@ -1711,7 +1727,12 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
         ));
         actions.push((
             "t".to_string(),
-            if app.log_panel.as_ref().map(|p| p.show_timestamps).unwrap_or(false) {
+            if app
+                .log_panel
+                .as_ref()
+                .map(|p| p.show_timestamps)
+                .unwrap_or(false)
+            {
                 "Hide Timestamps".to_string()
             } else {
                 "Show Timestamps".to_string()
@@ -1784,11 +1805,7 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
     }
 
     // Always add help shortcut at the end
-    actions.push((
-        "?".to_string(),
-        "Help".to_string(),
-        tailwind::SLATE.c600,
-    ));
+    actions.push(("?".to_string(), "Help".to_string(), tailwind::SLATE.c600));
 
     // Helper function to create action spans
     let create_action_spans = |actions: &[(String, String, Color)]| -> Vec<Span> {
@@ -1994,7 +2011,6 @@ fn render_bootstrap_screen(f: &mut Frame, app: &App) {
     f.render_widget(message_widget, chunks[7]);
 }
 
-
 #[tokio::main]
 async fn main() -> Result<()> {
     initialize_panic_handler();
@@ -2030,6 +2046,7 @@ impl App {
             show_shortcuts: false,
             shortcuts_scroll: 0,
             shortcuts_max_scroll: 0,
+            theme: Theme::default(),
         }
     }
 

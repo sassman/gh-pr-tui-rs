@@ -12,8 +12,8 @@ pub struct Pr {
     pub author: String,
     pub no_comments: usize,
     pub merge_state: String,
-    pub mergeable: MergeableStatus,  // Checked via background task
-    pub needs_rebase: bool,          // True if PR is behind base branch
+    pub mergeable: MergeableStatus, // Checked via background task
+    pub needs_rebase: bool,         // True if PR is behind base branch
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -21,7 +21,7 @@ pub struct Pr {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum MergeableStatus {
     Unknown,         // Not yet checked
-    Checking,        // Background check in progress
+    BuildInProgress, // Background check in progress
     Ready,           // ✓ Ready to merge (no issues)
     NeedsRebase,     // ↻ Branch is behind, needs rebase
     BuildFailed,     // ✗ CI/build checks failed
@@ -80,8 +80,8 @@ impl Pr {
                     _ => todo!(),
                 })
                 .unwrap(),
-            mergeable: MergeableStatus::Unknown,  // Will be checked in background
-            needs_rebase: false,                  // Will be checked in background
+            mergeable: MergeableStatus::Unknown, // Will be checked in background
+            needs_rebase: false,                 // Will be checked in background
             created_at: pr.created_at.unwrap(),
             updated_at: pr.updated_at.unwrap(),
         }
@@ -92,7 +92,7 @@ impl MergeableStatus {
     pub fn icon(&self) -> &str {
         match self {
             MergeableStatus::Unknown => "?",
-            MergeableStatus::Checking => "⋯",
+            MergeableStatus::BuildInProgress => "⋯",
             MergeableStatus::Ready => "✓",
             MergeableStatus::NeedsRebase => "↻",
             MergeableStatus::BuildFailed => "✗",
@@ -105,7 +105,7 @@ impl MergeableStatus {
         use ratatui::style::Color;
         match self {
             MergeableStatus::Unknown => Color::DarkGray,
-            MergeableStatus::Checking => Color::Yellow,
+            MergeableStatus::BuildInProgress => Color::Yellow,
             MergeableStatus::Ready => Color::Green,
             MergeableStatus::NeedsRebase => Color::Yellow,
             MergeableStatus::BuildFailed => Color::Red,
@@ -117,7 +117,7 @@ impl MergeableStatus {
     pub fn label(&self) -> &str {
         match self {
             MergeableStatus::Unknown => "Unknown",
-            MergeableStatus::Checking => "Checking",
+            MergeableStatus::BuildInProgress => "Building",
             MergeableStatus::Ready => "Ready",
             MergeableStatus::NeedsRebase => "Needs Rebase",
             MergeableStatus::BuildFailed => "Build Failed",
@@ -129,8 +129,8 @@ impl MergeableStatus {
 
 impl Into<Row<'static>> for &Pr {
     fn into(self) -> Row<'static> {
-        use ratatui::widgets::Cell;
         use ratatui::style::Style;
+        use ratatui::widgets::Cell;
 
         // Show status with icon and label (e.g., "✓ Ready", "✗ Build Failed")
         let status_text = format!("{} {}", self.mergeable.icon(), self.mergeable.label());
@@ -140,8 +140,7 @@ impl Into<Row<'static>> for &Pr {
             Cell::from(self.title.clone()),
             Cell::from(self.author.clone()),
             Cell::from(self.no_comments.to_string()),
-            Cell::from(status_text)
-                .style(Style::default().fg(self.mergeable.color())),
+            Cell::from(status_text).style(Style::default().fg(self.mergeable.color())),
         ])
     }
 }
