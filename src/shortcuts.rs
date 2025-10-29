@@ -13,6 +13,7 @@ pub enum Action {
     Bootstrap,
     Rebase,
     RefreshCurrentRepo,
+    RerunFailedJobs,
     CycleFilter,
     SelectNextRepo,
     SelectPreviousRepo,
@@ -50,6 +51,7 @@ pub enum Action {
     RebaseStatusUpdated(usize, usize, bool), // repo_index, pr_number, needs_rebase
     RebaseComplete(Result<(), String>),
     MergeComplete(Result<(), String>),
+    RerunJobsComplete(Result<(), String>),
     PRMergedConfirmed(usize, usize, bool), // repo_index, pr_number, is_merged
     BuildLogsLoaded(Vec<crate::log::LogSection>, crate::log::PrContext),
     IDEOpenComplete(Result<(), String>),
@@ -160,6 +162,15 @@ pub fn get_shortcuts() -> Vec<ShortcutCategory> {
                     matcher: |key| {
                         matches!(key.code, KeyCode::Char('r'))
                             && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    },
+                },
+                Shortcut {
+                    key_display: "Shift+R",
+                    description: "Rerun failed CI jobs for current/selected PRs",
+                    action: Action::RerunFailedJobs,
+                    matcher: |key| {
+                        matches!(key.code, KeyCode::Char('R'))
+                            && key.modifiers.contains(KeyModifiers::SHIFT)
                     },
                 },
                 Shortcut {

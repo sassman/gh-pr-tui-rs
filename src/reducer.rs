@@ -295,6 +295,30 @@ fn repos_reducer(
                 }
             }
         }
+        Action::RerunFailedJobs => {
+            // Effect: Rerun failed CI jobs for current or selected PRs
+            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
+                let pr_numbers: Vec<usize> = if state.selected_prs.is_empty() {
+                    // Rerun for current PR only
+                    state.state.selected()
+                        .and_then(|idx| state.prs.get(idx))
+                        .map(|pr| vec![pr.number])
+                        .unwrap_or_default()
+                } else {
+                    // Rerun for all selected PRs
+                    state.selected_prs.iter()
+                        .filter_map(|&idx| state.prs.get(idx).map(|pr| pr.number))
+                        .collect()
+                };
+
+                if !pr_numbers.is_empty() {
+                    effects.push(Effect::RerunFailedJobs {
+                        repo,
+                        pr_numbers,
+                    });
+                }
+            }
+        }
         Action::MergeSelectedPrs => {
             // Effect: Merge selected PRs
             if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
@@ -527,6 +551,18 @@ fn task_reducer(mut state: TaskState, action: &Action) -> (TaskState, Vec<Effect
                 },
                 Err(err) => TaskStatus {
                     message: format!("Merge failed: {}", err),
+                    status_type: TaskStatusType::Error,
+                },
+            });
+        }
+        Action::RerunJobsComplete(result) => {
+            state.status = Some(match result {
+                Ok(_) => TaskStatus {
+                    message: "CI jobs rerun successfully".to_string(),
+                    status_type: TaskStatusType::Success,
+                },
+                Err(err) => TaskStatus {
+                    message: format!("Failed to rerun CI jobs: {}", err),
                     status_type: TaskStatusType::Error,
                 },
             });

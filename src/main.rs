@@ -115,6 +115,11 @@ enum BackgroundTask {
         selected_indices: Vec<usize>,
         octocrab: Octocrab,
     },
+    RerunFailedJobs {
+        repo: Repo,
+        pr_numbers: Vec<usize>,
+        octocrab: Octocrab,
+    },
     FetchBuildLogs {
         repo: Repo,
         pr_number: usize,
@@ -351,6 +356,20 @@ async fn execute_effect(app: &mut App, effect: Effect) -> Result<()> {
                 message: format!("Merge bot started with {} PR(s)", prs.len()),
                 status_type: TaskStatusType::Success,
             })));
+        }
+
+        Effect::RerunFailedJobs { repo, pr_numbers } => {
+            // Rerun failed CI jobs for PRs
+            let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                message: format!("Rerunning failed CI jobs for {} PR(s)...", pr_numbers.len()),
+                status_type: TaskStatusType::Running,
+            })));
+
+            let _ = app.task_tx.send(BackgroundTask::RerunFailedJobs {
+                repo,
+                pr_numbers,
+                octocrab: app.octocrab()?,
+            });
         }
 
         Effect::DispatchAction(action) => {
@@ -674,6 +693,83 @@ fn start_task_worker(
                         Err("Some merges failed".to_string())
                     };
                     let _ = action_tx.send(Action::MergeComplete(result));
+                }
+                BackgroundTask::RerunFailedJobs {
+                    repo,
+                    pr_numbers,
+                    octocrab,
+                } => {
+                    let mut all_success = true;
+                    let mut rerun_count = 0;
+
+                    for pr_number in pr_numbers {
+                        // Get PR details to find head SHA
+                        let pr = match octocrab
+                            .pulls(&repo.org, &repo.repo)
+                            .get(pr_number as u64)
+                            .await
+                        {
+                            Ok(pr) => pr,
+                            Err(_) => {
+                                all_success = false;
+                                continue;
+                            }
+                        };
+
+                        let head_sha = &pr.head.sha;
+
+                        // Get workflow runs for this PR using REST API
+                        let url = format!(
+                            "/repos/{}/{}/actions/runs?head_sha={}",
+                            repo.org, repo.repo, head_sha
+                        );
+
+                        #[derive(Debug, serde::Deserialize)]
+                        struct WorkflowRunsResponse {
+                            workflow_runs: Vec<octocrab::models::workflows::Run>,
+                        }
+
+                        let workflow_response: WorkflowRunsResponse = match octocrab.get(&url, None::<&()>).await {
+                            Ok(response) => response,
+                            Err(_) => {
+                                all_success = false;
+                                continue;
+                            }
+                        };
+
+                        let runs = workflow_response.workflow_runs;
+
+                        // Find failed runs and rerun them
+                        for run in runs {
+                            let is_failed = run.conclusion.as_deref() == Some("failure");
+                            if is_failed {
+                                // Rerun failed jobs for this run
+                                let url = format!(
+                                    "https://api.github.com/repos/{}/{}/actions/runs/{}/rerun-failed-jobs",
+                                    repo.org, repo.repo, run.id
+                                );
+
+                                // Use serde_json::Value as response type for POST requests
+                                match octocrab.post::<(), serde_json::Value>(&url, None::<&()>).await {
+                                    Ok(_) => {
+                                        rerun_count += 1;
+                                    }
+                                    Err(_) => {
+                                        all_success = false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    let result = if all_success && rerun_count > 0 {
+                        Ok(())
+                    } else if rerun_count == 0 {
+                        Err("No failed jobs found to rerun".to_string())
+                    } else {
+                        Err("Some jobs failed to rerun".to_string())
+                    };
+                    let _ = action_tx.send(Action::RerunJobsComplete(result));
                 }
                 BackgroundTask::FetchBuildLogs {
                     repo,

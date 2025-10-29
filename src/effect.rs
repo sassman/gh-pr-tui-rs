@@ -76,6 +76,12 @@ pub enum Effect {
         prs: Vec<Pr>,
     },
 
+    /// Rerun failed CI jobs for PRs
+    RerunFailedJobs {
+        repo: Repo,
+        pr_numbers: Vec<usize>,
+    },
+
     /// Dispatch another action (for chaining)
     DispatchAction(crate::shortcuts::Action),
 
