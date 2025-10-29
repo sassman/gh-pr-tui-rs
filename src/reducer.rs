@@ -1,23 +1,36 @@
-use crate::{
-    shortcuts::Action,
-    state::*,
-};
+use crate::{effect::Effect, shortcuts::Action, state::*};
 
 /// Root reducer that delegates to sub-reducers based on action type
-/// Pure function: takes state and action, returns new state
-pub fn reduce(mut state: AppState, action: &Action) -> AppState {
-    // Apply each sub-reducer
-    state.ui = ui_reducer(state.ui, action);
-    state.repos = repos_reducer(state.repos, action);
-    state.log_panel = log_panel_reducer(state.log_panel, action);
-    state.merge_bot = merge_bot_reducer(state.merge_bot, action);
-    state.task = task_reducer(state.task, action);
+/// Pure function: takes state and action, returns (new state, effects to perform)
+pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
+    let mut effects = Vec::new();
 
-    state
+    // Apply each sub-reducer and collect effects
+    let (ui_state, ui_effects) = ui_reducer(state.ui, action);
+    state.ui = ui_state;
+    effects.extend(ui_effects);
+
+    let (repos_state, repos_effects) = repos_reducer(state.repos, action, &state.config);
+    state.repos = repos_state;
+    effects.extend(repos_effects);
+
+    let (log_panel_state, log_panel_effects) = log_panel_reducer(state.log_panel, action);
+    state.log_panel = log_panel_state;
+    effects.extend(log_panel_effects);
+
+    let (merge_bot_state, merge_bot_effects) = merge_bot_reducer(state.merge_bot, action);
+    state.merge_bot = merge_bot_state;
+    effects.extend(merge_bot_effects);
+
+    let (task_state, task_effects) = task_reducer(state.task, action);
+    state.task = task_state;
+    effects.extend(task_effects);
+
+    (state, effects)
 }
 
 /// UI state reducer - handles UI-related actions
-fn ui_reducer(mut state: UiState, action: &Action) -> UiState {
+fn ui_reducer(mut state: UiState, action: &Action) -> (UiState, Vec<Effect>) {
     match action {
         Action::Quit => {
             state.should_quit = true;
@@ -42,12 +55,26 @@ fn ui_reducer(mut state: UiState, action: &Action) -> UiState {
         _ => {}
     }
 
-    state
+    (state, vec![])
 }
 
 /// Repository and PR state reducer
-fn repos_reducer(mut state: ReposState, action: &Action) -> ReposState {
+/// ALL logic lives here - reducer returns effects to be performed
+fn repos_reducer(
+    mut state: ReposState,
+    action: &Action,
+    _config: &crate::config::Config,
+) -> (ReposState, Vec<Effect>) {
+    let mut effects = vec![];
+
     match action {
+        // Bootstrap: Load repositories and session
+        Action::Bootstrap => {
+            state.bootstrap_state = BootstrapState::LoadingRepositories;
+            // Effect: Load repositories from config file
+            effects.push(Effect::LoadRepositories);
+        }
+
         // Internal state update actions
         Action::SetBootstrapState(new_state) => {
             state.bootstrap_state = new_state.clone();
@@ -62,10 +89,23 @@ fn repos_reducer(mut state: ReposState, action: &Action) -> ReposState {
             }
         }
 
+        // Repositories loaded - restore session and load PRs
         Action::BootstrapComplete(Ok(result)) => {
             state.recent_repos = result.repos.clone();
             state.selected_repo = result.selected_repo;
             state.bootstrap_state = BootstrapState::LoadingPRs;
+
+            // Set all repos to loading
+            for i in 0..result.repos.len() {
+                let data = state.repo_data.entry(i).or_default();
+                data.loading_state = LoadingState::Loading;
+            }
+
+            // Effect: Load PRs for all repos
+            effects.push(Effect::LoadAllRepos {
+                repos: result.repos.clone(),
+                filter: state.filter.clone(),
+            });
         }
         Action::BootstrapComplete(Err(err)) => {
             state.bootstrap_state = BootstrapState::Error(err.clone());
@@ -87,15 +127,51 @@ fn repos_reducer(mut state: ReposState, action: &Action) -> ReposState {
             let data = state.repo_data.entry(*repo_index).or_default();
             data.prs = prs.clone();
             data.loading_state = LoadingState::Loaded;
+            if data.table_state.selected().is_none() && !data.prs.is_empty() {
+                data.table_state.select(Some(0));
+            }
 
             // Sync legacy fields if this is the selected repo
             if *repo_index == state.selected_repo {
                 state.prs = prs.clone();
                 state.loading_state = LoadingState::Loaded;
             }
+
+            // Effect: Check merge status for loaded PRs
+            if let Some(repo) = state.recent_repos.get(*repo_index).cloned() {
+                let pr_numbers: Vec<usize> = prs.iter().map(|pr| pr.number).collect();
+                effects.push(Effect::CheckMergeStatus {
+                    repo_index: *repo_index,
+                    repo,
+                    pr_numbers,
+                });
+            }
+
+            // Check if all repos are done loading
+            let all_loaded = state.repo_data.len() == state.recent_repos.len()
+                && state.repo_data.values().all(|d| {
+                    matches!(
+                        d.loading_state,
+                        LoadingState::Loaded | LoadingState::Error(_)
+                    )
+                });
+
+            // Effect: Dispatch bootstrap completion
+            if all_loaded && state.bootstrap_state == BootstrapState::LoadingPRs {
+                effects.push(Effect::batch(vec![
+                    Effect::DispatchAction(Action::SetBootstrapState(
+                        BootstrapState::Completed,
+                    )),
+                    Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
+                        message: "All repositories loaded successfully".to_string(),
+                        status_type: TaskStatusType::Success,
+                    }))),
+                ]));
+            }
         }
-        Action::RepoDataLoaded(_, Err(_)) => {
-            // Error handled elsewhere
+        Action::RepoDataLoaded(repo_index, Err(err)) => {
+            let data = state.repo_data.entry(*repo_index).or_default();
+            data.loading_state = LoadingState::Error(err.clone());
         }
         Action::CycleFilter => {
             state.filter = state.filter.next();
@@ -188,14 +264,149 @@ fn repos_reducer(mut state: ReposState, action: &Action) -> ReposState {
                 data.selected_prs.clear();
             }
         }
+        Action::RefreshCurrentRepo => {
+            // Effect: Reload current repository
+            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
+                effects.push(Effect::LoadSingleRepo {
+                    repo_index: state.selected_repo,
+                    repo,
+                    filter: state.filter.clone(),
+                });
+            }
+        }
+        Action::Rebase => {
+            // Effect: Perform rebase on selected PRs (or auto-rebase if none selected)
+            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
+                let prs_to_rebase: Vec<_> = if state.selected_prs.is_empty() {
+                    // Auto-rebase: find first PR that needs rebase
+                    state.prs.iter().filter(|pr| pr.needs_rebase).take(1).cloned().collect()
+                } else {
+                    // Rebase selected PRs
+                    state.selected_prs.iter()
+                        .filter_map(|&idx| state.prs.get(idx).cloned())
+                        .collect()
+                };
+
+                if !prs_to_rebase.is_empty() {
+                    effects.push(Effect::PerformRebase {
+                        repo,
+                        prs: prs_to_rebase,
+                    });
+                }
+            }
+        }
+        Action::MergeSelectedPrs => {
+            // Effect: Merge selected PRs
+            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
+                let prs_to_merge: Vec<_> = state.selected_prs.iter()
+                    .filter_map(|&idx| state.prs.get(idx).cloned())
+                    .collect();
+
+                if !prs_to_merge.is_empty() {
+                    effects.push(Effect::PerformMerge {
+                        repo,
+                        prs: prs_to_merge,
+                    });
+                }
+            }
+        }
+        Action::StartMergeBot => {
+            // Effect: Start merge bot with selected PRs
+            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
+                let prs_to_process: Vec<_> = state.selected_prs.iter()
+                    .filter_map(|&idx| state.prs.get(idx).cloned())
+                    .collect();
+
+                if !prs_to_process.is_empty() {
+                    effects.push(Effect::StartMergeBot {
+                        repo,
+                        prs: prs_to_process,
+                    });
+                }
+            }
+        }
+        Action::OpenCurrentPrInBrowser => {
+            // Effect: Open current PR(s) in browser
+            if let Some(repo) = state.recent_repos.get(state.selected_repo) {
+                // If multiple PRs selected, open all of them
+                let prs_to_open: Vec<usize> = if !state.selected_prs.is_empty() {
+                    state.selected_prs.iter()
+                        .filter_map(|&idx| state.prs.get(idx).map(|pr| pr.number))
+                        .collect()
+                } else if let Some(selected_idx) = state.state.selected() {
+                    // Open just the current PR
+                    state.prs.get(selected_idx).map(|pr| vec![pr.number]).unwrap_or_default()
+                } else {
+                    vec![]
+                };
+
+                for pr_number in prs_to_open {
+                    let url = format!("https://github.com/{}/{}/pull/{}", repo.org, repo.repo, pr_number);
+                    effects.push(Effect::OpenInBrowser { url });
+                }
+            }
+        }
+        Action::OpenBuildLogs => {
+            // Effect: Load build logs for current PR
+            if let Some(selected_idx) = state.state.selected() {
+                if let Some(pr) = state.prs.get(selected_idx).cloned() {
+                    if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
+                        effects.push(Effect::LoadBuildLogs { repo, pr });
+                    }
+                }
+            }
+        }
+        Action::OpenInIDE => {
+            // Effect: Open current PR in IDE
+            if let Some(selected_idx) = state.state.selected() {
+                if let Some(pr) = state.prs.get(selected_idx) {
+                    if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
+                        effects.push(Effect::OpenInIDE {
+                            repo,
+                            pr_number: pr.number,
+                        });
+                    }
+                }
+            }
+        }
+        Action::SelectNextRepo => {
+            if !state.recent_repos.is_empty() {
+                state.selected_repo = (state.selected_repo + 1) % state.recent_repos.len();
+
+                // Sync legacy fields with repo_data
+                if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    state.prs = data.prs.clone();
+                    state.state = data.table_state.clone();
+                    state.selected_prs = data.selected_prs.clone();
+                    state.loading_state = data.loading_state.clone();
+                }
+            }
+        }
+        Action::SelectPreviousRepo => {
+            if !state.recent_repos.is_empty() {
+                state.selected_repo = if state.selected_repo == 0 {
+                    state.recent_repos.len() - 1
+                } else {
+                    state.selected_repo - 1
+                };
+
+                // Sync legacy fields with repo_data
+                if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    state.prs = data.prs.clone();
+                    state.state = data.table_state.clone();
+                    state.selected_prs = data.selected_prs.clone();
+                    state.loading_state = data.loading_state.clone();
+                }
+            }
+        }
         _ => {}
     }
 
-    state
+    (state, effects)
 }
 
 /// Log panel state reducer
-fn log_panel_reducer(mut state: LogPanelState, action: &Action) -> LogPanelState {
+fn log_panel_reducer(mut state: LogPanelState, action: &Action) -> (LogPanelState, Vec<Effect>) {
     match action {
         Action::BuildLogsLoaded(sections, pr_context) => {
             state.panel = Some(crate::log::LogPanel {
@@ -246,11 +457,11 @@ fn log_panel_reducer(mut state: LogPanelState, action: &Action) -> LogPanelState
         _ => {}
     }
 
-    state
+    (state, vec![])
 }
 
 /// Merge bot state reducer
-fn merge_bot_reducer(mut state: MergeBotState, action: &Action) -> MergeBotState {
+fn merge_bot_reducer(mut state: MergeBotState, action: &Action) -> (MergeBotState, Vec<Effect>) {
     match action {
         Action::StartMergeBot => {
             // Note: actual bot starting logic with PR data happens in the effect handler
@@ -279,11 +490,11 @@ fn merge_bot_reducer(mut state: MergeBotState, action: &Action) -> MergeBotState
         _ => {}
     }
 
-    state
+    (state, vec![])
 }
 
 /// Task status reducer
-fn task_reducer(mut state: TaskState, action: &Action) -> TaskState {
+fn task_reducer(mut state: TaskState, action: &Action) -> (TaskState, Vec<Effect>) {
     match action {
         // Internal state update action
         Action::SetTaskStatus(new_status) => {
@@ -335,5 +546,5 @@ fn task_reducer(mut state: TaskState, action: &Action) -> TaskState {
         _ => {}
     }
 
-    state
+    (state, vec![])
 }

@@ -18,6 +18,7 @@ use tokio::sync::mpsc;
 use ::log::debug;
 
 use crate::config::Config;
+use crate::effect::Effect;
 use crate::gh::{comment, merge};
 use crate::log::{LogPanel, LogSection, PrContext};
 use crate::pr::Pr;
@@ -27,6 +28,7 @@ use crate::store::Store;
 use crate::theme::Theme;
 
 mod config;
+mod effect;
 mod gh;
 mod log;
 mod merge_bot;
@@ -152,632 +154,224 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
         msg
     };
 
-    // Redux principle: ALL state updates go through reducers via dispatch
-    // This function only handles side effects (API calls, background tasks)
+    // Pure Redux/Elm architecture: Dispatch action to reducers, get effects back
+    let effects = app.store.dispatch(msg);
 
-    match msg.clone() {
-        // Pure state updates - just dispatch to reducers
-        Action::Quit
-        | Action::ToggleShortcuts
-        | Action::ScrollShortcutsUp
-        | Action::ScrollShortcutsDown
-        | Action::NavigateToNextPr
-        | Action::NavigateToPreviousPr
-        | Action::TogglePrSelection
-        | Action::CloseLogPanel
-        | Action::ScrollLogPanelUp
-        | Action::ScrollLogPanelDown
-        | Action::ScrollLogPanelLeft
-        | Action::ScrollLogPanelRight
-        | Action::NextLogSection
-        | Action::ToggleTimestamps
-        | Action::SelectNextRepo
-        | Action::SelectPreviousRepo
-        | Action::SelectRepoByIndex(_)
-        | Action::MergeStatusUpdated(_, _, _)
-        | Action::RebaseStatusUpdated(_, _, _)
-        | Action::PRMergedConfirmed(_, _, _)
-        | Action::BuildLogsLoaded(_, _)
-        | Action::RebaseComplete(_)
-        | Action::MergeComplete(_)
-        | Action::IDEOpenComplete(_)
-        | Action::SetBootstrapState(_)
-        | Action::SetLoadingState(_)
-        | Action::SetTaskStatus(_)
-        | Action::SetReposLoading(_)
-        | Action::BootstrapComplete(_) => {
-            // Pure state update - let reducer handle it
-            app.store.dispatch(msg.clone());
-        }
+    // Execute effects returned by reducers
+    for effect in effects {
+        execute_effect(app, effect).await?;
+    }
 
-        Action::Bootstrap => {
-            // Redux: Dispatch state changes, perform side effects, dispatch results
+    Ok(Action::None)
+}
 
-            // Stage 1: Loading repositories (fast, synchronous)
-            app.store.dispatch(Action::SetBootstrapState(
-                BootstrapState::LoadingRepositories,
-            ));
+/// Execute a single effect (side effects like API calls, background tasks, etc.)
+async fn execute_effect(app: &mut App, effect: Effect) -> Result<()> {
+    use crate::effect::Effect;
 
+    match effect {
+        Effect::None => {}
+
+        Effect::LoadRepositories => {
+            // Load repositories from config file
             match loading_recent_repos() {
                 Ok(repos) => {
                     if repos.is_empty() {
-                        app.store.dispatch(Action::SetBootstrapState(BootstrapState::Error(
+                        let _ = app.action_tx.send(Action::BootstrapComplete(Err(
                             "No repositories configured. Add repositories to .recent-repositories.json".to_string()
                         )));
-                        return Ok(Action::None);
+                        return Ok(());
                     }
 
-                    // Stage 2: Restoring session (fast, synchronous)
-                    app.store
-                        .dispatch(Action::SetBootstrapState(BootstrapState::RestoringSession));
-
+                    // Restore session
                     let selected_repo = if let Ok(state) = load_persisted_state() {
                         if let Some(index) = repos.iter().position(|r| r == &state.selected_repo) {
                             index
                         } else {
-                            debug!("Persisted repository not found, defaulting to first");
                             0
                         }
                     } else {
                         0
                     };
 
-                    // Dispatch bootstrap complete with repos and selected index
+                    // Dispatch bootstrap complete
                     let result = BootstrapResult {
-                        repos: repos.clone(),
+                        repos,
                         selected_repo,
                     };
-                    app.store.dispatch(Action::BootstrapComplete(Ok(result)));
-
-                    // Stage 3: Loading PRs (slow, move to background)
-                    let num_repos = repos.len();
-                    app.store.dispatch(Action::SetTaskStatus(Some(TaskStatus {
-                        message: format!("Loading PRs from {} repositories...", num_repos),
-                        status_type: TaskStatusType::Running,
-                    })));
-
-                    // Set all repos to loading state
-                    let indices: Vec<usize> = (0..num_repos).collect();
-                    app.store.dispatch(Action::SetReposLoading(indices));
-
-                    // Trigger background loading
-                    let _ = app.task_tx.send(BackgroundTask::LoadAllRepos {
-                        repos,
-                        filter: app.store.state().repos.filter.clone(),
-                        octocrab: app.octocrab()?,
-                    });
+                    let _ = app.action_tx.send(Action::BootstrapComplete(Ok(result)));
                 }
                 Err(err) => {
-                    app.store.dispatch(Action::SetBootstrapState(BootstrapState::Error(
-                        format!("Failed to load repositories: {}", err),
-                    )));
+                    let _ = app.action_tx.send(Action::BootstrapComplete(Err(err.to_string())));
                 }
             }
         }
 
-        Action::RepoDataLoaded(index, result) => {
-            // Redux: Dispatch to reducer, handle side effects
-            app.store.dispatch(msg.clone());
-
-            // Side effect: Trigger background merge status checks for loaded PRs
-            if let Ok(prs) = result {
-                if let Some(repo) = app.store.state().repos.recent_repos.get(index).cloned() {
-                    let pr_numbers: Vec<usize> = prs.iter().map(|pr| pr.number).collect();
-                    let _ = app.task_tx.send(BackgroundTask::CheckMergeStatus {
-                        repo_index: index,
-                        repo,
-                        pr_numbers,
-                        octocrab: app.octocrab().unwrap_or_else(|_| Octocrab::default()),
-                    });
-                }
-            }
-
-            // Check if all repos are done loading and dispatch completion
-            let all_loaded = app.store.state().repos.repo_data.len()
-                == app.store.state().repos.recent_repos.len()
-                && app.store.state().repos.repo_data.values().all(|d| {
-                    matches!(
-                        d.loading_state,
-                        LoadingState::Loaded | LoadingState::Error(_)
-                    )
-                });
-
-            if all_loaded
-                && app.store.state().repos.bootstrap_state == BootstrapState::LoadingPRs
-            {
-                app.store
-                    .dispatch(Action::SetBootstrapState(BootstrapState::Completed));
-                app.store.dispatch(Action::SetTaskStatus(Some(TaskStatus {
-                    message: "All repositories loaded successfully".to_string(),
-                    status_type: TaskStatusType::Success,
-                })));
-            }
-        }
-
-        Action::MergeStatusUpdated(repo_index, pr_number, status) => {
-            // Update the merge status for a specific PR
-            if let Some(data) = app.store.state_mut().repos.repo_data.get_mut(&repo_index) {
-                if let Some(pr) = data.prs.iter_mut().find(|pr| pr.number == pr_number) {
-                    pr.mergeable = status;
-                }
-            }
-
-            // If this is the current repo, update app.store.state().repos.prs too
-            if repo_index == app.store.state().repos.selected_repo {
-                if let Some(pr) = app.store.state_mut().repos.prs.iter_mut().find(|pr| pr.number == pr_number) {
-                    pr.mergeable = status;
-                }
-            }
-
-            // Notify merge bot if it's running
-            if app.store.state().merge_bot.bot.is_running() {
-                app.store.state_mut().merge_bot.bot.handle_status_update(pr_number, status);
-            }
-        }
-
-        Action::RebaseStatusUpdated(repo_index, pr_number, needs_rebase) => {
-            // Update the rebase status for a specific PR
-            if let Some(data) = app.store.state_mut().repos.repo_data.get_mut(&repo_index) {
-                if let Some(pr) = data.prs.iter_mut().find(|pr| pr.number == pr_number) {
-                    pr.needs_rebase = needs_rebase;
-                }
-            }
-
-            // If this is the current repo, update app.store.state().repos.prs too
-            if repo_index == app.store.state().repos.selected_repo {
-                if let Some(pr) = app.store.state_mut().repos.prs.iter_mut().find(|pr| pr.number == pr_number) {
-                    pr.needs_rebase = needs_rebase;
-                }
-            }
-        }
-
-        Action::RefreshCurrentRepo => {
-            // Trigger background refresh
-            if let Some(repo) = app.repo().cloned() {
-                let selected_repo = app.store.state().repos.selected_repo;
-                let filter = app.store.state().repos.filter.clone();
-
-                app.store.state_mut().repos.loading_state = LoadingState::Loading;
-                let data = app.store.state_mut().repos.repo_data.entry(selected_repo).or_default();
-                data.loading_state = LoadingState::Loading;
-
-                app.store.state_mut().task.status = Some(TaskStatus {
-                    message: format!("Refreshing {}/{}...", repo.org, repo.repo),
-                    status_type: TaskStatusType::Running,
-                });
-
-                let _ = app.task_tx.send(BackgroundTask::LoadSingleRepo {
-                    repo_index: selected_repo,
-                    repo,
-                    filter,
-                    octocrab: app.octocrab()?,
-                });
-            }
-        }
-
-        Action::CycleFilter => {
-            // Cycle to next filter and reload current repo
-            let next_filter = app.store.state().repos.filter.next();
-            app.store.state_mut().repos.filter = next_filter.clone();
-
-            let filter_label = next_filter.label();
-            app.store.state_mut().task.status = Some(TaskStatus {
-                message: format!("Filtering by: {}", filter_label),
+        Effect::LoadAllRepos { repos, filter } => {
+            // Trigger background task to load all repos
+            let num_repos = repos.len();
+            let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                message: format!("Loading PRs from {} repositories...", num_repos),
                 status_type: TaskStatusType::Running,
-            });
+            })));
 
-            if let Some(repo) = app.repo().cloned() {
-                let selected_repo = app.store.state().repos.selected_repo;
+            let indices: Vec<usize> = (0..num_repos).collect();
+            let _ = app.action_tx.send(Action::SetReposLoading(indices));
 
-                app.store.state_mut().repos.loading_state = LoadingState::Loading;
-                let data = app.store.state_mut().repos.repo_data.entry(selected_repo).or_default();
-                data.loading_state = LoadingState::Loading;
-
-                let _ = app.task_tx.send(BackgroundTask::LoadSingleRepo {
-                    repo_index: selected_repo,
-                    repo,
-                    filter: next_filter,
-                    octocrab: app.octocrab()?,
-                });
-            }
-        }
-
-        Action::Rebase => {
-            // If user has manually selected PRs, rebase those
-            // Otherwise, auto-select all PRs that need rebase
-            if let Some(repo) = app.repo().cloned() {
-                let (selected_indices, prs_clone) = {
-                    let repo_data = app.get_current_repo_data_mut();
-
-                    // Check if user has manually selected PRs
-                    let selected_indices = if !repo_data.selected_prs.is_empty() {
-                        // Use manual selection
-                        repo_data.selected_prs.clone()
-                    } else {
-                        // Auto-select all PRs that need rebase
-                        let prs_needing_rebase: Vec<usize> = repo_data
-                            .prs
-                            .iter()
-                            .enumerate()
-                            .filter(|(_, pr)| pr.needs_rebase)
-                            .map(|(idx, _)| idx)
-                            .collect();
-
-                        if prs_needing_rebase.is_empty() {
-                            debug!("No PRs selected and no PRs need rebase");
-                            return Ok(Action::None);
-                        }
-
-                        // Update selection to PRs needing rebase for visual feedback
-                        repo_data.selected_prs = prs_needing_rebase.clone();
-                        prs_needing_rebase
-                    };
-
-                    (selected_indices, repo_data.prs.clone())
-                };
-
-                // Set status to show rebase is starting
-                app.store.state_mut().task.status = Some(TaskStatus {
-                    message: format!("Rebasing {} PR(s)...", selected_indices.len()),
-                    status_type: TaskStatusType::Running,
-                });
-
-                let _ = app.task_tx.send(BackgroundTask::Rebase {
-                    repo,
-                    prs: prs_clone,
-                    selected_indices,
-                    octocrab: app.octocrab()?,
-                });
-            }
-        }
-
-        Action::RebaseComplete(result) => {
-            let success = result.is_ok();
-
-            // Notify merge bot if it's running
-            if app.store.state().merge_bot.bot.is_running() {
-                app.store.state_mut().merge_bot.bot.handle_rebase_complete(success);
-            }
-
-            match result {
-                Ok(_) => {
-                    debug!("Rebase completed successfully");
-                    if !app.store.state().merge_bot.bot.is_running() {
-                        app.store.state_mut().task.status = Some(TaskStatus {
-                            message: "Rebase completed successfully".to_string(),
-                            status_type: TaskStatusType::Success,
-                        });
-                    }
-                }
-                Err(err) => {
-                    debug!("Rebase failed: {}", err);
-                    if !app.store.state().merge_bot.bot.is_running() {
-                        app.store.state_mut().task.status = Some(TaskStatus {
-                            message: format!("Rebase failed: {}", err),
-                            status_type: TaskStatusType::Error,
-                        });
-                    }
-                }
-            }
-        },
-
-        Action::MergeSelectedPrs => {
-            // Trigger background merge
-            if let Some(repo) = app.repo().cloned() {
-                let repo_data = app.get_current_repo_data();
-                let selected_count = repo_data.selected_prs.len();
-
-                app.store.state_mut().task.status = Some(TaskStatus {
-                    message: format!("Merging {} PR(s)...", selected_count),
-                    status_type: TaskStatusType::Running,
-                });
-
-                let _ = app.task_tx.send(BackgroundTask::Merge {
-                    repo,
-                    prs: repo_data.prs.clone(),
-                    selected_indices: repo_data.selected_prs.clone(),
-                    octocrab: app.octocrab()?,
-                });
-            }
-        }
-
-        Action::StartMergeBot => {
-            // Start the merge bot with selected PRs
-            let repo_data = app.get_current_repo_data();
-
-            if repo_data.selected_prs.is_empty() {
-                app.store.state_mut().task.status = Some(TaskStatus {
-                    message: "No PRs selected for merge bot".to_string(),
-                    status_type: TaskStatusType::Error,
-                });
-            } else {
-                // Get PR numbers and indices
-                let pr_data: Vec<(usize, usize)> = repo_data
-                    .selected_prs
-                    .iter()
-                    .filter_map(|&idx| {
-                        repo_data.prs.get(idx).map(|pr| (pr.number, idx))
-                    })
-                    .collect();
-
-                app.store.state_mut().merge_bot.bot.start(pr_data);
-                app.store.state_mut().task.status = Some(TaskStatus {
-                    message: format!("Merge bot started with {} PR(s)", repo_data.selected_prs.len()),
-                    status_type: TaskStatusType::Running,
-                });
-            }
-        }
-
-        Action::MergeComplete(result) => {
-            let success = result.is_ok();
-
-            // Notify merge bot if it's running
-            if app.store.state().merge_bot.bot.is_running() {
-                app.store.state_mut().merge_bot.bot.handle_merge_complete(success);
-            }
-
-            match result {
-                Ok(_) => {
-                    debug!("Merge completed successfully");
-                    if !app.store.state().merge_bot.bot.is_running() {
-                        let selected_repo = app.store.state().repos.selected_repo;
-
-                        app.store.state_mut().task.status = Some(TaskStatus {
-                            message: "Merge completed successfully".to_string(),
-                            status_type: TaskStatusType::Success,
-                        });
-                        // Clear selections after successful merge (only if not in merge bot)
-                        app.store.state_mut().repos.selected_prs.clear();
-                        let data = app.store.state_mut().repos.repo_data.entry(selected_repo).or_default();
-                        data.selected_prs.clear();
-                    }
-                }
-                Err(err) => {
-                    debug!("Merge failed: {}", err);
-                    if !app.store.state().merge_bot.bot.is_running() {
-                        app.store.state_mut().task.status = Some(TaskStatus {
-                            message: format!("Merge failed: {}", err),
-                            status_type: TaskStatusType::Error,
-                        });
-                    }
-                }
-            }
-        }
-
-        Action::OpenCurrentPrInBrowser => {
-            if let Some(repo) = app.repo() {
-                let repo_data = app.get_current_repo_data();
-
-                // If multiple PRs are selected, open all of them
-                if !repo_data.selected_prs.is_empty() {
-                    for &idx in &repo_data.selected_prs {
-                        if let Some(pr) = repo_data.prs.get(idx) {
-                            let url = format!(
-                                "https://github.com/{}/{}/pull/{}",
-                                repo.org, repo.repo, pr.number
-                            );
-                            #[cfg(target_os = "macos")]
-                            let _ = std::process::Command::new("open").arg(&url).spawn();
-                            #[cfg(target_os = "linux")]
-                            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-                            #[cfg(target_os = "windows")]
-                            let _ = std::process::Command::new("cmd")
-                                .args(&["/C", "start", &url])
-                                .spawn();
-                        }
-                    }
-                } else if let Some(selected_idx) = repo_data.table_state.selected() {
-                    // If no multi-selection, open the currently focused PR
-                    if let Some(pr) = repo_data.prs.get(selected_idx) {
-                        let url = format!(
-                            "https://github.com/{}/{}/pull/{}",
-                            repo.org, repo.repo, pr.number
-                        );
-                        #[cfg(target_os = "macos")]
-                        let _ = std::process::Command::new("open").arg(&url).spawn();
-                        #[cfg(target_os = "linux")]
-                        let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
-                        #[cfg(target_os = "windows")]
-                        let _ = std::process::Command::new("cmd")
-                            .args(&["/C", "start", &url])
-                            .spawn();
-                    }
-                }
-            }
-        }
-
-        Action::OpenBuildLogs => {
-            // Open logs for any PR - we'll check for failures in the background task
-            if let Some(repo) = app.repo().cloned() {
-                let repo_data = app.get_current_repo_data();
-                if let Some(selected_idx) = repo_data.table_state.selected() {
-                    if let Some(pr) = repo_data.prs.get(selected_idx) {
-                        app.store.state_mut().task.status = Some(TaskStatus {
-                            message: "Loading build logs...".to_string(),
-                            status_type: TaskStatusType::Running,
-                        });
-
-                        let pr_context = PrContext {
-                            number: pr.number,
-                            title: pr.title.clone(),
-                            author: pr.author.clone(),
-                        };
-
-                        let _ = app.task_tx.send(BackgroundTask::FetchBuildLogs {
-                            repo,
-                            pr_number: pr.number,
-                            head_sha: "HEAD".to_string(), // Placeholder - will fetch in background task
-                            octocrab: app.octocrab().unwrap_or_else(|_| Octocrab::default()),
-                            pr_context,
-                        });
-                    }
-                }
-            }
-        }
-
-        Action::OpenInIDE => {
-            // Open PR in configured IDE
-            if let Some(repo) = app.repo().cloned() {
-                let repo_data = app.get_current_repo_data();
-                if let Some(selected_idx) = repo_data.table_state.selected() {
-                    if let Some(pr) = repo_data.prs.get(selected_idx) {
-                        app.store.state_mut().task.status = Some(TaskStatus {
-                            message: format!("Opening PR #{} in IDE...", pr.number),
-                            status_type: TaskStatusType::Running,
-                        });
-
-                        let _ = app.task_tx.send(BackgroundTask::OpenPRInIDE {
-                            repo,
-                            pr_number: pr.number,
-                            ide_command: app.store.state().config.ide_command.clone(),
-                            temp_dir: app.store.state().config.temp_dir.clone(),
-                        });
-                    }
-                }
-            }
-        }
-
-        Action::IDEOpenComplete(result) => {
-            app.store.state_mut().task.status = Some(match result {
-                Ok(()) => TaskStatus {
-                    message: "IDE opened successfully".to_string(),
-                    status_type: TaskStatusType::Success,
-                },
-                Err(err) => TaskStatus {
-                    message: format!("Failed to open IDE: {}", err),
-                    status_type: TaskStatusType::Error,
-                },
+            let _ = app.task_tx.send(BackgroundTask::LoadAllRepos {
+                repos,
+                filter,
+                octocrab: app.octocrab()?,
             });
         }
 
-        Action::PRMergedConfirmed(repo_index, pr_number, is_merged) => {
-            // Notify merge bot if it's running
-            if app.store.state().merge_bot.bot.is_running() && repo_index == app.store.state().repos.selected_repo {
-                app.store.state_mut().merge_bot.bot.handle_pr_merged_confirmed(pr_number, is_merged);
+        Effect::LoadSingleRepo { repo_index, repo, filter } => {
+            // Trigger background task to load single repo
+            let _ = app.action_tx.send(Action::SetReposLoading(vec![repo_index]));
+            let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                message: "Refreshing...".to_string(),
+                status_type: TaskStatusType::Running,
+            })));
+
+            let _ = app.task_tx.send(BackgroundTask::LoadSingleRepo {
+                repo_index,
+                repo,
+                filter,
+                octocrab: app.octocrab()?,
+            });
+        }
+
+        Effect::CheckMergeStatus { repo_index, repo, pr_numbers } => {
+            // Trigger background merge status checks
+            let _ = app.task_tx.send(BackgroundTask::CheckMergeStatus {
+                repo_index,
+                repo,
+                pr_numbers,
+                octocrab: app.octocrab()?,
+            });
+        }
+
+        Effect::CheckRebaseStatus { .. } => {
+            // Note: CheckRebaseStatus is checked as part of CheckMergeStatus
+            // This effect exists for future extensibility
+            // For now, no-op as rebase status is determined from merge status
+        }
+
+        Effect::PerformRebase { repo, prs } => {
+            // Perform rebase operation
+            let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                message: format!("Rebasing {} PR(s)...", prs.len()),
+                status_type: TaskStatusType::Running,
+            })));
+
+            let selected_indices: Vec<usize> = (0..prs.len()).collect();
+            let _ = app.task_tx.send(BackgroundTask::Rebase {
+                repo,
+                prs,
+                selected_indices,
+                octocrab: app.octocrab()?,
+            });
+        }
+
+        Effect::PerformMerge { repo, prs } => {
+            // Perform merge operation
+            let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                message: format!("Merging {} PR(s)...", prs.len()),
+                status_type: TaskStatusType::Running,
+            })));
+
+            let selected_indices: Vec<usize> = (0..prs.len()).collect();
+            let _ = app.task_tx.send(BackgroundTask::Merge {
+                repo,
+                prs,
+                selected_indices,
+                octocrab: app.octocrab()?,
+            });
+        }
+
+        Effect::OpenInBrowser { url } => {
+            // Open URL in browser
+            #[cfg(target_os = "macos")]
+            let _ = std::process::Command::new("open").arg(&url).spawn();
+            #[cfg(target_os = "linux")]
+            let _ = std::process::Command::new("xdg-open").arg(&url).spawn();
+            #[cfg(target_os = "windows")]
+            let _ = std::process::Command::new("cmd")
+                .args(&["/C", "start", &url])
+                .spawn();
+        }
+
+        Effect::OpenInIDE { repo, pr_number } => {
+            // Open PR in IDE
+            let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                message: format!("Opening PR #{} in IDE...", pr_number),
+                status_type: TaskStatusType::Running,
+            })));
+
+            let config = app.store.state().config.clone();
+            let _ = app.task_tx.send(BackgroundTask::OpenPRInIDE {
+                repo,
+                pr_number,
+                ide_command: config.ide_command,
+                temp_dir: config.temp_dir,
+            });
+        }
+
+        Effect::LoadBuildLogs { repo, pr } => {
+            // Load build logs
+            let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                message: "Loading build logs...".to_string(),
+                status_type: TaskStatusType::Running,
+            })));
+
+            let pr_context = PrContext {
+                number: pr.number,
+                title: pr.title.clone(),
+                author: pr.author.clone(),
+            };
+
+            let _ = app.task_tx.send(BackgroundTask::FetchBuildLogs {
+                repo,
+                pr_number: pr.number,
+                head_sha: "HEAD".to_string(), // Placeholder - will fetch in background task
+                octocrab: app.octocrab()?,
+                pr_context,
+            });
+        }
+
+        Effect::StartMergeBot { prs, .. } => {
+            // Start merge bot - update state directly
+            let pr_data: Vec<(usize, usize)> = prs.iter()
+                .enumerate()
+                .map(|(idx, pr)| (pr.number, idx))
+                .collect();
+
+            app.store.state_mut().merge_bot.bot.start(pr_data);
+            let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                message: format!("Merge bot started with {} PR(s)", prs.len()),
+                status_type: TaskStatusType::Success,
+            })));
+        }
+
+        Effect::DispatchAction(action) => {
+            // Dispatch another action (for chaining)
+            let _ = app.action_tx.send(action);
+        }
+
+        Effect::Batch(effects) => {
+            // Execute a batch of effects
+            for effect in effects {
+                Box::pin(execute_effect(app, effect)).await?;
             }
         }
 
-        Action::CloseLogPanel => {
-            // Context-aware: close shortcuts panel first if open, otherwise close log panel
-            if app.store.state().ui.show_shortcuts {
-                app.store.state_mut().ui.show_shortcuts = false;
-            } else {
-                app.store.state_mut().log_panel.panel = None;
-            }
+        Effect::LoadPersistedSession => {
+            // This is handled as part of LoadRepositories
+            // No-op here as it's done synchronously in that effect
         }
+    }
 
-        Action::ToggleShortcuts => {
-            app.store.state_mut().ui.show_shortcuts = !app.store.state().ui.show_shortcuts;
-            // Reset scroll when opening
-            if app.store.state().ui.show_shortcuts {
-                app.store.state_mut().ui.shortcuts_scroll = 0;
-            }
-        }
-
-        Action::ScrollShortcutsUp => {
-            app.store.state_mut().ui.shortcuts_scroll = app.store.state().ui.shortcuts_scroll.saturating_sub(1);
-        }
-
-        Action::ScrollShortcutsDown => {
-            // Only increment if we haven't reached the bottom
-            // max_scroll is calculated during rendering based on actual content/viewport size
-            if app.store.state().ui.shortcuts_scroll < app.store.state().ui.shortcuts_max_scroll {
-                app.store.state_mut().ui.shortcuts_scroll += 1;
-            }
-        }
-
-        Action::NextLogSection => {
-            if let Some(ref mut panel) = app.store.state_mut().log_panel.panel {
-                if panel.current_section + 1 < panel.log_sections.len() {
-                    panel.current_section += 1;
-                    // Jump to the start of this section
-                    panel.scroll_offset = panel.log_sections[..panel.current_section]
-                        .iter()
-                        .map(|s| s.error_lines.len() + 3) // +3 for header and separator
-                        .sum();
-                }
-            }
-        }
-
-        Action::ToggleTimestamps => {
-            if let Some(ref mut panel) = app.store.state_mut().log_panel.panel {
-                panel.show_timestamps = !panel.show_timestamps;
-            }
-        }
-
-        Action::BuildLogsLoaded(log_sections, pr_context) => {
-            if !log_sections.is_empty() {
-                let section_count = log_sections.len();
-                app.store.state_mut().log_panel.panel = Some(LogPanel {
-                    log_sections,
-                    scroll_offset: 0,
-                    current_section: 0,
-                    horizontal_scroll: 0,
-                    pr_context,
-                    show_timestamps: false,
-                });
-                app.store.state_mut().task.status = Some(TaskStatus {
-                    message: format!("Build logs loaded ({} check run(s))", section_count),
-                    status_type: TaskStatusType::Success,
-                });
-            } else {
-                app.store.state_mut().task.status = Some(TaskStatus {
-                    message: "No check runs found for this PR".to_string(),
-                    status_type: TaskStatusType::Error,
-                });
-            }
-        }
-
-        Action::SelectNextRepo => {
-            app.select_next_repo();
-        }
-        Action::SelectPreviousRepo => {
-            app.select_previous_repo();
-        }
-        Action::SelectRepoByIndex(index) => {
-            app.select_repo_by_index(index);
-        }
-        Action::TogglePrSelection => {
-            app.select_toggle();
-            // Move to next PR after toggling selection for easier bulk selection
-            app.next();
-        }
-        Action::NavigateToNextPr => {
-            // If log panel is open, scroll down instead
-            if app.store.state().log_panel.panel.is_some() {
-                if let Some(ref mut panel) = app.store.state_mut().log_panel.panel {
-                    panel.scroll_offset = panel.scroll_offset.saturating_add(1);
-                }
-            } else {
-                app.next();
-            }
-        }
-        Action::NavigateToPreviousPr => {
-            // If log panel is open, scroll up instead
-            if app.store.state().log_panel.panel.is_some() {
-                if let Some(ref mut panel) = app.store.state_mut().log_panel.panel {
-                    panel.scroll_offset = panel.scroll_offset.saturating_sub(1);
-                }
-            } else {
-                app.previous();
-            }
-        }
-        Action::ScrollLogPanelLeft => {
-            // Only handle if log panel is open
-            if let Some(ref mut panel) = app.store.state_mut().log_panel.panel {
-                panel.horizontal_scroll = panel.horizontal_scroll.saturating_sub(5);
-            }
-        }
-        Action::ScrollLogPanelRight => {
-            // Only handle if log panel is open
-            if let Some(ref mut panel) = app.store.state_mut().log_panel.panel {
-                panel.horizontal_scroll = panel.horizontal_scroll.saturating_add(5);
-            }
-        }
-
-        _ => {}
-    };
-    Ok(Action::None)
+    Ok(())
 }
 
 fn start_event_handler(
@@ -1477,7 +1071,9 @@ fn start_task_worker(
                                 use crate::pr::MergeableStatus;
 
                                 // Check if PR needs rebase
-                                let needs_rebase = if let Some(ref state) = pr_detail.mergeable_state {
+                                let needs_rebase = if let Some(ref state) =
+                                    pr_detail.mergeable_state
+                                {
                                     matches!(state, octocrab::models::pulls::MergeableState::Behind)
                                 } else {
                                     false
@@ -1501,26 +1097,37 @@ fn start_task_worker(
                                     conclusion: Option<String>,
                                 }
 
-                                let (ci_failed, ci_in_progress) = match octocrab.get::<CheckRunsResponse, _, ()>(&check_runs_url, None::<&()>).await {
+                                let (ci_failed, ci_in_progress) = match octocrab
+                                    .get::<CheckRunsResponse, _, ()>(&check_runs_url, None::<&()>)
+                                    .await
+                                {
                                     Ok(response) => {
                                         let failed = response.check_runs.iter().any(|check| {
-                                            check.status == "completed" && matches!(
-                                                check.conclusion.as_deref(),
-                                                Some("failure") | Some("cancelled") | Some("timed_out")
-                                            )
+                                            check.status == "completed"
+                                                && matches!(
+                                                    check.conclusion.as_deref(),
+                                                    Some("failure")
+                                                        | Some("cancelled")
+                                                        | Some("timed_out")
+                                                )
                                         });
                                         let in_progress = response.check_runs.iter().any(|check| {
-                                            check.status == "queued" || check.status == "in_progress"
+                                            check.status == "queued"
+                                                || check.status == "in_progress"
                                         });
                                         (failed, in_progress)
                                     }
                                     Err(_) => {
                                         // Fallback: use mergeable_state as indicator
-                                        let failed = if let Some(ref state) = pr_detail.mergeable_state {
-                                            matches!(state, octocrab::models::pulls::MergeableState::Unstable)
-                                        } else {
-                                            false
-                                        };
+                                        let failed =
+                                            if let Some(ref state) = pr_detail.mergeable_state {
+                                                matches!(
+                                                state,
+                                                octocrab::models::pulls::MergeableState::Unstable
+                                            )
+                                            } else {
+                                                false
+                                            };
                                         (failed, false)
                                     }
                                 };
@@ -1569,20 +1176,29 @@ fn start_task_worker(
                                     }
                                 };
 
-                                let _ = action_tx.send(Action::MergeStatusUpdated(repo_index, pr_number, status));
+                                let _ = action_tx.send(Action::MergeStatusUpdated(
+                                    repo_index, pr_number, status,
+                                ));
                             } else {
                                 // When checking merge confirmation, just check if PR is merged
                                 let is_merged = pr_detail.merged_at.is_some();
-                                let _ = action_tx.send(Action::PRMergedConfirmed(repo_index, pr_number, is_merged));
+                                let _ = action_tx.send(Action::PRMergedConfirmed(
+                                    repo_index, pr_number, is_merged,
+                                ));
                             }
                         }
                         Err(_) => {
                             if is_checking_ci {
                                 // Can't fetch PR, send unknown status
-                                let _ = action_tx.send(Action::MergeStatusUpdated(repo_index, pr_number, crate::pr::MergeableStatus::Unknown));
+                                let _ = action_tx.send(Action::MergeStatusUpdated(
+                                    repo_index,
+                                    pr_number,
+                                    crate::pr::MergeableStatus::Unknown,
+                                ));
                             } else {
                                 // Can't fetch PR, assume not merged yet
-                                let _ = action_tx.send(Action::PRMergedConfirmed(repo_index, pr_number, false));
+                                let _ = action_tx
+                                    .send(Action::PRMergedConfirmed(repo_index, pr_number, false));
                             }
                         }
                     }
@@ -1622,7 +1238,8 @@ async fn run() -> Result<()> {
         match action {
             Ok(Some(action)) => {
                 if let Err(err) = update(&mut app, action).await {
-                    app.store.state_mut().repos.loading_state = LoadingState::Error(err.to_string());
+                    app.store.state_mut().repos.loading_state =
+                        LoadingState::Error(err.to_string());
                     app.store.state_mut().ui.should_quit = true;
                     debug!("Error updating app: {}", err);
                 }
@@ -1636,7 +1253,13 @@ async fn run() -> Result<()> {
                         let repo_data = app.get_current_repo_data();
 
                         // Process next PR in queue
-                        if let Some(action) = app.store.state_mut().merge_bot.bot.process_next(&repo_data.prs) {
+                        if let Some(action) = app
+                            .store
+                            .state_mut()
+                            .merge_bot
+                            .bot
+                            .process_next(&repo_data.prs)
+                        {
                             use crate::merge_bot::MergeBotAction;
                             match action {
                                 MergeBotAction::DispatchMerge(indices) => {
@@ -1680,13 +1303,14 @@ async fn run() -> Result<()> {
                                     // Dispatch polling task to check PR status
                                     // is_checking_ci determines sleep duration: 15s for CI, 2s for merge
                                     if let Ok(octocrab) = app.octocrab() {
-                                        let _ = app.task_tx.send(BackgroundTask::PollPRMergeStatus {
-                                            repo_index: app.store.state().repos.selected_repo,
-                                            repo: repo.clone(),
-                                            pr_number,
-                                            octocrab,
-                                            is_checking_ci,
-                                        });
+                                        let _ =
+                                            app.task_tx.send(BackgroundTask::PollPRMergeStatus {
+                                                repo_index: app.store.state().repos.selected_repo,
+                                                repo: repo.clone(),
+                                                pr_number,
+                                                octocrab,
+                                                is_checking_ci,
+                                            });
                                     }
                                     app.store.state_mut().task.status = Some(TaskStatus {
                                         message: app.store.state().merge_bot.bot.status_message(),
@@ -1775,7 +1399,10 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     // Render tabs (always visible when there are repos)
     let tab_titles: Vec<Line> = app
-        .store.state().repos.recent_repos
+        .store
+        .state()
+        .repos
+        .recent_repos
         .iter()
         .enumerate()
         .map(|(i, repo)| {
@@ -1853,9 +1480,12 @@ fn ui(f: &mut Frame, app: &mut App) {
         .style(Style::default().bg(Color::Blue))
         .height(1);
 
-    let selected_row_style = Style::default()
-        .add_modifier(Modifier::REVERSED)
-        .fg(app.store.state().repos.colors.selected_row_style_fg);
+    let selected_row_style = Style::default().add_modifier(Modifier::REVERSED).fg(app
+        .store
+        .state()
+        .repos
+        .colors
+        .selected_row_style_fg);
 
     // Check if we should show a message instead of PRs
     if repo_data.prs.is_empty() {
@@ -1883,8 +1513,12 @@ fn ui(f: &mut Frame, app: &mut App) {
                 color
             };
             let row: Row = item.into();
-            row.style(Style::new().fg(app.store.state().repos.colors.row_fg).bg(color))
-                .height(1)
+            row.style(
+                Style::new()
+                    .fg(app.store.state().repos.colors.row_fg)
+                    .bg(color),
+            )
+            .height(1)
         });
 
         let widths = [
@@ -1918,8 +1552,12 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     // Render shortcuts panel on top of everything if visible
     if app.store.state().ui.show_shortcuts {
-        let max_scroll =
-            crate::shortcuts::render_shortcuts_panel(f, chunks[1], app.store.state().ui.shortcuts_scroll, &app.store.state().theme);
+        let max_scroll = crate::shortcuts::render_shortcuts_panel(
+            f,
+            chunks[1],
+            app.store.state().ui.shortcuts_scroll,
+            &app.store.state().theme,
+        );
         app.store.state_mut().ui.shortcuts_max_scroll = max_scroll;
     }
 }
@@ -1951,7 +1589,10 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
         actions.push((
             "t".to_string(),
             if app
-                .store.state().log_panel.panel
+                .store
+                .state()
+                .log_panel
+                .panel
                 .as_ref()
                 .map(|p| p.show_timestamps)
                 .unwrap_or(false)
@@ -2148,7 +1789,10 @@ fn render_bootstrap_screen(f: &mut Frame, app: &App) {
             // Calculate progress based on loaded repos
             let total_repos = app.store.state().repos.recent_repos.len().max(1);
             let loaded_repos = app
-                .store.state().repos.repo_data
+                .store
+                .state()
+                .repos
+                .repo_data
                 .values()
                 .filter(|d| {
                     matches!(
@@ -2299,7 +1943,8 @@ impl App {
         let selected_prs = self.store.state().repos.selected_prs.clone();
         let loading_state = self.store.state().repos.loading_state.clone();
 
-        let data = self.store
+        let data = self
+            .store
             .state_mut()
             .repos
             .repo_data
@@ -2391,7 +2036,13 @@ impl App {
         // Update both the repo data state and the app state
         self.store.state_mut().repos.state.select(Some(i));
         let selected_repo = self.store.state().repos.selected_repo;
-        let data = self.store.state_mut().repos.repo_data.entry(selected_repo).or_default();
+        let data = self
+            .store
+            .state_mut()
+            .repos
+            .repo_data
+            .entry(selected_repo)
+            .or_default();
         data.table_state.select(Some(i));
     }
 
@@ -2412,7 +2063,13 @@ impl App {
         // Update both the repo data state and the app state
         self.store.state_mut().repos.state.select(Some(i));
         let selected_repo = self.store.state().repos.selected_repo;
-        let data = self.store.state_mut().repos.repo_data.entry(selected_repo).or_default();
+        let data = self
+            .store
+            .state_mut()
+            .repos
+            .repo_data
+            .entry(selected_repo)
+            .or_default();
         data.table_state.select(Some(i));
     }
 
@@ -2423,13 +2080,23 @@ impl App {
 
         // Update both the app state and repo data
         if self.store.state().repos.selected_prs.contains(&i) {
-            self.store.state_mut().repos.selected_prs.retain(|&x| x != i);
+            self.store
+                .state_mut()
+                .repos
+                .selected_prs
+                .retain(|&x| x != i);
         } else {
             self.store.state_mut().repos.selected_prs.push(i);
         }
 
         let selected_repo = self.store.state().repos.selected_repo;
-        let data = self.store.state_mut().repos.repo_data.entry(selected_repo).or_default();
+        let data = self
+            .store
+            .state_mut()
+            .repos
+            .repo_data
+            .entry(selected_repo)
+            .or_default();
         if data.selected_prs.contains(&i) {
             data.selected_prs.retain(|&x| x != i);
         } else {
@@ -2440,18 +2107,20 @@ impl App {
     /// Select the next repo (cycle forward through tabs)
     fn select_next_repo(&mut self) {
         self.save_current_repo_state();
-        self.store.state_mut().repos.selected_repo = (self.store.state().repos.selected_repo + 1) % self.store.state().repos.recent_repos.len();
+        self.store.state_mut().repos.selected_repo = (self.store.state().repos.selected_repo + 1)
+            % self.store.state().repos.recent_repos.len();
         self.load_repo_state();
     }
 
     /// Select the previous repo (cycle backward through tabs)
     fn select_previous_repo(&mut self) {
         self.save_current_repo_state();
-        self.store.state_mut().repos.selected_repo = if self.store.state_mut().repos.selected_repo == 0 {
-            self.store.state().repos.recent_repos.len() - 1
-        } else {
-            self.store.state().repos.selected_repo - 1
-        };
+        self.store.state_mut().repos.selected_repo =
+            if self.store.state_mut().repos.selected_repo == 0 {
+                self.store.state().repos.recent_repos.len() - 1
+            } else {
+                self.store.state().repos.selected_repo - 1
+            };
         self.load_repo_state();
     }
 
@@ -2493,7 +2162,13 @@ impl App {
         // Collect results as they complete
         for task in tasks {
             if let Ok((index, result)) = task.await {
-                let data = self.store.state_mut().repos.repo_data.entry(index).or_default();
+                let data = self
+                    .store
+                    .state_mut()
+                    .repos
+                    .repo_data
+                    .entry(index)
+                    .or_default();
                 match result {
                     Ok(prs) => {
                         data.prs = prs;
@@ -2524,7 +2199,13 @@ impl App {
         // Set to loading state
         let selected_repo = self.store.state().repos.selected_repo;
         self.store.state_mut().repos.loading_state = LoadingState::Loading;
-        let data = self.store.state_mut().repos.repo_data.entry(selected_repo).or_default();
+        let data = self
+            .store
+            .state_mut()
+            .repos
+            .repo_data
+            .entry(selected_repo)
+            .or_default();
         data.loading_state = LoadingState::Loading;
 
         self.fetch_data(&repo).await?;
@@ -2532,7 +2213,13 @@ impl App {
         // Update the repo data cache
         let prs = self.store.state().repos.prs.clone();
         let loading_state = self.store.state().repos.loading_state.clone();
-        let data = self.store.state_mut().repos.repo_data.entry(selected_repo).or_default();
+        let data = self
+            .store
+            .state_mut()
+            .repos
+            .repo_data
+            .entry(selected_repo)
+            .or_default();
         data.prs = prs;
         data.loading_state = loading_state;
 
@@ -2579,7 +2266,10 @@ impl App {
                 debug!("No PR found at index {}", pr_index);
             }
         }
-        debug!("Rebasing selected PRs: {:?}", self.store.state().repos.selected_prs);
+        debug!(
+            "Rebasing selected PRs: {:?}",
+            self.store.state().repos.selected_prs
+        );
 
         Ok(())
     }
@@ -2612,7 +2302,10 @@ impl App {
         // there the index of the PRs is to take
 
         self.store.state_mut().repos.selected_prs = selected_prs;
-        debug!("Merging selected PRs: {:?}", self.store.state().repos.selected_prs);
+        debug!(
+            "Merging selected PRs: {:?}",
+            self.store.state().repos.selected_prs
+        );
 
         Ok(())
     }

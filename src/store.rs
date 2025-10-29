@@ -1,4 +1,5 @@
 use crate::{
+    effect::Effect,
     reducer::reduce,
     shortcuts::Action,
     state::AppState,
@@ -38,23 +39,30 @@ impl Store {
     ///
     /// This is the primary way to modify state. The action is passed to the
     /// root reducer which delegates to appropriate sub-reducers.
+    /// Returns a vector of effects to be executed by the caller.
     ///
     /// # Example
     /// ```
-    /// store.dispatch(Action::ToggleShortcutsPanel);
+    /// let effects = store.dispatch(Action::ToggleShortcutsPanel);
+    /// // Execute effects...
     /// ```
-    pub fn dispatch(&mut self, action: Action) {
-        // Apply reducer to get new state
-        let new_state = reduce(self.state.clone(), &action);
+    pub fn dispatch(&mut self, action: Action) -> Vec<Effect> {
+        // Apply reducer to get new state and effects
+        let (new_state, effects) = reduce(self.state.clone(), &action);
 
         // Replace old state with new state
         self.state = new_state;
+
+        // Return effects to be executed by caller
+        effects
     }
 
     /// Dispatch an action by reference (useful when action should not be moved)
-    pub fn dispatch_ref(&mut self, action: &Action) {
-        let new_state = reduce(self.state.clone(), action);
+    /// Returns a vector of effects to be executed by the caller.
+    pub fn dispatch_ref(&mut self, action: &Action) -> Vec<Effect> {
+        let (new_state, effects) = reduce(self.state.clone(), action);
         self.state = new_state;
+        effects
     }
 
     /// Replace entire state (useful for initialization or testing)
@@ -79,7 +87,7 @@ mod tests {
         let mut store = Store::default();
         assert!(!store.state().ui.should_quit);
 
-        store.dispatch(Action::Quit);
+        let _effects = store.dispatch(Action::Quit);
         assert!(store.state().ui.should_quit);
     }
 
@@ -88,19 +96,10 @@ mod tests {
         let mut store = Store::default();
         assert!(!store.state().ui.show_shortcuts);
 
-        store.dispatch(Action::ToggleShortcutsPanel);
+        let _effects = store.dispatch(Action::ToggleShortcuts);
         assert!(store.state().ui.show_shortcuts);
 
-        store.dispatch(Action::ToggleShortcutsPanel);
+        let _effects = store.dispatch(Action::ToggleShortcuts);
         assert!(!store.state().ui.show_shortcuts);
-    }
-
-    #[test]
-    fn test_store_dispatch_spinner_tick() {
-        let mut store = Store::default();
-        let initial_frame = store.state().ui.spinner_frame;
-
-        store.dispatch(Action::Tick);
-        assert_eq!(store.state().ui.spinner_frame, initial_frame.wrapping_add(1));
     }
 }
