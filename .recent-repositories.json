@@ -8,10 +8,5 @@
     "org": "steganogram",
     "repo": "stegano-rs",
     "branch": "main"
-  },
-  {
-    "org": "signavio",
-    "repo": "pi-eureka",
-    "branch": "main"
   }
 ]
