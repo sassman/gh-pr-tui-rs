@@ -40,9 +40,13 @@ pub struct Theme {
     pub action_danger: Color,
     pub action_help: Color,
 
-    // Selection colors
-    pub selected_bg: Color,
-    pub selected_fg: Color,
+    // Selection colors (Space key toggle)
+    pub selected_bg: Color,      // Background for selected row
+    pub selected_fg: Color,      // Foreground for selected row
+
+    // Active/focused row colors (keyboard navigation)
+    pub active_bg: Color,        // Background for active/focused row
+    pub active_fg: Color,        // Foreground for active/focused row
 
     // Table colors
     pub table_header_bg: Color,
@@ -96,9 +100,13 @@ impl Theme {
             action_danger: tailwind::FUCHSIA.c600,
             action_help: tailwind::CYAN.c700,
 
-            // Selection - magenta highlight
-            selected_bg: tailwind::FUCHSIA.c500,
-            selected_fg: Color::White,
+            // Selection (Space key) - lighter magenta
+            selected_bg: tailwind::FUCHSIA.c400,
+            selected_fg: tailwind::CYAN.c100,
+
+            // Active/focused row - darker magenta with yellow text
+            active_bg: tailwind::FUCHSIA.c500,
+            active_fg: tailwind::YELLOW.c200,
 
             // Table - cyan header with magenta accents
             table_header_bg: tailwind::CYAN.c700,

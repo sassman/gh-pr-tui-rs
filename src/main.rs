@@ -398,12 +398,11 @@ fn ui(f: &mut Frame, app: &mut App) {
         .style(Style::default().bg(app.store.state().theme.table_header_bg))
         .height(1);
 
-    let selected_row_style = Style::default().add_modifier(Modifier::REVERSED).fg(app
-        .store
-        .state()
-        .repos
-        .colors
-        .selected_row_style_fg);
+    // Active/focused row style - use theme colors instead of REVERSED modifier
+    // to avoid text becoming invisible when row is both selected and focused
+    let selected_row_style = Style::default()
+        .bg(app.store.state().theme.active_bg)
+        .fg(app.store.state().theme.active_fg);
 
     // Check if we should show a message instead of PRs
     if repo_data.prs.is_empty() {
@@ -425,8 +424,9 @@ fn ui(f: &mut Frame, app: &mut App) {
                 0 => app.store.state().repos.colors.normal_row_color,
                 _ => app.store.state().repos.colors.alt_row_color,
             };
+            // Use theme color for selected rows (Space key)
             let color = if repo_data.selected_prs.contains(&i) {
-                app.store.state().repos.colors.selected_cell_style_fg
+                app.store.state().theme.selected_bg
             } else {
                 color
             };
