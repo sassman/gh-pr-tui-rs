@@ -61,9 +61,10 @@ Create a `.recent-repositories.json` file to configure your repositories:
 1. Launch the tool: `cargo run`
 2. Use `Tab` or `/` to switch between repositories
 3. Use `↑/↓` or `j/k` to navigate PRs
-4. Press `Space` to select/deselect PRs
+4. Press `Space` to select/deselect PRs (automatically advances to next PR)
 5. Press `m` to merge selected PRs
-6. Press `?` for complete keyboard shortcuts
+6. Press `i` to open PR in IDE (or main branch if no PRs)
+7. Press `?` for complete keyboard shortcuts
 
 ---
 
@@ -113,9 +114,9 @@ Create a `.recent-repositories.json` file to configure your repositories:
 
 ### IDE Integration
 
-**The Problem:** Reviewing code in GitHub's web interface is limiting - no syntax highlighting from your preferred theme, no code intelligence, no ability to run tests locally. To review in your IDE: copy the PR branch name → open terminal → git fetch → git checkout → wait for IDE to index. This takes **1-2 minutes per PR** and breaks your flow.
+**The Problem:** Reviewing code in GitHub's web interface is limiting - no syntax highlighting from your preferred theme, no code intelligence, no ability to run tests locally. To review in your IDE: copy the PR branch name → open terminal → git fetch → git checkout → wait for IDE to index. This takes **1-2 minutes per PR** and breaks your flow. Similarly, working on the main branch requires manual git commands.
 
-**The Solution:** Press `i` on any PR to open it directly in your IDE. The tool handles the git operations and IDE invocation, getting you into the code in seconds.
+**The Solution:** Press `i` on any PR to open it directly in your IDE. The tool handles the git operations and IDE invocation, getting you into the code in seconds. When no PR is selected (empty list), pressing `i` opens the main branch with latest changes - perfect for starting new work or reviewing the current state of the repository.
 
 ### Background Status Checks
 
@@ -146,12 +147,12 @@ Create a `.recent-repositories.json` file to configure your repositories:
 - `1-9` - Jump to repository by number
 
 ### PR Actions
-- `Space` - Select/deselect PR
+- `Space` - Select/deselect PR (auto-advances to next)
 - `m` - Merge selected PRs
 - `Ctrl+m` - Start merge bot (auto-merge + rebase queue)
 - `r` - Rebase selected PRs (or auto-rebase if none selected)
 - `Shift+R` - Rerun failed CI jobs for current/selected PRs
-- `i` - Open PR in IDE
+- `i` - Open PR in IDE (or main branch if no PRs)
 - `l` - View build logs
 - `Enter` - Open PR in browser
 
