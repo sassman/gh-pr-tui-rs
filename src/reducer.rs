@@ -229,6 +229,11 @@ fn repos_reducer(
                 if let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
                     data.selected_prs = state.selected_prs.clone();
                 }
+
+                // Automatically advance to next PR if not on the last row
+                if selected < state.prs.len().saturating_sub(1) {
+                    effects.push(Effect::DispatchAction(Action::NavigateToNextPr));
+                }
             }
         }
         Action::MergeStatusUpdated(repo_index, pr_number, status) => {
