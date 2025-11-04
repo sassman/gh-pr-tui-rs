@@ -20,11 +20,12 @@ use ::log::debug;
 use crate::config::Config;
 use crate::effect::Effect;
 use crate::gh::{comment, merge};
-use crate::log::{LogPanel, LogSection, PrContext};
+use crate::log::{LogSection, PrContext};
 use crate::pr::Pr;
 use crate::shortcuts::{Action, BootstrapResult};
 use crate::state::*;
 use crate::store::Store;
+use crate::task::BackgroundTask;
 use crate::theme::Theme;
 
 mod config;
@@ -37,19 +38,8 @@ mod reducer;
 mod shortcuts;
 mod state;
 mod store;
+mod task;
 mod theme;
-
-const PALETTES: [tailwind::Palette; 4] = [
-    tailwind::BLUE,
-    tailwind::EMERALD,
-    tailwind::INDIGO,
-    tailwind::RED,
-];
-
-// TableColors moved to state.rs
-
-// Types moved to state.rs - keeping only App and PersistedState here
-// Note: TableColors is now defined in state.rs
 
 struct App {
     // Redux store - centralized state management
@@ -86,64 +76,7 @@ fn shutdown() -> Result<()> {
     Ok(())
 }
 
-// Background task definitions
-enum BackgroundTask {
-    LoadAllRepos {
-        repos: Vec<Repo>,
-        filter: PrFilter,
-        octocrab: Octocrab,
-    },
-    LoadSingleRepo {
-        repo_index: usize,
-        repo: Repo,
-        filter: PrFilter,
-        octocrab: Octocrab,
-    },
-    CheckMergeStatus {
-        repo_index: usize,
-        repo: Repo,
-        pr_numbers: Vec<usize>,
-        octocrab: Octocrab,
-    },
-    Rebase {
-        repo: Repo,
-        prs: Vec<Pr>,
-        selected_indices: Vec<usize>,
-        octocrab: Octocrab,
-    },
-    Merge {
-        repo: Repo,
-        prs: Vec<Pr>,
-        selected_indices: Vec<usize>,
-        octocrab: Octocrab,
-    },
-    RerunFailedJobs {
-        repo: Repo,
-        pr_numbers: Vec<usize>,
-        octocrab: Octocrab,
-    },
-    FetchBuildLogs {
-        repo: Repo,
-        pr_number: usize,
-        head_sha: String,
-        octocrab: Octocrab,
-        pr_context: PrContext,
-    },
-    OpenPRInIDE {
-        repo: Repo,
-        pr_number: usize,
-        ide_command: String,
-        temp_dir: String,
-    },
-    /// Poll a PR to check if it's actually merged (for merge bot)
-    PollPRMergeStatus {
-        repo_index: usize,
-        repo: Repo,
-        pr_number: usize,
-        octocrab: Octocrab,
-        is_checking_ci: bool, // If true, use longer sleep (15s) for CI checks
-    },
-}
+// Background task definitions moved to task.rs module
 
 async fn update(app: &mut App, msg: Action) -> Result<Action> {
     // When shortcuts panel is open, remap navigation to shortcuts scrolling
@@ -200,21 +133,20 @@ async fn execute_effect(app: &mut App, effect: Effect) -> Result<()> {
             // Initialize octocrab client with GITHUB_TOKEN
             // This happens after LoadEnvFile, ensuring token is available
             match env::var("GITHUB_TOKEN") {
-                Ok(token) => {
-                    match Octocrab::builder().personal_token(token).build() {
-                        Ok(client) => {
-                            app.octocrab = Some(client);
-                            debug!("Octocrab client initialized successfully");
-                        }
-                        Err(e) => {
-                            debug!("Failed to initialize octocrab: {}", e);
-                            let _ = app.action_tx.send(Action::BootstrapComplete(Err(
-                                format!("Failed to initialize GitHub client: {}", e)
-                            )));
-                            return Ok(());
-                        }
+                Ok(token) => match Octocrab::builder().personal_token(token).build() {
+                    Ok(client) => {
+                        app.octocrab = Some(client);
+                        debug!("Octocrab client initialized successfully");
                     }
-                }
+                    Err(e) => {
+                        debug!("Failed to initialize octocrab: {}", e);
+                        let _ = app.action_tx.send(Action::BootstrapComplete(Err(format!(
+                            "Failed to initialize GitHub client: {}",
+                            e
+                        ))));
+                        return Ok(());
+                    }
+                },
                 Err(_) => {
                     let _ = app.action_tx.send(Action::BootstrapComplete(Err(
                         "GITHUB_TOKEN environment variable not set. Please set it or create a .env file.".to_string()
@@ -254,7 +186,9 @@ async fn execute_effect(app: &mut App, effect: Effect) -> Result<()> {
                     let _ = app.action_tx.send(Action::BootstrapComplete(Ok(result)));
                 }
                 Err(err) => {
-                    let _ = app.action_tx.send(Action::BootstrapComplete(Err(err.to_string())));
+                    let _ = app
+                        .action_tx
+                        .send(Action::BootstrapComplete(Err(err.to_string())));
                 }
             }
         }
@@ -277,9 +211,15 @@ async fn execute_effect(app: &mut App, effect: Effect) -> Result<()> {
             });
         }
 
-        Effect::LoadSingleRepo { repo_index, repo, filter } => {
+        Effect::LoadSingleRepo {
+            repo_index,
+            repo,
+            filter,
+        } => {
             // Trigger background task to load single repo
-            let _ = app.action_tx.send(Action::SetReposLoading(vec![repo_index]));
+            let _ = app
+                .action_tx
+                .send(Action::SetReposLoading(vec![repo_index]));
             let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
                 message: "Refreshing...".to_string(),
                 status_type: TaskStatusType::Running,
@@ -293,7 +233,11 @@ async fn execute_effect(app: &mut App, effect: Effect) -> Result<()> {
             });
         }
 
-        Effect::CheckMergeStatus { repo_index, repo, pr_numbers } => {
+        Effect::CheckMergeStatus {
+            repo_index,
+            repo,
+            pr_numbers,
+        } => {
             // Trigger background merge status checks
             let _ = app.task_tx.send(BackgroundTask::CheckMergeStatus {
                 repo_index,
@@ -393,7 +337,8 @@ async fn execute_effect(app: &mut App, effect: Effect) -> Result<()> {
 
         Effect::StartMergeBot { prs, .. } => {
             // Start merge bot - update state directly
-            let pr_data: Vec<(usize, usize)> = prs.iter()
+            let pr_data: Vec<(usize, usize)> = prs
+                .iter()
                 .enumerate()
                 .map(|(idx, pr)| (pr.number, idx))
                 .collect();
@@ -776,13 +721,14 @@ fn start_task_worker(
                             workflow_runs: Vec<octocrab::models::workflows::Run>,
                         }
 
-                        let workflow_response: WorkflowRunsResponse = match octocrab.get(&url, None::<&()>).await {
-                            Ok(response) => response,
-                            Err(_) => {
-                                all_success = false;
-                                continue;
-                            }
-                        };
+                        let workflow_response: WorkflowRunsResponse =
+                            match octocrab.get(&url, None::<&()>).await {
+                                Ok(response) => response,
+                                Err(_) => {
+                                    all_success = false;
+                                    continue;
+                                }
+                            };
 
                         let runs = workflow_response.workflow_runs;
 
@@ -797,7 +743,10 @@ fn start_task_worker(
                                 );
 
                                 // Use serde_json::Value as response type for POST requests
-                                match octocrab.post::<(), serde_json::Value>(&url, None::<&()>).await {
+                                match octocrab
+                                    .post::<(), serde_json::Value>(&url, None::<&()>)
+                                    .await
+                                {
                                     Ok(_) => {
                                         rerun_count += 1;
                                     }
@@ -1988,7 +1937,11 @@ fn render_bootstrap_screen(f: &mut Frame, app: &App) {
         f.render_widget(spinner_widget, chunks[3]);
     } else {
         let error_icon = Paragraph::new("✗ Error")
-            .style(Style::default().fg(app.store.state().theme.status_error).add_modifier(Modifier::BOLD))
+            .style(
+                Style::default()
+                    .fg(app.store.state().theme.status_error)
+                    .add_modifier(Modifier::BOLD),
+            )
             .alignment(ratatui::layout::Alignment::Center);
         f.render_widget(error_icon, chunks[3]);
     }
