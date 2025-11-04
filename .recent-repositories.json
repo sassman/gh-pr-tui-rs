@@ -8,5 +8,20 @@
     "org": "steganogram",
     "repo": "stegano-rs",
     "branch": "main"
+  },
+  {
+    "org": "sassman",
+    "repo": "t-rec-rs",
+    "branch": "main"
+  },
+  {
+    "org": "sassman",
+    "repo": "putzen-rs",
+    "branch": "main"
+  },
+  {
+    "org": "sassman",
+    "repo": "ssd-benchmark-rs",
+    "branch": "main"
   }
 ]

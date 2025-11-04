@@ -4,7 +4,7 @@ A powerful Terminal User Interface (TUI) tool for efficiently reviewing and mana
 
 ## Disclaimer
 
-This tool is experimental, solves my personal pain points and vibe coded with the helf of claude. Before contriubuting a PR please open an issue to discuss the change, to not waste your time.
+This tool is experimental, solves my personal pain points and vibe coded with the help of claude. Before contriubuting a PR please open an issue to discuss the change, to not waste your time.
 
 Also note that every feature is a subject of change as I continue to use and refine the tool.
 
