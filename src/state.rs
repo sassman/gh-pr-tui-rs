@@ -29,6 +29,25 @@ pub struct UiState {
     pub shortcuts_max_scroll: usize,
     pub spinner_frame: usize,
     pub should_quit: bool,
+    pub show_add_repo: bool,
+    pub add_repo_form: AddRepoForm,
+}
+
+/// Form state for adding a new repository
+#[derive(Debug, Clone, Default)]
+pub struct AddRepoForm {
+    pub org: String,
+    pub repo: String,
+    pub branch: String,
+    pub focused_field: AddRepoField,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AddRepoField {
+    #[default]
+    Org,
+    Repo,
+    Branch,
 }
 
 /// Repository and PR state
@@ -222,6 +241,8 @@ impl Default for UiState {
             shortcuts_max_scroll: 0,
             spinner_frame: 0,
             should_quit: false,
+            show_add_repo: false,
+            add_repo_form: AddRepoForm::default(),
         }
     }
 }

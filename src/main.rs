@@ -3,7 +3,7 @@ use octocrab::{Octocrab, params};
 use ratatui::{
     crossterm::{
         self,
-        event::{self, Event, KeyEvent, KeyEventKind},
+        event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers},
     },
     layout::Margin,
     prelude::*,
@@ -11,7 +11,7 @@ use ratatui::{
     widgets::*,
 };
 use serde::{Deserialize, Serialize};
-use std::{env, fs::File, io::BufReader, path::PathBuf};
+use std::{env, fs::File, io::BufReader, path::PathBuf, sync::{Arc, Mutex}};
 use tokio::sync::mpsc;
 
 // Import debug from the log crate using :: prefix to disambiguate from our log module
@@ -49,6 +49,8 @@ pub struct App {
     pub task_tx: mpsc::UnboundedSender<BackgroundTask>,
     // Lazy-initialized octocrab client (created after .env is loaded)
     pub octocrab: Option<Octocrab>,
+    // Shared state for event handler - indicates if add repo popup is open
+    pub show_add_repo_shared: Arc<Mutex<bool>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Eq, Clone, PartialEq)]
@@ -79,8 +81,23 @@ fn shutdown() -> Result<()> {
 // Background task definitions moved to task.rs module
 
 async fn update(app: &mut App, msg: Action) -> Result<Action> {
-    // When shortcuts panel is open, remap navigation to shortcuts scrolling
-    let msg = if app.store.state().ui.show_shortcuts {
+    // When add repo popup is open, handle popup-specific actions
+    let msg = if app.store.state().ui.show_add_repo {
+        match msg {
+            // Allow these actions in the popup
+            Action::HideAddRepoPopup
+            | Action::AddRepoFormInput(_)
+            | Action::AddRepoFormBackspace
+            | Action::AddRepoFormNextField
+            | Action::AddRepoFormSubmit => msg,
+            Action::Quit => Action::HideAddRepoPopup,
+            _ => {
+                // Ignore all other actions when popup is open
+                return Ok(Action::None);
+            }
+        }
+    } else if app.store.state().ui.show_shortcuts {
+        // When shortcuts panel is open, remap navigation to shortcuts scrolling
         match msg {
             Action::NavigateToNextPr => Action::ScrollShortcutsDown,
             Action::NavigateToPreviousPr => Action::ScrollShortcutsUp,
@@ -107,14 +124,17 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
 }
 
 fn start_event_handler(
-    _app: &App,
+    app: &App,
     tx: mpsc::UnboundedSender<Action>,
 ) -> tokio::task::JoinHandle<()> {
     let tick_rate = std::time::Duration::from_millis(250);
+    // Clone the shared popup state flag for the event loop
+    let show_add_repo_shared = app.show_add_repo_shared.clone();
     tokio::spawn(async move {
         loop {
             let action = if crossterm::event::poll(tick_rate).unwrap() {
-                handle_events().unwrap_or(Action::None)
+                let show_add_repo = *show_add_repo_shared.lock().unwrap();
+                handle_events(show_add_repo).unwrap_or(Action::None)
             } else {
                 Action::None
             };
@@ -144,6 +164,9 @@ async fn run() -> Result<()> {
     loop {
         // Increment spinner frame for animation
         app.store.state_mut().ui.spinner_frame = (app.store.state().ui.spinner_frame + 1) % 10;
+
+        // Sync the shared popup state for event handler
+        *app.show_add_repo_shared.lock().unwrap() = app.store.state().ui.show_add_repo;
 
         t.draw(|f| {
             ui(f, &mut app);
@@ -478,6 +501,169 @@ fn ui(f: &mut Frame, app: &mut App) {
         );
         app.store.state_mut().ui.shortcuts_max_scroll = max_scroll;
     }
+
+    // Render add repo popup on top of everything if visible
+    if app.store.state().ui.show_add_repo {
+        render_add_repo_popup(
+            f,
+            chunks[1],
+            &app.store.state().ui.add_repo_form,
+            &app.store.state().theme,
+        );
+    }
+}
+
+/// Render the add repository popup as a centered floating window
+fn render_add_repo_popup(f: &mut Frame, area: Rect, form: &AddRepoForm, theme: &Theme) {
+    use ratatui::widgets::{Clear, Wrap};
+
+    // Calculate centered area (60% width, 50% height)
+    let popup_width = (area.width * 60 / 100).min(70);
+    let popup_height = 14; // Fixed height for the form
+    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+    let popup_area = Rect {
+        x: area.x + popup_x,
+        y: area.y + popup_y,
+        width: popup_width,
+        height: popup_height,
+    };
+
+    // Clear the area and render background
+    f.render_widget(Clear, popup_area);
+    f.render_widget(
+        Block::default().style(Style::default().bg(theme.bg_panel)),
+        popup_area,
+    );
+
+    // Render border and title
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Add New Repository ")
+        .title_style(
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
+        )
+        .border_style(
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
+        )
+        .style(Style::default().bg(theme.bg_panel));
+
+    f.render_widget(block, popup_area);
+
+    // Calculate inner area
+    let inner = popup_area.inner(Margin {
+        horizontal: 2,
+        vertical: 1,
+    });
+
+    // Build form content
+    let mut text_lines = Vec::new();
+
+    // Instructions
+    text_lines.push(Line::from(vec![Span::styled(
+        "Enter GitHub URL or fill in the fields manually:",
+        Style::default().fg(theme.text_secondary),
+    )]));
+    text_lines.push(Line::from(""));
+
+    // Organization field
+    let org_focused = form.focused_field == AddRepoField::Org;
+    text_lines.push(Line::from(vec![
+        Span::styled(
+            if org_focused { "> " } else { "  " },
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Organization: ",
+            Style::default()
+                .fg(if org_focused { theme.active_fg } else { theme.text_primary })
+                .add_modifier(if org_focused { Modifier::BOLD } else { Modifier::empty() }),
+        ),
+        Span::styled(
+            &form.org,
+            Style::default()
+                .fg(if org_focused { theme.active_fg } else { theme.text_primary })
+                .bg(if org_focused { theme.active_bg } else { theme.bg_panel }),
+        ),
+    ]));
+
+    // Repository field
+    let repo_focused = form.focused_field == AddRepoField::Repo;
+    text_lines.push(Line::from(vec![
+        Span::styled(
+            if repo_focused { "> " } else { "  " },
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Repository:   ",
+            Style::default()
+                .fg(if repo_focused { theme.active_fg } else { theme.text_primary })
+                .add_modifier(if repo_focused { Modifier::BOLD } else { Modifier::empty() }),
+        ),
+        Span::styled(
+            &form.repo,
+            Style::default()
+                .fg(if repo_focused { theme.active_fg } else { theme.text_primary })
+                .bg(if repo_focused { theme.active_bg } else { theme.bg_panel }),
+        ),
+    ]));
+
+    // Branch field
+    let branch_focused = form.focused_field == AddRepoField::Branch;
+    let branch_display = if form.branch.is_empty() {
+        "main (default)"
+    } else {
+        &form.branch
+    };
+    text_lines.push(Line::from(vec![
+        Span::styled(
+            if branch_focused { "> " } else { "  " },
+            Style::default()
+                .fg(theme.accent_primary)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Branch:       ",
+            Style::default()
+                .fg(if branch_focused { theme.active_fg } else { theme.text_primary })
+                .add_modifier(if branch_focused { Modifier::BOLD } else { Modifier::empty() }),
+        ),
+        Span::styled(
+            branch_display,
+            Style::default()
+                .fg(if branch_focused { theme.active_fg } else { theme.text_muted })
+                .bg(if branch_focused { theme.active_bg } else { theme.bg_panel }),
+        ),
+    ]));
+
+    text_lines.push(Line::from(""));
+    text_lines.push(Line::from(""));
+
+    // Footer with shortcuts
+    text_lines.push(Line::from(vec![
+        Span::styled("Tab", Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)),
+        Span::styled(" navigate  ", Style::default().fg(theme.text_muted)),
+        Span::styled("Enter", Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)),
+        Span::styled(" add  ", Style::default().fg(theme.text_muted)),
+        Span::styled("Esc", Style::default().fg(theme.accent_primary).add_modifier(Modifier::BOLD)),
+        Span::styled(" cancel", Style::default().fg(theme.text_muted)),
+    ]));
+
+    // Render content
+    let paragraph = Paragraph::new(text_lines)
+        .wrap(Wrap { trim: false })
+        .style(Style::default().bg(theme.bg_panel));
+
+    f.render_widget(paragraph, inner);
 }
 
 /// Render the bottom action panel with context-sensitive shortcuts
@@ -834,6 +1020,7 @@ impl App {
             action_tx,
             task_tx,
             octocrab: None, // Initialized lazily during bootstrap after .env is loaded
+            show_add_repo_shared: Arc::new(Mutex::new(false)),
         }
     }
 
@@ -1284,14 +1471,28 @@ pub async fn fetch_github_data<'a>(
     Ok(prs)
 }
 
-fn handle_events() -> Result<Action> {
+fn handle_events(show_add_repo: bool) -> Result<Action> {
     Ok(match event::read()? {
-        Event::Key(key) if key.kind == KeyEventKind::Press => handle_key_event(key),
+        Event::Key(key) if key.kind == KeyEventKind::Press => handle_key_event(key, show_add_repo),
         _ => Action::None,
     })
 }
 
-fn handle_key_event(key: KeyEvent) -> Action {
+fn handle_key_event(key: KeyEvent, show_add_repo: bool) -> Action {
+    // Handle add repo popup keys first if popup is open
+    if show_add_repo {
+        match key.code {
+            KeyCode::Esc => return Action::HideAddRepoPopup,
+            KeyCode::Enter => return Action::AddRepoFormSubmit,
+            KeyCode::Tab => return Action::AddRepoFormNextField,
+            KeyCode::Backspace => return Action::AddRepoFormBackspace,
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                return Action::AddRepoFormInput(c);
+            }
+            _ => return Action::None,
+        }
+    }
+
     // Use the shortcuts module to find the action for this key
     crate::shortcuts::find_action_for_key(&key)
 }

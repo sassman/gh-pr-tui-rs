@@ -52,10 +52,108 @@ fn ui_reducer(mut state: UiState, action: &Action) -> (UiState, Vec<Effect>) {
                 state.show_shortcuts = false;
             }
         }
+        Action::ShowAddRepoPopup => {
+            state.show_add_repo = true;
+            state.add_repo_form = AddRepoForm::default();
+        }
+        Action::HideAddRepoPopup => {
+            state.show_add_repo = false;
+            state.add_repo_form = AddRepoForm::default();
+        }
+        Action::AddRepoFormInput(ch) => {
+            // Handle paste detection for GitHub URLs
+            let input_str = ch.to_string();
+            if input_str.contains("github.com") || state.add_repo_form.org.contains("github.com") {
+                // Likely a URL paste, try to parse it
+                let url_text = format!("{}{}", state.add_repo_form.org, input_str);
+                if let Some((org, repo, branch)) = parse_github_url(&url_text) {
+                    state.add_repo_form.org = org;
+                    state.add_repo_form.repo = repo;
+                    state.add_repo_form.branch = branch;
+                    return (state, vec![]);
+                }
+            }
+
+            // Normal character input to current field
+            match state.add_repo_form.focused_field {
+                AddRepoField::Org => state.add_repo_form.org.push(*ch),
+                AddRepoField::Repo => state.add_repo_form.repo.push(*ch),
+                AddRepoField::Branch => state.add_repo_form.branch.push(*ch),
+            }
+        }
+        Action::AddRepoFormBackspace => {
+            match state.add_repo_form.focused_field {
+                AddRepoField::Org => { state.add_repo_form.org.pop(); }
+                AddRepoField::Repo => { state.add_repo_form.repo.pop(); }
+                AddRepoField::Branch => { state.add_repo_form.branch.pop(); }
+            }
+        }
+        Action::AddRepoFormNextField => {
+            state.add_repo_form.focused_field = match state.add_repo_form.focused_field {
+                AddRepoField::Org => AddRepoField::Repo,
+                AddRepoField::Repo => AddRepoField::Branch,
+                AddRepoField::Branch => AddRepoField::Org,
+            };
+        }
+        Action::AddRepoFormSubmit => {
+            // Validate and add repository
+            if !state.add_repo_form.org.is_empty() && !state.add_repo_form.repo.is_empty() {
+                let branch = if state.add_repo_form.branch.is_empty() {
+                    "main".to_string()
+                } else {
+                    state.add_repo_form.branch.clone()
+                };
+
+                let new_repo = crate::state::Repo {
+                    org: state.add_repo_form.org.clone(),
+                    repo: state.add_repo_form.repo.clone(),
+                    branch,
+                };
+
+                // Return effect to add the repository
+                let effects = vec![Effect::AddRepository(new_repo)];
+                state.show_add_repo = false;
+                state.add_repo_form = AddRepoForm::default();
+                return (state, effects);
+            }
+        }
         _ => {}
     }
 
     (state, vec![])
+}
+
+/// Parse GitHub URL to extract org, repo, and branch
+/// Supports formats:
+/// - https://github.com/org/repo
+/// - https://github.com/org/repo/tree/branch
+/// - github.com/org/repo
+fn parse_github_url(url: &str) -> Option<(String, String, String)> {
+    let url = url.trim();
+
+    // Remove protocol if present
+    let url = url.strip_prefix("https://").unwrap_or(url);
+    let url = url.strip_prefix("http://").unwrap_or(url);
+
+    // Remove github.com prefix
+    let url = url.strip_prefix("github.com/").or_else(|| url.strip_prefix("www.github.com/"))?;
+
+    // Split by '/'
+    let parts: Vec<&str> = url.split('/').collect();
+
+    if parts.len() >= 2 {
+        let org = parts[0].to_string();
+        let repo = parts[1].to_string();
+        let branch = if parts.len() >= 4 && parts[2] == "tree" {
+            parts[3].to_string()
+        } else {
+            "main".to_string()
+        };
+
+        Some((org, repo, branch))
+    } else {
+        None
+    }
 }
 
 /// Repository and PR state reducer

@@ -36,6 +36,14 @@ pub enum Action {
     ScrollShortcutsUp,
     ScrollShortcutsDown,
 
+    // Add repository popup
+    ShowAddRepoPopup,
+    HideAddRepoPopup,
+    AddRepoFormInput(char),
+    AddRepoFormBackspace,
+    AddRepoFormNextField,
+    AddRepoFormSubmit,
+
     // State update actions (dispatched internally)
     SetBootstrapState(crate::state::BootstrapState),
     SetLoadingState(crate::state::LoadingState),
@@ -265,6 +273,12 @@ pub fn get_shortcuts() -> Vec<ShortcutCategory> {
                     description: "Toggle this help (you are here!)",
                     action: Action::ToggleShortcuts,
                     matcher: |key| matches!(key.code, KeyCode::Char('?')),
+                },
+                Shortcut {
+                    key_display: "a",
+                    description: "Add new repository",
+                    action: Action::ShowAddRepoPopup,
+                    matcher: |key| matches!(key.code, KeyCode::Char('a')),
                 },
                 Shortcut {
                     key_display: "q",

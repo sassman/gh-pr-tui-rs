@@ -10,7 +10,7 @@ use crate::{
     log::PrContext,
     pr::Pr,
     shortcuts::{Action, BootstrapResult},
-    state::{Repo, TaskStatus, TaskStatusType},
+    state::{LoadingState, Repo, TaskStatus, TaskStatusType},
     task::BackgroundTask,
     App,
 };
@@ -100,6 +100,9 @@ pub enum Effect {
         repo: Repo,
         pr_numbers: Vec<usize>,
     },
+
+    /// Add a new repository
+    AddRepository(Repo),
 
     /// Dispatch another action (for chaining)
     DispatchAction(crate::shortcuts::Action),
@@ -383,6 +386,57 @@ pub async fn execute_effect(app: &mut App, effect: Effect) -> Result<()> {
                 pr_numbers,
                 octocrab: app.octocrab()?,
             });
+        }
+
+        Effect::AddRepository(repo) => {
+            // Check if repository already exists
+            let repo_exists = app.store.state().repos.recent_repos.iter().any(|r| {
+                r.org == repo.org && r.repo == repo.repo && r.branch == repo.branch
+            });
+
+            if !repo_exists {
+                // Add to repos list in state
+                let mut new_repos = app.store.state().repos.recent_repos.clone();
+                new_repos.push(repo.clone());
+                let repo_index = new_repos.len() - 1;
+
+                // Save to file
+                if let Err(e) = crate::store_recent_repos(&new_repos) {
+                    let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                        message: format!("Failed to save repository: {}", e),
+                        status_type: TaskStatusType::Error,
+                    })));
+                    return Ok(());
+                }
+
+                // Update state by mutating the store directly
+                app.store.state_mut().repos.recent_repos = new_repos;
+
+                // Initialize repo data for the new repo
+                let data = app.store.state_mut().repos.repo_data.entry(repo_index).or_default();
+                data.loading_state = LoadingState::Loading;
+
+                // Show success message
+                let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                    message: format!("Added repository: {}/{}", repo.org, repo.repo),
+                    status_type: TaskStatusType::Success,
+                })));
+
+                // Trigger loading PRs for the new repo
+                let filter = app.store.state().repos.filter.clone();
+                let _ = app.task_tx.send(BackgroundTask::LoadSingleRepo {
+                    repo_index,
+                    repo: repo.clone(),
+                    filter,
+                    octocrab: app.octocrab()?,
+                });
+            } else {
+                // Repository already exists
+                let _ = app.action_tx.send(Action::SetTaskStatus(Some(TaskStatus {
+                    message: format!("Repository {}/{} already exists", repo.org, repo.repo),
+                    status_type: TaskStatusType::Error,
+                })));
+            }
         }
 
         Effect::DispatchAction(action) => {
