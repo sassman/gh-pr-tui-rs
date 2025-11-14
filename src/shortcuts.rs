@@ -144,13 +144,6 @@ impl Shortcut {
         }
     }
 
-    /// Get the first key of a two-key combination
-    pub fn get_first_key(&self) -> Option<char> {
-        match &self.matcher {
-            ShortcutMatcher::TwoKey(k1, _) => Some(*k1),
-            _ => None,
-        }
-    }
 }
 
 /// Get all shortcut definitions organized by category
@@ -467,12 +460,6 @@ fn find_single_key_action(key: &KeyEvent, current_char: Option<char>) -> Action 
     }
 
     Action::None
-}
-
-/// Legacy function - kept for compatibility, delegates to new implementation
-pub fn find_action_for_key(key: &KeyEvent) -> Action {
-    let (action, _, _) = find_action_for_key_with_pending(key, None);
-    action
 }
 
 /// Render the shortcuts help panel as a centered floating window

@@ -269,7 +269,6 @@ fn repos_reducer(
                     if let Some(data) = state.repo_data.get(&state.selected_repo) {
                         state.prs = data.prs.clone();
                         state.state = data.table_state.clone();
-                        state.selected_prs = data.selected_prs.clone();
                         state.loading_state = data.loading_state.clone();
                     }
                 } else {
@@ -277,7 +276,6 @@ fn repos_reducer(
                     if let Some(data) = state.repo_data.get(&state.selected_repo) {
                         state.prs = data.prs.clone();
                         state.state = data.table_state.clone();
-                        state.selected_prs = data.selected_prs.clone();
                         state.loading_state = data.loading_state.clone();
                     }
                 }
@@ -302,7 +300,6 @@ fn repos_reducer(
                 if let Some(data) = state.repo_data.get(index) {
                     state.prs = data.prs.clone();
                     state.state = data.table_state.clone();
-                    state.selected_prs = data.selected_prs.clone();
                     state.loading_state = data.loading_state.clone();
                 }
             }
@@ -316,11 +313,17 @@ fn repos_reducer(
             if data.prs.is_empty() {
                 // Clear selection and selected PRs when no PRs
                 data.table_state.select(None);
-                data.selected_prs.clear();
+                data.selected_pr_numbers.clear();
             } else if data.table_state.selected().is_none() {
                 // Select first row if nothing selected
                 data.table_state.select(Some(0));
             }
+
+            // Validate selected_pr_numbers - remove PRs that no longer exist
+            // This is critical after filtering or when PRs are closed/merged
+            let current_pr_numbers: std::collections::HashSet<_> =
+                data.prs.iter().map(|pr| PrNumber::from_pr(pr)).collect();
+            data.selected_pr_numbers.retain(|num| current_pr_numbers.contains(num));
 
             // Sync legacy fields if this is the selected repo
             if *repo_index == state.selected_repo {
@@ -403,21 +406,22 @@ fn repos_reducer(
         }
         Action::TogglePrSelection => {
             if let Some(selected) = state.state.selected() {
-                if state.selected_prs.contains(&selected) {
-                    state.selected_prs.retain(|&i| i != selected);
-                } else {
-                    state.selected_prs.push(selected);
-                }
-                state.selected_prs.sort_unstable();
+                if selected < state.prs.len() {
+                    let pr_number = PrNumber::from_pr(&state.prs[selected]);
 
-                // Sync to repo_data
-                if let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
-                    data.selected_prs = state.selected_prs.clone();
-                }
+                    // Update type-safe PR number-based selection (stable across filtering)
+                    if let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
+                        if data.selected_pr_numbers.contains(&pr_number) {
+                            data.selected_pr_numbers.remove(&pr_number);
+                        } else {
+                            data.selected_pr_numbers.insert(pr_number);
+                        }
+                    }
 
-                // Automatically advance to next PR if not on the last row
-                if selected < state.prs.len().saturating_sub(1) {
-                    effects.push(Effect::DispatchAction(Action::NavigateToNextPr));
+                    // Automatically advance to next PR if not on the last row
+                    if selected < state.prs.len().saturating_sub(1) {
+                        effects.push(Effect::DispatchAction(Action::NavigateToNextPr));
+                    }
                 }
             }
         }
@@ -453,9 +457,8 @@ fn repos_reducer(
         }
         Action::MergeComplete(Ok(_)) => {
             // Clear selections after successful merge (only if not in merge bot)
-            state.selected_prs.clear();
             if let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
-                data.selected_prs.clear();
+                data.selected_pr_numbers.clear();
             }
         }
         Action::RefreshCurrentRepo => {
@@ -469,24 +472,33 @@ fn repos_reducer(
             }
         }
         Action::Rebase => {
-            // Effect: Perform rebase on selected PRs (or auto-rebase if none selected)
+            // Effect: Perform rebase on selected PRs, or current PR if none selected
             if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                let prs_to_rebase: Vec<_> = if state.selected_prs.is_empty() {
-                    // Auto-rebase: find first PR that needs rebase
+                // Use PR numbers for stable selection
+                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    !data.selected_pr_numbers.is_empty()
+                } else {
+                    false
+                };
+
+                let prs_to_rebase: Vec<_> = if !has_selection {
+                    // No selection - use current cursor PR
+                    state
+                        .state
+                        .selected()
+                        .and_then(|idx| state.prs.get(idx).cloned())
+                        .map(|pr| vec![pr])
+                        .unwrap_or_default()
+                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    // Rebase selected PRs using PR numbers (stable across filtering)
                     state
                         .prs
                         .iter()
-                        .filter(|pr| pr.needs_rebase)
-                        .take(1)
+                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
                         .cloned()
                         .collect()
                 } else {
-                    // Rebase selected PRs
-                    state
-                        .selected_prs
-                        .iter()
-                        .filter_map(|&idx| state.prs.get(idx).cloned())
-                        .collect()
+                    Vec::new()
                 };
 
                 if !prs_to_rebase.is_empty() {
@@ -500,7 +512,14 @@ fn repos_reducer(
         Action::RerunFailedJobs => {
             // Effect: Rerun failed CI jobs for current or selected PRs
             if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                let pr_numbers: Vec<usize> = if state.selected_prs.is_empty() {
+                // Use PR numbers for stable selection
+                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    !data.selected_pr_numbers.is_empty()
+                } else {
+                    false
+                };
+
+                let pr_numbers: Vec<usize> = if !has_selection {
                     // Rerun for current PR only
                     state
                         .state
@@ -508,13 +527,16 @@ fn repos_reducer(
                         .and_then(|idx| state.prs.get(idx))
                         .map(|pr| vec![pr.number])
                         .unwrap_or_default()
-                } else {
-                    // Rerun for all selected PRs
+                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    // Rerun for selected PRs using PR numbers (stable)
                     state
-                        .selected_prs
+                        .prs
                         .iter()
-                        .filter_map(|&idx| state.prs.get(idx).map(|pr| pr.number))
+                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
+                        .map(|pr| pr.number)
                         .collect()
+                } else {
+                    Vec::new()
                 };
 
                 if !pr_numbers.is_empty() {
@@ -523,13 +545,33 @@ fn repos_reducer(
             }
         }
         Action::MergeSelectedPrs => {
-            // Effect: Merge selected PRs or enable auto-merge if building
+            // Effect: Merge selected PRs or current PR, or enable auto-merge if building
             if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                let selected_prs: Vec<_> = state
-                    .selected_prs
-                    .iter()
-                    .filter_map(|&idx| state.prs.get(idx).cloned())
-                    .collect();
+                // Use PR numbers for stable selection
+                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    !data.selected_pr_numbers.is_empty()
+                } else {
+                    false
+                };
+
+                let selected_prs: Vec<_> = if !has_selection {
+                    // No selection - use current cursor PR
+                    state
+                        .state
+                        .selected()
+                        .and_then(|idx| state.prs.get(idx).cloned())
+                        .map(|pr| vec![pr])
+                        .unwrap_or_default()
+                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    state
+                        .prs
+                        .iter()
+                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
 
                 if !selected_prs.is_empty() {
                     // Separate PRs by status: ready to merge vs building
@@ -569,11 +611,17 @@ fn repos_reducer(
         Action::StartMergeBot => {
             // Effect: Start merge bot with selected PRs
             if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                let prs_to_process: Vec<_> = state
-                    .selected_prs
-                    .iter()
-                    .filter_map(|&idx| state.prs.get(idx).cloned())
-                    .collect();
+                // Use PR numbers for stable selection
+                let prs_to_process: Vec<_> = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    state
+                        .prs
+                        .iter()
+                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
 
                 if !prs_to_process.is_empty() {
                     effects.push(Effect::StartMergeBot {
@@ -586,13 +634,24 @@ fn repos_reducer(
         Action::OpenCurrentPrInBrowser => {
             // Effect: Open current PR(s) in browser
             if let Some(repo) = state.recent_repos.get(state.selected_repo) {
-                // If multiple PRs selected, open all of them
-                let prs_to_open: Vec<usize> = if !state.selected_prs.is_empty() {
-                    state
-                        .selected_prs
-                        .iter()
-                        .filter_map(|&idx| state.prs.get(idx).map(|pr| pr.number))
-                        .collect()
+                // If multiple PRs selected, open all of them using PR numbers (stable)
+                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    !data.selected_pr_numbers.is_empty()
+                } else {
+                    false
+                };
+
+                let prs_to_open: Vec<usize> = if has_selection {
+                    if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                        state
+                            .prs
+                            .iter()
+                            .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
+                            .map(|pr| pr.number)
+                            .collect()
+                    } else {
+                        Vec::new()
+                    }
                 } else if let Some(selected_idx) = state.state.selected() {
                     // Open just the current PR
                     state
@@ -649,7 +708,6 @@ fn repos_reducer(
                 if let Some(data) = state.repo_data.get(&state.selected_repo) {
                     state.prs = data.prs.clone();
                     state.state = data.table_state.clone();
-                    state.selected_prs = data.selected_prs.clone();
                     state.loading_state = data.loading_state.clone();
                 }
             }
@@ -666,7 +724,6 @@ fn repos_reducer(
                 if let Some(data) = state.repo_data.get(&state.selected_repo) {
                     state.prs = data.prs.clone();
                     state.state = data.table_state.clone();
-                    state.selected_prs = data.selected_prs.clone();
                     state.loading_state = data.loading_state.clone();
                 }
             }

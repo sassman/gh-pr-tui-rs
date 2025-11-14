@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     sync::{Arc, Mutex},
 };
 use ratatui::widgets::TableState;
@@ -77,7 +77,6 @@ pub struct ReposState {
     // Legacy fields from App for backward compatibility during migration
     pub prs: Vec<Pr>,
     pub state: TableState,
-    pub selected_prs: Vec<usize>,
     pub colors: TableColors,
 }
 
@@ -113,11 +112,28 @@ pub enum TaskStatusType {
     Error,
 }
 
+/// Newtype wrapper for GitHub PR numbers, providing type safety.
+/// Can only be constructed from a Pr to prevent confusion with array indices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PrNumber(usize);
+
+impl PrNumber {
+    /// Create a PrNumber from a PR reference
+    pub fn from_pr(pr: &Pr) -> Self {
+        PrNumber(pr.number)
+    }
+
+    /// Get the raw usize value (for API calls, display, serialization, etc.)
+    pub fn value(&self) -> usize {
+        self.0
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct RepoData {
     pub prs: Vec<Pr>,
     pub table_state: TableState,
-    pub selected_prs: Vec<usize>,
+    pub selected_pr_numbers: HashSet<PrNumber>,  // Type-safe PR numbers
     pub loading_state: LoadingState,
     pub auto_merge_queue: Vec<AutoMergePR>,
 }
@@ -284,7 +300,6 @@ impl Default for ReposState {
             bootstrap_state: BootstrapState::default(),
             prs: Vec::new(),
             state: TableState::default(),
-            selected_prs: Vec::new(),
             colors: TableColors::default(),
         }
     }
