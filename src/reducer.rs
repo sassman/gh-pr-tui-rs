@@ -587,6 +587,13 @@ fn repos_reducer(
                         repo,
                         prs: prs_to_rebase,
                     });
+
+                    // Clear selection after starting rebase (if there was a selection)
+                    if has_selection {
+                        if let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
+                            data.selected_pr_numbers.clear();
+                        }
+                    }
                 }
             }
         }
@@ -741,6 +748,13 @@ fn repos_reducer(
                             repo: repo.clone(),
                             pr_number: pr.number,
                         });
+                    }
+
+                    // Clear selection after starting merge operations (if there was a selection)
+                    if has_selection {
+                        if let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
+                            data.selected_pr_numbers.clear();
+                        }
                     }
                 }
             }
