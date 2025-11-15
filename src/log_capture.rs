@@ -32,9 +32,10 @@ pub struct DebugConsoleLogger {
 impl DebugConsoleLogger {
     /// Create a new debug console logger with env_logger backend
     pub fn new(logs: LogBuffer) -> Self {
-        // Create env_logger with default to Debug level (can be overridden by RUST_LOG)
+        // Create env_logger for terminal output only
+        // Defaults to Error level for terminal (doesn't pollute), respects RUST_LOG if set
         let env_logger = env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Debug) // Default to Debug if RUST_LOG not set
+            .filter_level(log::LevelFilter::Error) // Terminal: only errors by default, unless RUST_LOG overrides
             .build();
 
         Self { logs, env_logger }
@@ -48,33 +49,32 @@ impl DebugConsoleLogger {
 
 impl Log for DebugConsoleLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        // Delegate to env_logger for filtering
-        self.env_logger.enabled(metadata)
+        // Always capture Debug+ to our buffer (independent of env_logger/RUST_LOG)
+        metadata.level() <= Level::Debug
     }
 
     fn log(&self, record: &Record) {
-        // Only log if env_logger would log it
-        if !self.env_logger.enabled(record.metadata()) {
-            return;
+        // Always capture Debug+ logs to our buffer (for debug console)
+        if record.level() <= Level::Debug {
+            let entry = LogEntry {
+                timestamp: Utc::now(),
+                level: record.level(),
+                target: record.target().to_string(),
+                message: format!("{}", record.args()),
+            };
+
+            if let Ok(mut logs) = self.logs.lock() {
+                // Remove oldest entry if we've hit the limit
+                if logs.len() >= MAX_LOG_ENTRIES {
+                    logs.pop_front();
+                }
+                logs.push_back(entry);
+            }
         }
 
-        // Log to env_logger first
-        self.env_logger.log(record);
-
-        // Capture to our buffer
-        let entry = LogEntry {
-            timestamp: Utc::now(),
-            level: record.level(),
-            target: record.target().to_string(),
-            message: format!("{}", record.args()),
-        };
-
-        if let Ok(mut logs) = self.logs.lock() {
-            // Remove oldest entry if we've hit the limit
-            if logs.len() >= MAX_LOG_ENTRIES {
-                logs.pop_front();
-            }
-            logs.push_back(entry);
+        // Separately, log to terminal via env_logger (respects RUST_LOG)
+        if self.env_logger.enabled(record.metadata()) {
+            self.env_logger.log(record);
         }
     }
 
