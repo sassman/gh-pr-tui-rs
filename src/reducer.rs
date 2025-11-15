@@ -492,6 +492,16 @@ fn repos_reducer(
                 });
             }
         }
+        Action::ReloadRepo(repo_index) => {
+            // Effect: Reload specific repository (e.g., after PR merged)
+            if let Some(repo) = state.recent_repos.get(*repo_index).cloned() {
+                effects.push(Effect::LoadSingleRepo {
+                    repo_index: *repo_index,
+                    repo,
+                    filter: state.filter.clone(),
+                });
+            }
+        }
         Action::Rebase => {
             // Effect: Perform rebase on selected PRs, or current PR if none selected
             if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {

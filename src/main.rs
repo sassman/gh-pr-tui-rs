@@ -192,6 +192,9 @@ fn result_to_action(result: TaskResult) -> Action {
         TaskResult::RemoveFromOperationMonitor(idx, pr_num) => {
             Action::RemoveFromOperationMonitor(idx, pr_num)
         }
+        TaskResult::RepoNeedsReload(idx) => {
+            Action::ReloadRepo(idx)
+        }
     }
 }
 

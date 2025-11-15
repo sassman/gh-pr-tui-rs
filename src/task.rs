@@ -65,6 +65,9 @@ pub enum TaskResult {
 
     /// Remove PR from operation monitor queue
     RemoveFromOperationMonitor(usize, usize), // repo_index, pr_number
+
+    /// Repo needs reload (e.g., after PR merged)
+    RepoNeedsReload(usize), // repo_index
 }
 
 /// Background tasks that can be executed asynchronously
@@ -1503,6 +1506,8 @@ pub fn start_task_worker(
                                                 status_type: crate::state::TaskStatusType::Success,
                                             }),
                                         ));
+                                        // Trigger repo reload to remove merged PR from list
+                                        let _ = result_tx_clone.send(TaskResult::RepoNeedsReload(repo_index));
                                         break;
                                     } else if matches!(
                                         pr_detail.state,

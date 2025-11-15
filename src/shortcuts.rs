@@ -12,6 +12,7 @@ pub enum Action {
     Bootstrap,
     Rebase,
     RefreshCurrentRepo,
+    ReloadRepo(usize), // Reload specific repo by index (e.g., after PR merged)
     RerunFailedJobs,
     CycleFilter,
     SelectNextRepo,
