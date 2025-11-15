@@ -21,6 +21,7 @@ pub enum Action {
     NavigateToNextPr,
     NavigateToPreviousPr,
     MergeSelectedPrs,
+    ApprovePrs,
     StartMergeBot,
     OpenCurrentPrInBrowser,
     OpenBuildLogs,
@@ -64,6 +65,7 @@ pub enum Action {
     RebaseComplete(Result<(), String>),
     MergeComplete(Result<(), String>),
     RerunJobsComplete(Result<(), String>),
+    ApprovalComplete(Result<(), String>),
     PRMergedConfirmed(usize, usize, bool), // repo_index, pr_number, is_merged
     BuildLogsLoaded(Vec<crate::log::LogSection>, crate::log::PrContext),
     IDEOpenComplete(Result<(), String>),
@@ -214,6 +216,15 @@ pub fn get_shortcuts() -> Vec<ShortcutCategory> {
                     action: Action::MergeSelectedPrs,
                     matcher: ShortcutMatcher::SingleKey(|key| {
                         matches!(key.code, KeyCode::Char('m'))
+                            && !key.modifiers.contains(KeyModifiers::CONTROL)
+                    }),
+                },
+                Shortcut {
+                    key_display: "a",
+                    description: "Approve selected PRs",
+                    action: Action::ApprovePrs,
+                    matcher: ShortcutMatcher::SingleKey(|key| {
+                        matches!(key.code, KeyCode::Char('a'))
                             && !key.modifiers.contains(KeyModifiers::CONTROL)
                     }),
                 },

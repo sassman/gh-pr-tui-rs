@@ -8,6 +8,8 @@ pub struct Config {
     pub ide_command: String,
     #[serde(default = "default_temp_dir")]
     pub temp_dir: String,
+    #[serde(default = "default_approval_message")]
+    pub approval_message: String,
 }
 
 fn default_ide_command() -> String {
@@ -18,11 +20,16 @@ fn default_temp_dir() -> String {
     env::temp_dir().join("pr-bulk-review").to_string_lossy().to_string()
 }
 
+fn default_approval_message() -> String {
+    ":rocket: thanks for your contribution".to_string()
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
             ide_command: default_ide_command(),
             temp_dir: default_temp_dir(),
+            approval_message: default_approval_message(),
         }
     }
 }

@@ -1,12 +1,12 @@
 /// Background task system for handling heavy operations without blocking UI
-
 use crate::{
+    PrFilter,
     gh::{comment, merge},
     log::{LogSection, PrContext},
-    pr::{Pr, MergeableStatus},
+    pr::{MergeableStatus, Pr},
     state::{Repo, TaskStatus},
-    PrFilter,
 };
+use log::debug;
 use octocrab::Octocrab;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
@@ -35,6 +35,9 @@ pub enum TaskResult {
 
     /// Rerun failed jobs operation completed
     RerunJobsComplete(Result<(), String>),
+
+    /// PR approval operation completed
+    ApprovalComplete(Result<(), String>),
 
     /// Build logs loaded
     BuildLogsLoaded(Vec<LogSection>, PrContext),
@@ -98,6 +101,12 @@ pub enum BackgroundTask {
         pr_numbers: Vec<usize>,
         octocrab: Octocrab,
     },
+    ApprovePrs {
+        repo: Repo,
+        pr_numbers: Vec<usize>,
+        approval_message: String,
+        octocrab: Octocrab,
+    },
     FetchBuildLogs {
         repo: Repo,
         pr_number: usize,
@@ -134,7 +143,6 @@ pub enum BackgroundTask {
         octocrab: Octocrab,
     },
 }
-
 
 /// Background task worker that processes heavy operations without blocking UI
 pub fn start_task_worker(
@@ -216,15 +224,20 @@ pub fn start_task_worker(
                             {
                                 Ok(pr_detail) => {
                                     // Check if PR needs rebase (Behind state means PR is behind base branch)
-                                    let needs_rebase =
-                                        if let Some(ref state) = pr_detail.mergeable_state {
-                                            matches!(
-                                                state,
-                                                octocrab::models::pulls::MergeableState::Behind
-                                            )
-                                        } else {
-                                            false
-                                        };
+                                    let needs_rebase = if let Some(ref state) =
+                                        pr_detail.mergeable_state
+                                    {
+                                        matches!(
+                                            state,
+                                            octocrab::models::pulls::MergeableState::Behind
+                                                | octocrab::models::pulls::MergeableState::Blocked
+                                                | octocrab::models::pulls::MergeableState::Unknown
+                                                | octocrab::models::pulls::MergeableState::Unstable
+                                                | octocrab::models::pulls::MergeableState::Dirty
+                                        )
+                                    } else {
+                                        false
+                                    };
 
                                     // Check CI/build status by fetching check runs
                                     let head_sha = pr_detail.head.sha.clone();
@@ -507,6 +520,57 @@ pub fn start_task_worker(
                     };
                     let _ = result_tx.send(TaskResult::RerunJobsComplete(result));
                 }
+                BackgroundTask::ApprovePrs {
+                    repo,
+                    pr_numbers,
+                    approval_message,
+                    octocrab,
+                } => {
+                    // Approve PRs using GitHub's review API
+                    let mut all_success = true;
+                    let mut approval_count = 0;
+
+                    for pr_number in &pr_numbers {
+                        // Create a review with APPROVE event using the REST API directly
+                        #[derive(serde::Serialize)]
+                        struct ReviewBody {
+                            body: String,
+                            event: String,
+                        }
+
+                        let review_body = ReviewBody {
+                            body: approval_message.clone(),
+                            event: "APPROVE".to_string(),
+                        };
+
+                        let url = format!("/repos/{}/{}/pulls/{}/reviews", repo.org, repo.repo, pr_number);
+                        let result: Result<serde_json::Value, _> = octocrab.post(&url, Some(&review_body)).await;
+
+                        match result {
+                            Ok(_) => {
+                                approval_count += 1;
+                                debug!("Successfully approved PR #{}", pr_number);
+                            }
+                            Err(e) => {
+                                all_success = false;
+                                debug!("Failed to approve PR #{}: {}", pr_number, e);
+                            }
+                        }
+                    }
+
+                    let result = if all_success && approval_count > 0 {
+                        Ok(())
+                    } else if approval_count == 0 {
+                        Err("Failed to approve any PRs".to_string())
+                    } else {
+                        Err(format!(
+                            "Approved {}/{} PRs",
+                            approval_count,
+                            pr_numbers.len()
+                        ))
+                    };
+                    let _ = result_tx.send(TaskResult::ApprovalComplete(result));
+                }
                 BackgroundTask::FetchBuildLogs {
                     repo,
                     pr_number,
@@ -544,7 +608,8 @@ pub fn start_task_worker(
                         match octocrab.get(&url, None::<&()>).await {
                             Ok(runs) => runs,
                             Err(_) => {
-                                let _ = result_tx.send(TaskResult::BuildLogsLoaded(vec![], pr_context));
+                                let _ =
+                                    result_tx.send(TaskResult::BuildLogsLoaded(vec![], pr_context));
                                 return;
                             }
                         };
@@ -1084,8 +1149,9 @@ pub fn start_task_worker(
                                 ));
                             } else {
                                 // Can't fetch PR, assume not merged yet
-                                let _ = result_tx
-                                    .send(TaskResult::PRMergedConfirmed(repo_index, pr_number, false));
+                                let _ = result_tx.send(TaskResult::PRMergedConfirmed(
+                                    repo_index, pr_number, false,
+                                ));
                             }
                         }
                     }
@@ -1104,9 +1170,12 @@ pub fn start_task_worker(
                             // Success - schedule periodic status checks
                             let _ = result_tx.send(TaskResult::TaskStatusUpdate(Some(
                                 crate::state::TaskStatus {
-                                    message: format!("Auto-merge enabled for PR #{}, monitoring...", pr_number),
+                                    message: format!(
+                                        "Auto-merge enabled for PR #{}, monitoring...",
+                                        pr_number
+                                    ),
                                     status_type: crate::state::TaskStatusType::Success,
-                                }
+                                },
                             )));
 
                             // Spawn a task to periodically check PR status
@@ -1119,7 +1188,9 @@ pub fn start_task_worker(
                                     tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
                                     // Send status check result
-                                    let _ = result_tx_clone.send(TaskResult::AutoMergeStatusCheck(repo_index, pr_number));
+                                    let _ = result_tx_clone.send(TaskResult::AutoMergeStatusCheck(
+                                        repo_index, pr_number,
+                                    ));
 
                                     // Check merge status to update PR state
                                     if let Ok(pr_detail) = octocrab_clone
@@ -1132,21 +1203,41 @@ pub fn start_task_worker(
                                         // Determine mergeable status
                                         let mergeable_status = if pr_detail.merged_at.is_some() {
                                             // PR has been merged - stop monitoring
-                                            let _ = result_tx_clone.send(TaskResult::RemoveFromAutoMergeQueue(repo_index, pr_number));
-                                            let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
-                                                crate::state::TaskStatus {
-                                                    message: format!("PR #{} successfully merged!", pr_number),
-                                                    status_type: crate::state::TaskStatusType::Success,
-                                                }
-                                            )));
+                                            let _ = result_tx_clone.send(
+                                                TaskResult::RemoveFromAutoMergeQueue(
+                                                    repo_index, pr_number,
+                                                ),
+                                            );
+                                            let _ =
+                                                result_tx_clone.send(TaskResult::TaskStatusUpdate(
+                                                    Some(crate::state::TaskStatus {
+                                                        message: format!(
+                                                            "PR #{} successfully merged!",
+                                                            pr_number
+                                                        ),
+                                                        status_type:
+                                                            crate::state::TaskStatusType::Success,
+                                                    }),
+                                                ));
                                             break;
                                         } else {
                                             // Check CI status
-                                            match get_pr_ci_status(&octocrab_clone, &repo_clone, &pr_detail.head.sha).await {
+                                            match get_pr_ci_status(
+                                                &octocrab_clone,
+                                                &repo_clone,
+                                                &pr_detail.head.sha,
+                                            )
+                                            .await
+                                            {
                                                 Ok((_, build_status)) => {
                                                     match build_status.as_str() {
-                                                        "success" | "neutral" | "skipped" => MergeableStatus::Ready,
-                                                        "failure" | "cancelled" | "timed_out" | "action_required" => MergeableStatus::BuildFailed,
+                                                        "success" | "neutral" | "skipped" => {
+                                                            MergeableStatus::Ready
+                                                        }
+                                                        "failure" | "cancelled" | "timed_out"
+                                                        | "action_required" => {
+                                                            MergeableStatus::BuildFailed
+                                                        }
                                                         _ => MergeableStatus::BuildInProgress,
                                                     }
                                                 }
@@ -1155,23 +1246,28 @@ pub fn start_task_worker(
                                         };
 
                                         // Update PR status
-                                        let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
-                                            repo_index,
-                                            pr_number,
-                                            mergeable_status,
-                                        ));
+                                        let _ =
+                                            result_tx_clone.send(TaskResult::MergeStatusUpdated(
+                                                repo_index,
+                                                pr_number,
+                                                mergeable_status,
+                                            ));
                                     }
                                 }
                             });
                         }
                         Err(e) => {
                             // Failed to enable auto-merge
-                            let _ = result_tx.send(TaskResult::RemoveFromAutoMergeQueue(repo_index, pr_number));
+                            let _ = result_tx
+                                .send(TaskResult::RemoveFromAutoMergeQueue(repo_index, pr_number));
                             let _ = result_tx.send(TaskResult::TaskStatusUpdate(Some(
                                 crate::state::TaskStatus {
-                                    message: format!("Failed to enable auto-merge for PR #{}: {}", pr_number, e),
+                                    message: format!(
+                                        "Failed to enable auto-merge for PR #{}: {}",
+                                        pr_number, e
+                                    ),
                                     status_type: crate::state::TaskStatusType::Error,
-                                }
+                                },
                             )));
                         }
                     }
@@ -1208,7 +1304,8 @@ pub fn start_task_worker(
                             tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
                             // Send periodic check action
-                            let _ = result_tx_clone.send(TaskResult::OperationMonitorCheck(repo_index, pr_number));
+                            let _ = result_tx_clone
+                                .send(TaskResult::OperationMonitorCheck(repo_index, pr_number));
 
                             // Fetch current PR state
                             let pr_detail = match octocrab_clone
@@ -1230,35 +1327,58 @@ pub fn start_task_worker(
                                             last_head_sha = Some(current_sha.clone());
 
                                             // Check if CI is running
-                                            match get_pr_ci_status(&octocrab_clone, &repo_clone, &current_sha).await {
+                                            match get_pr_ci_status(
+                                                &octocrab_clone,
+                                                &repo_clone,
+                                                &current_sha,
+                                            )
+                                            .await
+                                            {
                                                 Ok((_, build_status)) => {
                                                     let new_status = match build_status.as_str() {
-                                                        "success" | "neutral" | "skipped" => MergeableStatus::Ready,
-                                                        "failure" | "cancelled" | "timed_out" | "action_required" => MergeableStatus::BuildFailed,
-                                                        "pending" | "in_progress" | "queued" => MergeableStatus::BuildInProgress,
+                                                        "success" | "neutral" | "skipped" => {
+                                                            MergeableStatus::Ready
+                                                        }
+                                                        "failure" | "cancelled" | "timed_out"
+                                                        | "action_required" => {
+                                                            MergeableStatus::BuildFailed
+                                                        }
+                                                        "pending" | "in_progress" | "queued" => {
+                                                            MergeableStatus::BuildInProgress
+                                                        }
                                                         _ => MergeableStatus::BuildInProgress,
                                                     };
 
                                                     // Update status
-                                                    let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
-                                                        repo_index,
-                                                        pr_number,
-                                                        new_status,
-                                                    ));
+                                                    let _ = result_tx_clone.send(
+                                                        TaskResult::MergeStatusUpdated(
+                                                            repo_index, pr_number, new_status,
+                                                        ),
+                                                    );
 
                                                     // If CI is done, stop monitoring
-                                                    if matches!(new_status, MergeableStatus::Ready | MergeableStatus::BuildFailed) {
-                                                        let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
+                                                    if matches!(
+                                                        new_status,
+                                                        MergeableStatus::Ready
+                                                            | MergeableStatus::BuildFailed
+                                                    ) {
+                                                        let _ = result_tx_clone.send(
+                                                            TaskResult::RemoveFromOperationMonitor(
+                                                                repo_index, pr_number,
+                                                            ),
+                                                        );
                                                         break;
                                                     }
                                                 }
                                                 Err(_) => {
                                                     // Assume building if we can't check
-                                                    let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
-                                                        repo_index,
-                                                        pr_number,
-                                                        MergeableStatus::BuildInProgress,
-                                                    ));
+                                                    let _ = result_tx_clone.send(
+                                                        TaskResult::MergeStatusUpdated(
+                                                            repo_index,
+                                                            pr_number,
+                                                            MergeableStatus::BuildInProgress,
+                                                        ),
+                                                    );
                                                 }
                                             }
                                         }
@@ -1268,26 +1388,45 @@ pub fn start_task_worker(
                                     }
 
                                     // Also check CI status even if SHA hasn't changed (in case CI just started)
-                                    if check_num > 2 { // After initial rebasing time
+                                    if check_num > 2 {
+                                        // After initial rebasing time
                                         if let Some(ref sha) = last_head_sha {
-                                            if let Ok((_, build_status)) = get_pr_ci_status(&octocrab_clone, &repo_clone, sha).await {
+                                            if let Ok((_, build_status)) =
+                                                get_pr_ci_status(&octocrab_clone, &repo_clone, sha)
+                                                    .await
+                                            {
                                                 let new_status = match build_status.as_str() {
-                                                    "success" | "neutral" | "skipped" => MergeableStatus::Ready,
-                                                    "failure" | "cancelled" | "timed_out" | "action_required" => MergeableStatus::BuildFailed,
-                                                    "pending" | "in_progress" | "queued" => MergeableStatus::BuildInProgress,
+                                                    "success" | "neutral" | "skipped" => {
+                                                        MergeableStatus::Ready
+                                                    }
+                                                    "failure" | "cancelled" | "timed_out"
+                                                    | "action_required" => {
+                                                        MergeableStatus::BuildFailed
+                                                    }
+                                                    "pending" | "in_progress" | "queued" => {
+                                                        MergeableStatus::BuildInProgress
+                                                    }
                                                     _ => MergeableStatus::BuildInProgress,
                                                 };
 
                                                 // Update status
-                                                let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
-                                                    repo_index,
-                                                    pr_number,
-                                                    new_status,
-                                                ));
+                                                let _ = result_tx_clone.send(
+                                                    TaskResult::MergeStatusUpdated(
+                                                        repo_index, pr_number, new_status,
+                                                    ),
+                                                );
 
                                                 // If CI is done, stop monitoring
-                                                if matches!(new_status, MergeableStatus::Ready | MergeableStatus::BuildFailed) {
-                                                    let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
+                                                if matches!(
+                                                    new_status,
+                                                    MergeableStatus::Ready
+                                                        | MergeableStatus::BuildFailed
+                                                ) {
+                                                    let _ = result_tx_clone.send(
+                                                        TaskResult::RemoveFromOperationMonitor(
+                                                            repo_index, pr_number,
+                                                        ),
+                                                    );
                                                     break;
                                                 }
                                             }
@@ -1298,23 +1437,40 @@ pub fn start_task_worker(
                                     // Check if PR is merged
                                     if pr_detail.merged_at.is_some() {
                                         // Merge successful!
-                                        let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
-                                        let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
-                                            crate::state::TaskStatus {
-                                                message: format!("PR #{} successfully merged!", pr_number),
+                                        let _ = result_tx_clone.send(
+                                            TaskResult::RemoveFromOperationMonitor(
+                                                repo_index, pr_number,
+                                            ),
+                                        );
+                                        let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(
+                                            Some(crate::state::TaskStatus {
+                                                message: format!(
+                                                    "PR #{} successfully merged!",
+                                                    pr_number
+                                                ),
                                                 status_type: crate::state::TaskStatusType::Success,
-                                            }
-                                        )));
+                                            }),
+                                        ));
                                         break;
-                                    } else if matches!(pr_detail.state, Some(octocrab::models::IssueState::Closed)) {
+                                    } else if matches!(
+                                        pr_detail.state,
+                                        Some(octocrab::models::IssueState::Closed)
+                                    ) {
                                         // PR was closed without merging
-                                        let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
-                                        let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
-                                            crate::state::TaskStatus {
-                                                message: format!("PR #{} was closed without merging", pr_number),
+                                        let _ = result_tx_clone.send(
+                                            TaskResult::RemoveFromOperationMonitor(
+                                                repo_index, pr_number,
+                                            ),
+                                        );
+                                        let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(
+                                            Some(crate::state::TaskStatus {
+                                                message: format!(
+                                                    "PR #{} was closed without merging",
+                                                    pr_number
+                                                ),
                                                 status_type: crate::state::TaskStatusType::Error,
-                                            }
-                                        )));
+                                            }),
+                                        ));
                                         break;
                                     }
 
@@ -1330,7 +1486,9 @@ pub fn start_task_worker(
                         }
 
                         // If we exit the loop without completing, it's a timeout
-                        let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
+                        let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(
+                            repo_index, pr_number,
+                        ));
                     });
                 }
             }
@@ -1350,7 +1508,8 @@ async fn enable_github_auto_merge(
         .get(pr_number as u64)
         .await?;
 
-    let node_id = pr.node_id
+    let node_id = pr
+        .node_id
         .ok_or_else(|| anyhow::anyhow!("PR does not have a node_id"))?;
 
     // GraphQL mutation to enable auto-merge
@@ -1371,9 +1530,7 @@ async fn enable_github_auto_merge(
     );
 
     // Execute GraphQL query
-    let response: serde_json::Value = octocrab
-        .graphql(&query)
-        .await?;
+    let response: serde_json::Value = octocrab.graphql(&query).await?;
 
     // Check for errors in response
     if let Some(errors) = response.get("errors") {

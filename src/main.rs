@@ -172,6 +172,7 @@ fn result_to_action(result: TaskResult) -> Action {
         TaskResult::RebaseComplete(res) => Action::RebaseComplete(res),
         TaskResult::MergeComplete(res) => Action::MergeComplete(res),
         TaskResult::RerunJobsComplete(res) => Action::RerunJobsComplete(res),
+        TaskResult::ApprovalComplete(res) => Action::ApprovalComplete(res),
         TaskResult::BuildLogsLoaded(sections, ctx) => Action::BuildLogsLoaded(sections, ctx),
         TaskResult::IDEOpenComplete(res) => Action::IDEOpenComplete(res),
         TaskResult::PRMergedConfirmed(idx, pr_num, merged) => {
@@ -842,6 +843,13 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
             format!("Rebase ({})", selected_count),
             tailwind::BLUE.c700,
         ));
+
+        // Show approval action for selected PRs
+        actions.push((
+            "a".to_string(),
+            format!("Approve ({})", selected_count),
+            tailwind::EMERALD.c600,
+        ));
     } else if !repo_data.prs.is_empty() {
         // When nothing selected, show how to select
         actions.push((
@@ -887,6 +895,11 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
                     "i".to_string(),
                     "Open in IDE".to_string(),
                     tailwind::INDIGO.c600,
+                ));
+                actions.push((
+                    "a".to_string(),
+                    "Approve".to_string(),
+                    tailwind::EMERALD.c600,
                 ));
             }
         }

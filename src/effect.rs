@@ -64,6 +64,9 @@ pub enum Effect {
     /// Perform merge operation
     PerformMerge { repo: Repo, prs: Vec<Pr> },
 
+    /// Approve PRs with configured message
+    ApprovePrs { repo: Repo, pr_numbers: Vec<usize>, approval_message: String },
+
     /// Open PR in browser
     OpenInBrowser { url: String },
 
@@ -296,6 +299,21 @@ pub async fn execute_effect(app: &mut App, effect: Effect) -> Result<Vec<Action>
                 repo,
                 prs,
                 selected_indices,
+                octocrab: app.octocrab()?,
+            });
+        }
+
+        Effect::ApprovePrs { repo, pr_numbers, approval_message } => {
+            // Approve PRs with configured message
+            follow_up_actions.push(Action::SetTaskStatus(Some(TaskStatus {
+                message: format!("Approving {} PR(s)...", pr_numbers.len()),
+                status_type: TaskStatusType::Running,
+            })));
+
+            let _ = app.task_tx.send(BackgroundTask::ApprovePrs {
+                repo,
+                pr_numbers,
+                approval_message,
                 octocrab: app.octocrab()?,
             });
         }

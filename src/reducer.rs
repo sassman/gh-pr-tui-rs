@@ -177,7 +177,7 @@ fn parse_github_url(url: &str) -> Option<(String, String, String)> {
 fn repos_reducer(
     mut state: ReposState,
     action: &Action,
-    _config: &crate::config::Config,
+    config: &crate::config::Config,
 ) -> (ReposState, Vec<Effect>) {
     let mut effects = vec![];
 
@@ -559,6 +559,44 @@ fn repos_reducer(
 
                 if !pr_numbers.is_empty() {
                     effects.push(Effect::RerunFailedJobs { repo, pr_numbers });
+                }
+            }
+        }
+        Action::ApprovePrs => {
+            // Effect: Approve selected PRs or current PR with configured message
+            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
+                // Use PR numbers for stable selection
+                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    !data.selected_pr_numbers.is_empty()
+                } else {
+                    false
+                };
+
+                let pr_numbers: Vec<usize> = if !has_selection {
+                    // No selection - use current cursor PR
+                    state
+                        .state
+                        .selected()
+                        .and_then(|idx| state.prs.get(idx))
+                        .map(|pr| vec![pr.number])
+                        .unwrap_or_default()
+                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                    state
+                        .prs
+                        .iter()
+                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
+                        .map(|pr| pr.number)
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+
+                if !pr_numbers.is_empty() {
+                    effects.push(Effect::ApprovePrs {
+                        repo,
+                        pr_numbers,
+                        approval_message: config.approval_message.clone(),
+                    });
                 }
             }
         }
@@ -1085,6 +1123,18 @@ fn task_reducer(mut state: TaskState, action: &Action) -> (TaskState, Vec<Effect
                 },
                 Err(err) => TaskStatus {
                     message: format!("Failed to rerun CI jobs: {}", err),
+                    status_type: TaskStatusType::Error,
+                },
+            });
+        }
+        Action::ApprovalComplete(result) => {
+            state.status = Some(match result {
+                Ok(_) => TaskStatus {
+                    message: "PR(s) approved successfully".to_string(),
+                    status_type: TaskStatusType::Success,
+                },
+                Err(err) => TaskStatus {
+                    message: format!("Failed to approve PR(s): {}", err),
                     status_type: TaskStatusType::Error,
                 },
             });
