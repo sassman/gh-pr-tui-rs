@@ -27,18 +27,23 @@ pub type LogBuffer = Arc<Mutex<VecDeque<LogEntry>>>;
 pub struct DebugConsoleLogger {
     logs: LogBuffer,
     env_logger: env_logger::Logger,
+    console_filter: env_logger::Logger,
 }
 
 impl DebugConsoleLogger {
     /// Create a new debug console logger with env_logger backend
     pub fn new(logs: LogBuffer) -> Self {
-        // Create env_logger for terminal output only
-        // Defaults to Error level for terminal (doesn't pollute), respects RUST_LOG if set
+        // Create env_logger for terminal output only (defaults to Error level)
         let env_logger = env_logger::Builder::from_default_env()
-            .filter_level(log::LevelFilter::Error) // Terminal: only errors by default, unless RUST_LOG overrides
+            .filter_level(log::LevelFilter::Error)
             .build();
 
-        Self { logs, env_logger }
+        // Create separate filter for console buffer (respects RUST_LOG, defaults to Debug)
+        let console_filter = env_logger::Builder::from_default_env()
+            .filter_level(log::LevelFilter::Debug)
+            .build();
+
+        Self { logs, env_logger, console_filter }
     }
 
     /// Create a new empty log buffer
@@ -49,13 +54,13 @@ impl DebugConsoleLogger {
 
 impl Log for DebugConsoleLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        // Always capture Debug+ to our buffer (independent of env_logger/RUST_LOG)
-        metadata.level() <= Level::Debug
+        // Enable if either console or terminal wants it
+        self.console_filter.enabled(metadata) || self.env_logger.enabled(metadata)
     }
 
     fn log(&self, record: &Record) {
-        // Always capture Debug+ logs to our buffer (for debug console)
-        if record.level() <= Level::Debug {
+        // Capture to console buffer if console_filter allows it (respects RUST_LOG)
+        if self.console_filter.enabled(record.metadata()) {
             let entry = LogEntry {
                 timestamp: Utc::now(),
                 level: record.level(),
@@ -72,7 +77,7 @@ impl Log for DebugConsoleLogger {
             }
         }
 
-        // Separately, log to terminal via env_logger (respects RUST_LOG)
+        // Separately, log to terminal via env_logger (defaults to Error only)
         if self.env_logger.enabled(record.metadata()) {
             self.env_logger.log(record);
         }
@@ -87,6 +92,19 @@ impl Log for DebugConsoleLogger {
 ///
 /// This should be called once at application startup before any logging occurs.
 /// Returns the log buffer that can be shared with the UI.
+///
+/// # Filtering with RUST_LOG
+///
+/// The debug console respects RUST_LOG for filtering what gets captured:
+///
+/// - No RUST_LOG: Shows all Debug+ logs from all modules
+/// - `RUST_LOG=pr_bulk_review_tui=debug`: Only logs from this crate (filters out dependencies)
+/// - `RUST_LOG=pr_bulk_review_tui::task=debug`: Only logs from the task module
+/// - `RUST_LOG=info`: Only Info+ logs from all modules
+///
+/// Note: Crate name uses underscores (pr_bulk_review_tui), not hyphens!
+///
+/// Terminal output is always Error-level only (keeps terminal clean).
 pub fn init_logger() -> LogBuffer {
     let logs = DebugConsoleLogger::create_buffer();
     let logger = DebugConsoleLogger::new(logs.clone());
