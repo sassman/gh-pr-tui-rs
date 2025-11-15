@@ -86,6 +86,14 @@ pub enum Effect {
         pr_number: usize,
     },
 
+    /// Start monitoring an operation (rebase/merge) for a PR
+    StartOperationMonitoring {
+        repo_index: usize,
+        repo: Repo,
+        pr_number: usize,
+        operation: crate::state::OperationType,
+    },
+
     /// Add a new repository
     AddRepository(Repo),
 
@@ -395,6 +403,28 @@ pub async fn execute_effect(app: &mut App, effect: Effect) -> Result<Vec<Action>
                 repo_index,
                 repo,
                 pr_number,
+                octocrab: app.octocrab()?,
+            });
+        }
+
+        Effect::StartOperationMonitoring {
+            repo_index,
+            repo,
+            pr_number,
+            operation,
+        } => {
+            // Send background task to monitor the operation
+            let operation_name = match operation {
+                crate::state::OperationType::Rebase => "Rebase",
+                crate::state::OperationType::Merge => "Merge",
+            };
+            debug!("Starting {} monitoring for PR #{}", operation_name, pr_number);
+
+            let _ = app.task_tx.send(BackgroundTask::MonitorOperation {
+                repo_index,
+                repo,
+                pr_number,
+                operation,
                 octocrab: app.octocrab()?,
             });
         }

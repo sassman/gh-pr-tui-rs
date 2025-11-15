@@ -136,6 +136,7 @@ pub struct RepoData {
     pub selected_pr_numbers: HashSet<PrNumber>,  // Type-safe PR numbers
     pub loading_state: LoadingState,
     pub auto_merge_queue: Vec<AutoMergePR>,
+    pub operation_monitor_queue: Vec<OperationMonitor>,
 }
 
 /// Represents a PR in the auto-merge queue
@@ -144,6 +145,23 @@ pub struct AutoMergePR {
     pub pr_number: usize,
     pub started_at: std::time::Instant,
     pub check_count: usize,
+}
+
+/// Type of operation being monitored
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperationType {
+    Rebase,
+    Merge,
+}
+
+/// Represents a PR operation being monitored
+#[derive(Debug, Clone)]
+pub struct OperationMonitor {
+    pub pr_number: usize,
+    pub operation: OperationType,
+    pub started_at: std::time::Instant,
+    pub check_count: usize,
+    pub last_head_sha: Option<String>, // Track SHA to detect rebase completion
 }
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Eq, Clone, PartialEq)]

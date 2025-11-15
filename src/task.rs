@@ -53,6 +53,12 @@ pub enum TaskResult {
 
     /// Remove PR from auto-merge queue
     RemoveFromAutoMergeQueue(usize, usize), // repo_index, pr_number
+
+    /// Operation monitor check needed (rebase/merge progress)
+    OperationMonitorCheck(usize, usize), // repo_index, pr_number
+
+    /// Remove PR from operation monitor queue
+    RemoveFromOperationMonitor(usize, usize), // repo_index, pr_number
 }
 
 /// Background tasks that can be executed asynchronously
@@ -118,6 +124,13 @@ pub enum BackgroundTask {
         repo_index: usize,
         repo: Repo,
         pr_number: usize,
+        octocrab: Octocrab,
+    },
+    MonitorOperation {
+        repo_index: usize,
+        repo: Repo,
+        pr_number: usize,
+        operation: crate::state::OperationType,
         octocrab: Octocrab,
     },
 }
@@ -1162,6 +1175,163 @@ pub fn start_task_worker(
                             )));
                         }
                     }
+                }
+                BackgroundTask::MonitorOperation {
+                    repo_index,
+                    repo,
+                    pr_number,
+                    operation,
+                    octocrab,
+                } => {
+                    // Spawn a task to periodically monitor the operation
+                    let result_tx_clone = result_tx.clone();
+                    let repo_clone = repo.clone();
+                    let octocrab_clone = octocrab.clone();
+
+                    tokio::spawn(async move {
+                        use crate::pr::MergeableStatus;
+                        use crate::state::OperationType;
+
+                        // Get initial PR state to track SHA for rebase detection
+                        let mut last_head_sha = None;
+                        if let Ok(pr_detail) = octocrab_clone
+                            .pulls(&repo_clone.org, &repo_clone.repo)
+                            .get(pr_number as u64)
+                            .await
+                        {
+                            last_head_sha = Some(pr_detail.head.sha.clone());
+                        }
+
+                        // Monitor for up to 40 checks (20 minutes at 30s intervals)
+                        for check_num in 0..40 {
+                            // Wait between checks (30 seconds)
+                            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+
+                            // Send periodic check action
+                            let _ = result_tx_clone.send(TaskResult::OperationMonitorCheck(repo_index, pr_number));
+
+                            // Fetch current PR state
+                            let pr_detail = match octocrab_clone
+                                .pulls(&repo_clone.org, &repo_clone.repo)
+                                .get(pr_number as u64)
+                                .await
+                            {
+                                Ok(pr) => pr,
+                                Err(_) => continue, // Skip this check if API fails
+                            };
+
+                            match operation {
+                                OperationType::Rebase => {
+                                    // Check if head SHA changed (rebase completed)
+                                    let current_sha = pr_detail.head.sha.clone();
+                                    if let Some(ref prev_sha) = last_head_sha {
+                                        if &current_sha != prev_sha {
+                                            // Rebase completed! Now check CI status
+                                            last_head_sha = Some(current_sha.clone());
+
+                                            // Check if CI is running
+                                            match get_pr_ci_status(&octocrab_clone, &repo_clone, &current_sha).await {
+                                                Ok((_, build_status)) => {
+                                                    let new_status = match build_status.as_str() {
+                                                        "success" | "neutral" | "skipped" => MergeableStatus::Ready,
+                                                        "failure" | "cancelled" | "timed_out" | "action_required" => MergeableStatus::BuildFailed,
+                                                        "pending" | "in_progress" | "queued" => MergeableStatus::BuildInProgress,
+                                                        _ => MergeableStatus::BuildInProgress,
+                                                    };
+
+                                                    // Update status
+                                                    let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
+                                                        repo_index,
+                                                        pr_number,
+                                                        new_status,
+                                                    ));
+
+                                                    // If CI is done, stop monitoring
+                                                    if matches!(new_status, MergeableStatus::Ready | MergeableStatus::BuildFailed) {
+                                                        let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
+                                                        break;
+                                                    }
+                                                }
+                                                Err(_) => {
+                                                    // Assume building if we can't check
+                                                    let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
+                                                        repo_index,
+                                                        pr_number,
+                                                        MergeableStatus::BuildInProgress,
+                                                    ));
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // First check after rebase started
+                                        last_head_sha = Some(current_sha);
+                                    }
+
+                                    // Also check CI status even if SHA hasn't changed (in case CI just started)
+                                    if check_num > 2 { // After initial rebasing time
+                                        if let Some(ref sha) = last_head_sha {
+                                            if let Ok((_, build_status)) = get_pr_ci_status(&octocrab_clone, &repo_clone, sha).await {
+                                                let new_status = match build_status.as_str() {
+                                                    "success" | "neutral" | "skipped" => MergeableStatus::Ready,
+                                                    "failure" | "cancelled" | "timed_out" | "action_required" => MergeableStatus::BuildFailed,
+                                                    "pending" | "in_progress" | "queued" => MergeableStatus::BuildInProgress,
+                                                    _ => MergeableStatus::BuildInProgress,
+                                                };
+
+                                                // Update status
+                                                let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
+                                                    repo_index,
+                                                    pr_number,
+                                                    new_status,
+                                                ));
+
+                                                // If CI is done, stop monitoring
+                                                if matches!(new_status, MergeableStatus::Ready | MergeableStatus::BuildFailed) {
+                                                    let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                OperationType::Merge => {
+                                    // Check if PR is merged
+                                    if pr_detail.merged_at.is_some() {
+                                        // Merge successful!
+                                        let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
+                                        let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
+                                            crate::state::TaskStatus {
+                                                message: format!("PR #{} successfully merged!", pr_number),
+                                                status_type: crate::state::TaskStatusType::Success,
+                                            }
+                                        )));
+                                        break;
+                                    } else if matches!(pr_detail.state, Some(octocrab::models::IssueState::Closed)) {
+                                        // PR was closed without merging
+                                        let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
+                                        let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
+                                            crate::state::TaskStatus {
+                                                message: format!("PR #{} was closed without merging", pr_number),
+                                                status_type: crate::state::TaskStatusType::Error,
+                                            }
+                                        )));
+                                        break;
+                                    }
+
+                                    // Check if merge failed (check for error states)
+                                    // Update status to show we're still merging
+                                    let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
+                                        repo_index,
+                                        pr_number,
+                                        MergeableStatus::Merging,
+                                    ));
+                                }
+                            }
+                        }
+
+                        // If we exit the loop without completing, it's a timeout
+                        let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(repo_index, pr_number));
+                    });
                 }
             }
         }

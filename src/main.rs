@@ -182,6 +182,12 @@ fn result_to_action(result: TaskResult) -> Action {
         TaskResult::RemoveFromAutoMergeQueue(idx, pr_num) => {
             Action::RemoveFromAutoMergeQueue(idx, pr_num)
         }
+        TaskResult::OperationMonitorCheck(idx, pr_num) => {
+            Action::OperationMonitorCheck(idx, pr_num)
+        }
+        TaskResult::RemoveFromOperationMonitor(idx, pr_num) => {
+            Action::RemoveFromOperationMonitor(idx, pr_num)
+        }
     }
 }
 

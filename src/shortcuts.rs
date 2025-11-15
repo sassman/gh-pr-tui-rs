@@ -73,6 +73,11 @@ pub enum Action {
     RemoveFromAutoMergeQueue(usize, usize), // repo_index, pr_number
     AutoMergeStatusCheck(usize, usize),     // repo_index, pr_number - periodic check
 
+    // Operation monitoring (rebase/merge progress tracking)
+    StartOperationMonitor(usize, usize, crate::state::OperationType), // repo_index, pr_number, operation
+    OperationMonitorCheck(usize, usize),  // repo_index, pr_number - periodic check
+    RemoveFromOperationMonitor(usize, usize), // repo_index, pr_number
+
     Quit,
     None,
 }

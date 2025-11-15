@@ -502,6 +502,24 @@ fn repos_reducer(
                 };
 
                 if !prs_to_rebase.is_empty() {
+                    // Start monitoring for each PR being rebased
+                    let repo_index = state.selected_repo;
+                    for pr in &prs_to_rebase {
+                        // First dispatch action to update state immediately
+                        effects.push(Effect::DispatchAction(Action::StartOperationMonitor(
+                            repo_index,
+                            pr.number,
+                            crate::state::OperationType::Rebase,
+                        )));
+                        // Then start background monitoring
+                        effects.push(Effect::StartOperationMonitoring {
+                            repo_index,
+                            repo: repo.clone(),
+                            pr_number: pr.number,
+                            operation: crate::state::OperationType::Rebase,
+                        });
+                    }
+
                     effects.push(Effect::PerformRebase {
                         repo,
                         prs: prs_to_rebase,
@@ -591,6 +609,24 @@ fn repos_reducer(
 
                     // Merge ready PRs directly
                     if !prs_to_merge.is_empty() {
+                        // Start monitoring for each PR being merged
+                        let repo_index = state.selected_repo;
+                        for pr in &prs_to_merge {
+                            // First dispatch action to update state immediately
+                            effects.push(Effect::DispatchAction(Action::StartOperationMonitor(
+                                repo_index,
+                                pr.number,
+                                crate::state::OperationType::Merge,
+                            )));
+                            // Then start background monitoring
+                            effects.push(Effect::StartOperationMonitoring {
+                                repo_index,
+                                repo: repo.clone(),
+                                pr_number: pr.number,
+                                operation: crate::state::OperationType::Merge,
+                            });
+                        }
+
                         effects.push(Effect::PerformMerge {
                             repo: repo.clone(),
                             prs: prs_to_merge,
@@ -725,6 +761,87 @@ fn repos_reducer(
                     state.prs = data.prs.clone();
                     state.state = data.table_state.clone();
                     state.loading_state = data.loading_state.clone();
+                }
+            }
+        }
+        Action::StartOperationMonitor(repo_index, pr_number, operation) => {
+            // Add PR to operation monitor queue and set initial state
+            if let Some(data) = state.repo_data.get_mut(repo_index) {
+                // Check if already in queue
+                if !data
+                    .operation_monitor_queue
+                    .iter()
+                    .any(|op| op.pr_number == *pr_number)
+                {
+                    // Set the PR status to Rebasing or Merging immediately
+                    let status = match operation {
+                        crate::state::OperationType::Rebase => {
+                            crate::pr::MergeableStatus::Rebasing
+                        }
+                        crate::state::OperationType::Merge => {
+                            crate::pr::MergeableStatus::Merging
+                        }
+                    };
+
+                    // Update PR status in repo_data
+                    if let Some(pr) = data.prs.iter_mut().find(|p| p.number == *pr_number) {
+                        pr.mergeable = status;
+                    }
+
+                    // Also sync to legacy fields if this is the selected repo
+                    if *repo_index == state.selected_repo {
+                        if let Some(pr) = state.prs.iter_mut().find(|p| p.number == *pr_number) {
+                            pr.mergeable = status;
+                        }
+                    }
+
+                    // Add to monitoring queue
+                    data.operation_monitor_queue
+                        .push(crate::state::OperationMonitor {
+                            pr_number: *pr_number,
+                            operation: *operation,
+                            started_at: std::time::Instant::now(),
+                            check_count: 0,
+                            last_head_sha: None,
+                        });
+                }
+            }
+        }
+        Action::RemoveFromOperationMonitor(repo_index, pr_number) => {
+            // Remove PR from operation monitor queue
+            if let Some(data) = state.repo_data.get_mut(repo_index) {
+                data.operation_monitor_queue
+                    .retain(|op| op.pr_number != *pr_number);
+            }
+        }
+        Action::OperationMonitorCheck(repo_index, pr_number) => {
+            // Periodic status check for operation monitor
+            // This will be handled by the background task which will dispatch
+            // MergeStatusUpdated actions based on GitHub API responses
+            // For now, just increment check count
+            if let Some(data) = state.repo_data.get_mut(repo_index) {
+                if let Some(monitor) = data
+                    .operation_monitor_queue
+                    .iter_mut()
+                    .find(|op| op.pr_number == *pr_number)
+                {
+                    monitor.check_count += 1;
+
+                    // Timeout after 40 checks (20 minutes at 30s intervals)
+                    if monitor.check_count >= 40 {
+                        // Remove from queue - timeout reached
+                        data.operation_monitor_queue
+                            .retain(|op| op.pr_number != *pr_number);
+                        effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
+                            crate::state::TaskStatus {
+                                message: format!(
+                                    "Operation monitor timeout for PR #{}",
+                                    pr_number
+                                ),
+                                status_type: crate::state::TaskStatusType::Error,
+                            },
+                        ))));
+                    }
                 }
             }
         }

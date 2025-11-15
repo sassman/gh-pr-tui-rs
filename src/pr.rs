@@ -27,6 +27,8 @@ pub enum MergeableStatus {
     BuildFailed,     // ✗ CI/build checks failed
     Conflicted,      // ✗ Has merge conflicts
     Blocked,         // ⊗ Blocked by reviews or other checks
+    Rebasing,        // ⟳ Currently rebasing (transient state)
+    Merging,         // ⇒ Currently merging (transient state)
 }
 
 impl Pr {
@@ -98,6 +100,8 @@ impl MergeableStatus {
             MergeableStatus::BuildFailed => "✗",
             MergeableStatus::Conflicted => "✗",
             MergeableStatus::Blocked => "⊗",
+            MergeableStatus::Rebasing => "⟳",
+            MergeableStatus::Merging => "⇒",
         }
     }
 
@@ -111,6 +115,8 @@ impl MergeableStatus {
             MergeableStatus::BuildFailed => Color::Red,
             MergeableStatus::Conflicted => Color::Red,
             MergeableStatus::Blocked => Color::Red,
+            MergeableStatus::Rebasing => Color::Cyan,
+            MergeableStatus::Merging => Color::Cyan,
         }
     }
 
@@ -123,6 +129,8 @@ impl MergeableStatus {
             MergeableStatus::BuildFailed => "Build Failed",
             MergeableStatus::Conflicted => "Conflicted",
             MergeableStatus::Blocked => "Blocked",
+            MergeableStatus::Rebasing => "Rebasing...",
+            MergeableStatus::Merging => "Merging...",
         }
     }
 }
