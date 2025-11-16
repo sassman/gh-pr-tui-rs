@@ -1,19 +1,39 @@
-[package]
-name = "pr-bulk-review-tui"
-version = "0.1.0"
-edition = "2024"
+[workspace]
+members = [
+    "crates/gh-actions-log-parser",
+    "crates/pr-bulk-review-tui",
+]
+resolver = "2"
 
-[dependencies]
-octocrab = "0.43.0"
-ratatui = "0.29.0"
-chrono = "0.4"
-env_logger = "0.10"
-log = "0.4"
-tokio = { version = "1", features = ["full"] }
+[workspace.dependencies]
+# Shared dependencies
 anyhow = "1.0"
-serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
-toml = "0.8"
+serde_json = "1.0"
+thiserror = "1.0"
 zip = "2.2"
 bytes = "1.9"
+tokio = { version = "1", features = ["full"] }
+log = "0.4"
+
+# ANSI parsing
+ansi-parser = "0.9"
+
+# GitHub API
+octocrab = "0.43.0"
+
+# TUI
+ratatui = "0.29.0"
+
+# Date/Time
+chrono = "0.4"
+
+# Config
+toml = "0.8"
 dotenvy = "0.15"
+
+# Logging
+env_logger = "0.10"
+
+# Parsing
+regex = "1.10"

@@ -85,6 +85,8 @@ pub struct ReposState {
 #[derive(Debug, Clone)]
 pub struct LogPanelState {
     pub panel: Option<LogPanel>,
+    /// Shared state for event handler to know if log panel is open
+    pub log_panel_open_shared: Arc<Mutex<bool>>,
 }
 
 /// Merge bot state (wrapper around existing MergeBot)
@@ -338,7 +340,10 @@ impl Default for ReposState {
 
 impl Default for LogPanelState {
     fn default() -> Self {
-        Self { panel: None }
+        Self {
+            panel: None,
+            log_panel_open_shared: Arc::new(Mutex::new(false)),
+        }
     }
 }
 

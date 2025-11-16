@@ -2,7 +2,6 @@
 ///
 /// This module provides a custom logger that captures all log messages
 /// into a thread-safe circular buffer for display in the debug console.
-
 use chrono::{DateTime, Utc};
 use log::{Level, Log, Metadata, Record};
 use std::collections::VecDeque;

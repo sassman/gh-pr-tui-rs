@@ -33,6 +33,7 @@ pub enum Action {
     ScrollLogPanelLeft,
     ScrollLogPanelRight,
     NextLogSection,
+    PrevLogSection,
     ToggleTimestamps,
     ToggleShortcuts,
     ScrollShortcutsUp,
@@ -337,10 +338,18 @@ pub fn get_shortcuts() -> Vec<ShortcutCategory> {
                 },
                 Shortcut {
                     key_display: "n",
-                    description: "Jump to next error section",
+                    description: "Jump to next error",
                     action: Action::NextLogSection,
                     matcher: ShortcutMatcher::SingleKey(|key| {
                         matches!(key.code, KeyCode::Char('n'))
+                    }),
+                },
+                Shortcut {
+                    key_display: "p",
+                    description: "Jump to previous error",
+                    action: Action::PrevLogSection,
+                    matcher: ShortcutMatcher::SingleKey(|key| {
+                        matches!(key.code, KeyCode::Char('p'))
                     }),
                 },
                 Shortcut {

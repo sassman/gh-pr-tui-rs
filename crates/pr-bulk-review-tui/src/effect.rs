@@ -197,12 +197,8 @@ pub async fn execute_effect(app: &mut App, effect: Effect) -> Result<Vec<Action>
                     }
 
                     // Restore session
-                    let selected_repo = if let Ok(state) = load_persisted_state() {
-                        if let Some(index) = repos.iter().position(|r| r == &state.selected_repo) {
-                            index
-                        } else {
-                            0
-                        }
+                    let selected_repo: usize = if let Ok(state) = load_persisted_state() {
+                        repos.iter().position(|r| r == &state.selected_repo).unwrap_or_default()
                     } else {
                         0
                     };

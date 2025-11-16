@@ -449,19 +449,33 @@ pub fn start_task_worker(
                                     "@dependabot rebase"
                                 };
 
-                                if let Err(_) = comment(&octocrab, &repo, pr, comment_text).await {
-                                    success = false;
+                                debug!("Posting comment '{}' to dependabot PR #{}", comment_text, pr.number);
+                                match comment(&octocrab, &repo, pr, comment_text).await {
+                                    Ok(_) => {
+                                        debug!("Successfully posted comment to dependabot PR #{}", pr.number);
+                                    }
+                                    Err(e) => {
+                                        debug!("Failed to comment on dependabot PR #{}: {:?}", pr.number, e);
+                                        success = false;
+                                    }
                                 }
                             } else {
                                 // For regular PRs, use GitHub's update_branch API
                                 // This performs a rebase/merge to bring the PR branch up to date with base
+                                debug!("Attempting to update branch for PR #{} in {}/{}", pr.number, repo.org, repo.repo);
                                 let update_result = octocrab
                                     .pulls(&repo.org, &repo.repo)
                                     .update_branch(pr.number as u64)
                                     .await;
 
-                                if update_result.is_err() {
-                                    success = false;
+                                match update_result {
+                                    Ok(_) => {
+                                        debug!("Successfully triggered update_branch for PR #{}", pr.number);
+                                    }
+                                    Err(e) => {
+                                        debug!("Failed to update_branch for PR #{}: {:?}", pr.number, e);
+                                        success = false;
+                                    }
                                 }
                             }
                         }
@@ -709,6 +723,7 @@ pub fn start_task_worker(
 
                         #[derive(Debug, serde::Deserialize)]
                         struct WorkflowJob {
+                            #[allow(dead_code)]
                             id: u64,
                             name: String,
                             html_url: String,
@@ -729,33 +744,38 @@ pub fn start_task_worker(
                         {
                             Ok(log_data) => {
                                 // The log_data is a zip file as bytes
-                                // We need to extract and parse it
-                                match crate::log::parse_workflow_logs_zip(&log_data) {
-                                    Ok(job_logs) => {
+                                // Parse using the gh-actions-log-parser crate
+                                match gh_actions_log_parser::parse_workflow_logs(&log_data) {
+                                    Ok(parsed_log) => {
                                         // Process each job's logs separately
-                                        for job_log in job_logs {
+                                        for job_log in parsed_log.jobs {
                                             // Try to find matching job URL by name
                                             let job_url = if let Ok(ref jobs) = jobs_response {
                                                 jobs.jobs
                                                     .iter()
-                                                    .find(|j| job_log.job_name.contains(&j.name))
+                                                    .find(|j| job_log.name.contains(&j.name))
                                                     .map(|j| j.html_url.clone())
                                             } else {
                                                 None
                                             };
 
                                             let mut job_metadata = metadata_lines.clone();
-                                            job_metadata.push(format!("Job: {}", job_log.job_name));
+                                            job_metadata.push(format!("Job: {}", job_log.name));
                                             if let Some(url) = &job_url {
                                                 job_metadata.push(format!("Job URL: {}", url));
                                             }
                                             job_metadata.push("".to_string());
 
-                                            // Try to extract error context from this job's logs
-                                            let full_log_text = job_log.content.join("\n");
+                                            // Convert LogLines to text content for legacy error extraction
+                                            let content_lines: Vec<String> = job_log
+                                                .lines
+                                                .iter()
+                                                .map(|line| line.content.clone())
+                                                .collect();
+                                            let full_log_text = content_lines.join("\n");
                                             let error_context = crate::log::extract_error_context(
                                                 &full_log_text,
-                                                &job_log.job_name,
+                                                &job_log.name,
                                             );
 
                                             if !error_context.is_empty() {
@@ -768,7 +788,7 @@ pub fn start_task_worker(
                                                 log_sections.push(LogSection {
                                                     step_name: format!(
                                                         "{} / {} - Errors",
-                                                        workflow_name, job_log.job_name
+                                                        workflow_name, job_log.name
                                                     ),
                                                     error_lines,
                                                     has_extracted_errors: true,
@@ -778,12 +798,12 @@ pub fn start_task_worker(
                                                 let mut full_lines = job_metadata.clone();
                                                 full_lines.push("Full Job Logs:".to_string());
                                                 full_lines.push("".to_string());
-                                                full_lines.extend(job_log.content);
+                                                full_lines.extend(content_lines.clone());
 
                                                 log_sections.push(LogSection {
                                                     step_name: format!(
                                                         "{} / {} - Full Log",
-                                                        workflow_name, job_log.job_name
+                                                        workflow_name, job_log.name
                                                     ),
                                                     error_lines: full_lines,
                                                     has_extracted_errors: false,
@@ -793,12 +813,12 @@ pub fn start_task_worker(
                                                 let mut full_lines = job_metadata;
                                                 full_lines.push("Job Logs:".to_string());
                                                 full_lines.push("".to_string());
-                                                full_lines.extend(job_log.content);
+                                                full_lines.extend(content_lines);
 
                                                 log_sections.push(LogSection {
                                                     step_name: format!(
                                                         "{} / {}",
-                                                        workflow_name, job_log.job_name
+                                                        workflow_name, job_log.name
                                                     ),
                                                     error_lines: full_lines,
                                                     has_extracted_errors: false,

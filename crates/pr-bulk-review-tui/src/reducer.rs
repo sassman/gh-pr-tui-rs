@@ -1070,14 +1070,11 @@ fn repos_reducer(
 fn log_panel_reducer(mut state: LogPanelState, action: &Action) -> (LogPanelState, Vec<Effect>) {
     match action {
         Action::BuildLogsLoaded(sections, pr_context) => {
-            state.panel = Some(crate::log::LogPanel {
-                log_sections: sections.clone(),
-                scroll_offset: 0,
-                current_section: 0,
-                horizontal_scroll: 0,
-                pr_context: pr_context.clone(),
-                show_timestamps: false,
-            });
+            // Convert legacy log sections into new unified format
+            state.panel = Some(crate::log::create_log_panel_from_sections(
+                sections.clone(),
+                pr_context.clone(),
+            ));
         }
         Action::CloseLogPanel => {
             state.panel = None;
@@ -1094,20 +1091,24 @@ fn log_panel_reducer(mut state: LogPanelState, action: &Action) -> (LogPanelStat
         }
         Action::ScrollLogPanelLeft => {
             if let Some(ref mut panel) = state.panel {
-                panel.horizontal_scroll = panel.horizontal_scroll.saturating_sub(1);
+                // Scroll left by 5 characters for better UX
+                panel.horizontal_scroll = panel.horizontal_scroll.saturating_sub(5);
             }
         }
         Action::ScrollLogPanelRight => {
             if let Some(ref mut panel) = state.panel {
-                panel.horizontal_scroll = panel.horizontal_scroll.saturating_add(1);
+                // Scroll right by 5 characters for better UX
+                panel.horizontal_scroll = panel.horizontal_scroll.saturating_add(5);
             }
         }
         Action::NextLogSection => {
             if let Some(ref mut panel) = state.panel {
-                if panel.current_section < panel.log_sections.len().saturating_sub(1) {
-                    panel.current_section += 1;
-                    panel.scroll_offset = 0;
-                }
+                panel.next_error();
+            }
+        }
+        Action::PrevLogSection => {
+            if let Some(ref mut panel) = state.panel {
+                panel.prev_error();
             }
         }
         Action::ToggleTimestamps => {

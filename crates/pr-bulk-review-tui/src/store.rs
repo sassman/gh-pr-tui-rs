@@ -80,7 +80,6 @@ impl Default for Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::*;
 
     #[test]
     fn test_store_dispatch_quit() {

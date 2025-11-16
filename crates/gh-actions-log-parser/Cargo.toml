@@ -1,0 +1,20 @@
+[package]
+name = "gh-actions-log-parser"
+version = "0.1.0"
+edition = "2024"
+authors = ["sassman"]
+description = "Parser for GitHub Actions workflow logs with ANSI color preservation and workflow command support"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/sassman/pr-bulk-review-tui-rs"
+
+[dependencies]
+ansi-parser = { workspace = true }
+zip = { workspace = true }
+bytes = { workspace = true }
+thiserror = { workspace = true }
+serde = { workspace = true }
+regex = { workspace = true }
+log = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }

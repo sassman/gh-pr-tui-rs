@@ -52,6 +52,12 @@ pub struct MergeBot {
     pub state: MergeBotState,
 }
 
+impl Default for MergeBot {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MergeBot {
     pub fn new() -> Self {
         Self {

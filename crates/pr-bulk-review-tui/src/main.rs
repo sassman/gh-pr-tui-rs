@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use octocrab::{Octocrab, params};
 use ratatui::{
     crossterm::{
@@ -11,7 +11,7 @@ use ratatui::{
     widgets::*,
 };
 use serde::{Deserialize, Serialize};
-use std::{fs::File, io::BufReader};
+use std::{fs::File, io::BufReader, sync::{Arc, Mutex}};
 use tokio::sync::mpsc;
 
 // Import debug from the log crate using :: prefix to disambiguate from our log module
@@ -19,7 +19,6 @@ use ::log::debug;
 
 use crate::config::Config;
 use crate::effect::execute_effect;
-use crate::gh::{comment, merge};
 use crate::pr::Pr;
 use crate::shortcuts::Action;
 use crate::state::*;
@@ -31,6 +30,7 @@ mod config;
 mod effect;
 mod gh;
 mod log;
+mod log_capture;
 mod merge_bot;
 mod pr;
 mod reducer;
@@ -135,18 +135,26 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
 fn start_event_handler(
     app: &App,
     tx: mpsc::UnboundedSender<Action>,
-) -> tokio::task::JoinHandle<()> {
+) -> (tokio::task::JoinHandle<()>, Arc<Mutex<bool>>) {
     let tick_rate = std::time::Duration::from_millis(250);
     // Clone the shared popup state flag for the event loop
     let show_add_repo_shared = app.store.state().ui.show_add_repo_shared.clone();
     // Clone the pending key state for two-key combinations
     let pending_key_shared = app.store.state().ui.pending_key.clone();
+    // Clone the shared log panel state for the event loop
+    let log_panel_open_shared = app.store.state().log_panel.log_panel_open_shared.clone();
+    let log_panel_open = log_panel_open_shared.clone();
+    // Create shared debug console state for event loop
+    let debug_console_open_shared = Arc::new(Mutex::new(false));
+    let debug_console_open = debug_console_open_shared.clone();
 
-    tokio::spawn(async move {
+    let handle = tokio::spawn(async move {
         loop {
             let action = if crossterm::event::poll(tick_rate).unwrap() {
                 let show_add_repo = *show_add_repo_shared.lock().unwrap();
-                handle_events(show_add_repo, &pending_key_shared).unwrap_or(Action::None)
+                let log_panel_open_val = *log_panel_open.lock().unwrap();
+                let console_open = *debug_console_open.lock().unwrap();
+                handle_events(show_add_repo, log_panel_open_val, console_open, &pending_key_shared).unwrap_or(Action::None)
             } else {
                 Action::None
             };
@@ -155,7 +163,9 @@ fn start_event_handler(
                 break;
             }
         }
-    })
+    });
+
+    (handle, debug_console_open_shared)
 }
 
 /// Convert TaskResult to Action - the single place where task results become actions
@@ -169,9 +179,13 @@ fn result_to_action(result: TaskResult) -> Action {
         TaskResult::RebaseStatusUpdated(idx, pr_num, needs_rebase) => {
             Action::RebaseStatusUpdated(idx, pr_num, needs_rebase)
         }
+        TaskResult::CommentCountUpdated(idx, pr_num, count) => {
+            Action::CommentCountUpdated(idx, pr_num, count)
+        }
         TaskResult::RebaseComplete(res) => Action::RebaseComplete(res),
         TaskResult::MergeComplete(res) => Action::MergeComplete(res),
         TaskResult::RerunJobsComplete(res) => Action::RerunJobsComplete(res),
+        TaskResult::ApprovalComplete(res) => Action::ApprovalComplete(res),
         TaskResult::BuildLogsLoaded(sections, ctx) => Action::BuildLogsLoaded(sections, ctx),
         TaskResult::IDEOpenComplete(res) => Action::IDEOpenComplete(res),
         TaskResult::PRMergedConfirmed(idx, pr_num, merged) => {
@@ -182,19 +196,28 @@ fn result_to_action(result: TaskResult) -> Action {
         TaskResult::RemoveFromAutoMergeQueue(idx, pr_num) => {
             Action::RemoveFromAutoMergeQueue(idx, pr_num)
         }
+        TaskResult::OperationMonitorCheck(idx, pr_num) => {
+            Action::OperationMonitorCheck(idx, pr_num)
+        }
+        TaskResult::RemoveFromOperationMonitor(idx, pr_num) => {
+            Action::RemoveFromOperationMonitor(idx, pr_num)
+        }
+        TaskResult::RepoNeedsReload(idx) => {
+            Action::ReloadRepo(idx)
+        }
     }
 }
 
-async fn run() -> Result<()> {
+async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
     let mut t = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel();
     let (task_tx, task_rx) = mpsc::unbounded_channel();
     let (result_tx, mut result_rx) = mpsc::unbounded_channel(); // New result channel
 
-    let mut app = App::new(action_tx.clone(), task_tx);
+    let mut app = App::new(action_tx.clone(), task_tx, log_buffer);
 
-    let event_task = start_event_handler(&app, app.action_tx.clone());
+    let (event_task, debug_console_shared) = start_event_handler(&app, app.action_tx.clone());
     let worker_task = start_task_worker(task_rx, result_tx);
 
     app.action_tx
@@ -205,6 +228,14 @@ async fn run() -> Result<()> {
         // Sync the shared popup state for event handler
         *app.store.state().ui.show_add_repo_shared.lock().unwrap() =
             app.store.state().ui.show_add_repo;
+
+        // Sync the shared debug console state for event handler
+        *debug_console_shared.lock().unwrap() =
+            app.store.state().debug_console.is_open;
+
+        // Sync the shared log panel state for event handler
+        *app.store.state().log_panel.log_panel_open_shared.lock().unwrap() =
+            app.store.state().log_panel.panel.is_some();
 
         t.draw(|f| {
             ui(f, &mut app);
@@ -562,6 +593,11 @@ fn ui(f: &mut Frame, app: &mut App) {
             &app.store.state().theme,
         );
     }
+
+    // Render debug console (Quake-style drop-down) if visible
+    if app.store.state().debug_console.is_open {
+        render_debug_console(f, f.area(), app);
+    }
 }
 
 /// Render the add repository popup as a centered floating window
@@ -836,6 +872,13 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
             format!("Rebase ({})", selected_count),
             tailwind::BLUE.c700,
         ));
+
+        // Show approval action for selected PRs
+        actions.push((
+            "a".to_string(),
+            format!("Approve ({})", selected_count),
+            tailwind::EMERALD.c600,
+        ));
     } else if !repo_data.prs.is_empty() {
         // When nothing selected, show how to select
         actions.push((
@@ -881,6 +924,11 @@ fn render_action_panel(f: &mut Frame, app: &App, area: Rect) {
                     "i".to_string(),
                     "Open in IDE".to_string(),
                     tailwind::INDIGO.c600,
+                ));
+                actions.push((
+                    "a".to_string(),
+                    "Approve".to_string(),
+                    tailwind::EMERALD.c600,
                 ));
             }
         }
@@ -931,6 +979,7 @@ fn render_status_line(f: &mut Frame, app: &App, area: Rect) {
             TaskStatusType::Running => ("⏳", app.store.state().theme.status_warning),
             TaskStatusType::Success => ("✓", app.store.state().theme.status_success),
             TaskStatusType::Error => ("✗", app.store.state().theme.status_error),
+            TaskStatusType::Warning => ("⚠", app.store.state().theme.status_warning),
         };
 
         let status_text = format!(" {} {}", icon, status.message);
@@ -1106,11 +1155,103 @@ fn render_bootstrap_screen(f: &mut Frame, app: &App) {
     f.render_widget(message_widget, chunks[7]);
 }
 
+/// Render the debug console as a Quake-style drop-down panel
+fn render_debug_console(f: &mut Frame, area: Rect, app: &App) {
+    use ratatui::widgets::{Clear, List, ListItem};
+
+    let console_state = &app.store.state().debug_console;
+    let theme = &app.store.state().theme;
+
+    // Calculate console height based on percentage
+    let console_height = (area.height * console_state.height_percent) / 100;
+    let console_area = Rect {
+        x: area.x,
+        y: area.y,
+        width: area.width,
+        height: console_height.min(area.height),
+    };
+
+    // Clear the area
+    f.render_widget(Clear, console_area);
+
+    // Read logs from buffer
+    let logs = console_state.logs.lock().unwrap();
+    let log_count = logs.len();
+
+    // Calculate visible range based on scroll offset
+    let visible_height = console_height.saturating_sub(3) as usize; // Subtract border and header
+    let total_logs = logs.len();
+
+    let scroll_offset = if console_state.auto_scroll {
+        // Auto-scroll: show most recent logs
+        total_logs.saturating_sub(visible_height)
+    } else {
+        // Manual scroll: use scroll_offset
+        console_state.scroll_offset.min(total_logs.saturating_sub(visible_height))
+    };
+
+    // Convert logs to ListItems with color coding
+    let log_items: Vec<ListItem> = logs
+        .iter()
+        .skip(scroll_offset)
+        .take(visible_height)
+        .map(|entry| {
+            use ::log::Level;
+
+            let level_color = match entry.level {
+                Level::Error => theme.status_error,
+                Level::Warn => theme.status_warning,
+                Level::Info => theme.text_primary,
+                Level::Debug => theme.text_secondary,
+                Level::Trace => theme.text_muted,
+            };
+
+            let timestamp = entry.timestamp.format("%H:%M:%S%.3f");
+            let level_str = format!("{:5}", entry.level.to_string().to_uppercase());
+            let target_short = if entry.target.len() > 20 {
+                format!("{}...", &entry.target[..17])
+            } else {
+                format!("{:20}", entry.target)
+            };
+
+            let text = format!(
+                "{} {} {} {}",
+                timestamp,
+                level_str,
+                target_short,
+                entry.message
+            );
+
+            ListItem::new(text).style(Style::default().fg(level_color))
+        })
+        .collect();
+
+    // Create the list widget
+    let logs_list = List::new(log_items)
+        .block(
+            Block::bordered()
+                .title(format!(
+                    " Debug Console ({}/{}) {} ",
+                    scroll_offset + visible_height.min(total_logs),
+                    log_count,
+                    if console_state.auto_scroll { "[AUTO]" } else { "[MANUAL]" }
+                ))
+                .title_bottom(" `~` Close | j/k Scroll | a Auto-scroll | c Clear ")
+                .border_style(Style::default().fg(theme.accent_primary))
+                .style(Style::default().bg(theme.bg_secondary))
+        );
+
+    f.render_widget(logs_list, console_area);
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Initialize debug console logger before anything else
+    let log_buffer = log_capture::init_logger();
+
     initialize_panic_handler();
     startup()?;
-    run().await?;
+    run_with_log_buffer(log_buffer).await?;
     shutdown()?;
     Ok(())
 }
@@ -1119,6 +1260,7 @@ impl App {
     fn new(
         action_tx: mpsc::UnboundedSender<Action>,
         task_tx: mpsc::UnboundedSender<BackgroundTask>,
+        log_buffer: log_capture::LogBuffer,
     ) -> App {
         // Initialize Redux store with default state
         let theme = Theme::default();
@@ -1131,6 +1273,10 @@ impl App {
             log_panel: LogPanelState::default(),
             merge_bot: MergeBotState::default(),
             task: TaskState::default(),
+            debug_console: DebugConsoleState {
+                logs: log_buffer,
+                ..DebugConsoleState::default()
+            },
             config: Config::load(),
             theme,
         };
@@ -1165,33 +1311,6 @@ impl App {
             .or_default()
     }
 
-    /// Save current state to the repo data before switching tabs
-    fn save_current_repo_state(&mut self) {
-        let selected_repo = self.store.state().repos.selected_repo;
-        let prs = self.store.state().repos.prs.clone();
-        let table_state = self.store.state().repos.state.clone();
-        let loading_state = self.store.state().repos.loading_state.clone();
-
-        let data = self
-            .store
-            .state_mut()
-            .repos
-            .repo_data
-            .entry(selected_repo)
-            .or_default();
-        data.prs = prs;
-        data.table_state = table_state;
-        data.loading_state = loading_state;
-    }
-
-    /// Load state from repo data when switching tabs
-    fn load_repo_state(&mut self) {
-        let data = self.get_current_repo_data();
-        self.store.state_mut().repos.prs = data.prs;
-        self.store.state_mut().repos.state = data.table_state;
-        self.store.state_mut().repos.loading_state = data.loading_state;
-    }
-
     fn octocrab(&self) -> Result<Octocrab> {
         // Return cached octocrab instance (initialized during bootstrap)
         self.octocrab.clone().ok_or_else(|| {
@@ -1207,332 +1326,7 @@ impl App {
             .get(self.store.state().repos.selected_repo)
     }
 
-    async fn restore_session(&mut self, state: PersistedState) -> Result<()> {
-        // Restore the selected repository from the persisted state
-        if let Some(index) = self
-            .store
-            .state()
-            .repos
-            .recent_repos
-            .iter()
-            .position(|r| r == &state.selected_repo)
-        {
-            self.store.state_mut().repos.selected_repo = index;
-        } else {
-            // If the persisted repo is not found, default to first repo
-            debug!("Persisted repository not found in recent repositories, defaulting to first");
-            self.store.state_mut().repos.selected_repo = 0;
-        }
 
-        Ok(())
-    }
-
-    /// Fetch data from GitHub for the selected repository and filter
-    async fn fetch_data(&mut self, repo: &Repo) -> Result<()> {
-        self.store.state_mut().repos.loading_state = LoadingState::Loading;
-
-        let octocrab = self.octocrab()?.clone();
-        let repo = repo.clone();
-        let filter = self.store.state().repos.filter.clone();
-
-        let github_data =
-            tokio::task::spawn(async move { fetch_github_data(&octocrab, &repo, &filter).await })
-                .await??;
-        self.store.state_mut().repos.prs = github_data;
-
-        self.store.state_mut().repos.loading_state = LoadingState::Loaded;
-
-        Ok(())
-    }
-
-    /// Move to the next PR in the list
-    fn next(&mut self) {
-        let repo_data = self.get_current_repo_data();
-        let i = match repo_data.table_state.selected() {
-            Some(i) => {
-                if i < repo_data.prs.len() - 1 {
-                    i + 1
-                } else {
-                    i
-                }
-            }
-            None => 0,
-        };
-
-        // Update both the repo data state and the app state
-        self.store.state_mut().repos.state.select(Some(i));
-        let selected_repo = self.store.state().repos.selected_repo;
-        let data = self
-            .store
-            .state_mut()
-            .repos
-            .repo_data
-            .entry(selected_repo)
-            .or_default();
-        data.table_state.select(Some(i));
-    }
-
-    /// Move to the previous PR in the list
-    fn previous(&mut self) {
-        let repo_data = self.get_current_repo_data();
-        let i = match repo_data.table_state.selected() {
-            Some(i) => {
-                if i > 0 {
-                    i - 1
-                } else {
-                    i
-                }
-            }
-            None => 0,
-        };
-
-        // Update both the repo data state and the app state
-        self.store.state_mut().repos.state.select(Some(i));
-        let selected_repo = self.store.state().repos.selected_repo;
-        let data = self
-            .store
-            .state_mut()
-            .repos
-            .repo_data
-            .entry(selected_repo)
-            .or_default();
-        data.table_state.select(Some(i));
-    }
-
-    /// Toggle the selection of the currently selected PR
-    fn select_toggle(&mut self) {
-        let repo_data = self.get_current_repo_data();
-        let i = repo_data.table_state.selected().unwrap_or(0);
-
-        // Get type-safe PR number for stable selection
-        let pr_number = if i < repo_data.prs.len() {
-            PrNumber::from_pr(&repo_data.prs[i])
-        } else {
-            return; // Invalid index, do nothing
-        };
-
-        // Update type-safe PR number-based selection (stable across filtering/reloading)
-        let selected_repo = self.store.state().repos.selected_repo;
-        let data = self
-            .store
-            .state_mut()
-            .repos
-            .repo_data
-            .entry(selected_repo)
-            .or_default();
-
-        if data.selected_pr_numbers.contains(&pr_number) {
-            data.selected_pr_numbers.remove(&pr_number);
-        } else {
-            data.selected_pr_numbers.insert(pr_number);
-        }
-    }
-
-    /// Select the next repo (cycle forward through tabs)
-    fn select_next_repo(&mut self) {
-        self.save_current_repo_state();
-        self.store.state_mut().repos.selected_repo = (self.store.state().repos.selected_repo + 1)
-            % self.store.state().repos.recent_repos.len();
-        self.load_repo_state();
-    }
-
-    /// Select the previous repo (cycle backward through tabs)
-    fn select_previous_repo(&mut self) {
-        self.save_current_repo_state();
-        self.store.state_mut().repos.selected_repo =
-            if self.store.state_mut().repos.selected_repo == 0 {
-                self.store.state().repos.recent_repos.len() - 1
-            } else {
-                self.store.state().repos.selected_repo - 1
-            };
-        self.load_repo_state();
-    }
-
-    /// Select a repo by index (for number key shortcuts)
-    fn select_repo_by_index(&mut self, index: usize) {
-        if index < self.store.state().repos.recent_repos.len() {
-            self.save_current_repo_state();
-            self.store.state_mut().repos.selected_repo = index;
-            self.load_repo_state();
-        }
-    }
-
-    /// Load data for all repositories in parallel on startup
-    async fn load_all_repos(&mut self) -> Result<()> {
-        let octocrab = self.octocrab()?;
-        let filter = self.store.state().repos.filter.clone();
-        let repos = self.store.state().repos.recent_repos.clone();
-
-        // Set all repos to loading state
-        for i in 0..repos.len() {
-            let data = self.store.state_mut().repos.repo_data.entry(i).or_default();
-            data.loading_state = LoadingState::Loading;
-        }
-
-        // Spawn tasks to fetch data for each repo in parallel
-        let mut tasks = Vec::new();
-        for (index, repo) in repos.iter().enumerate() {
-            let octocrab = octocrab.clone();
-            let repo = repo.clone();
-            let filter = filter.clone();
-
-            let task = tokio::spawn(async move {
-                let result = fetch_github_data(&octocrab, &repo, &filter).await;
-                (index, result)
-            });
-            tasks.push(task);
-        }
-
-        // Collect results as they complete
-        for task in tasks {
-            if let Ok((index, result)) = task.await {
-                let data = self
-                    .store
-                    .state_mut()
-                    .repos
-                    .repo_data
-                    .entry(index)
-                    .or_default();
-                match result {
-                    Ok(prs) => {
-                        data.prs = prs;
-                        data.loading_state = LoadingState::Loaded;
-                        if data.table_state.selected().is_none() && !data.prs.is_empty() {
-                            data.table_state.select(Some(0));
-                        }
-                    }
-                    Err(err) => {
-                        data.loading_state = LoadingState::Error(err.to_string());
-                    }
-                }
-            }
-        }
-
-        // Load the current repo state into the app
-        self.load_repo_state();
-
-        Ok(())
-    }
-
-    /// Refresh the current repository's data
-    async fn refresh_current_repo(&mut self) -> Result<()> {
-        let Some(repo) = self.repo().cloned() else {
-            bail!("No repository selected");
-        };
-
-        // Set to loading state
-        let selected_repo = self.store.state().repos.selected_repo;
-        self.store.state_mut().repos.loading_state = LoadingState::Loading;
-        let data = self
-            .store
-            .state_mut()
-            .repos
-            .repo_data
-            .entry(selected_repo)
-            .or_default();
-        data.loading_state = LoadingState::Loading;
-
-        self.fetch_data(&repo).await?;
-
-        // Update the repo data cache
-        let prs = self.store.state().repos.prs.clone();
-        let loading_state = self.store.state().repos.loading_state.clone();
-        let data = self
-            .store
-            .state_mut()
-            .repos
-            .repo_data
-            .entry(selected_repo)
-            .or_default();
-        data.prs = prs;
-        data.loading_state = loading_state;
-
-        Ok(())
-    }
-
-    async fn select_repo(&mut self) -> Result<()> {
-        let Some(repo) = self.repo().cloned() else {
-            bail!("No repository selected");
-        };
-        debug!("Selecting repo: {:?}", repo);
-
-        // This function is a placeholder for future implementation
-        // It could be used to select a specific repo from a list or input
-        self.store.state_mut().repos.selected_prs.clear();
-        self.fetch_data(&repo).await?;
-        self.store.state_mut().repos.state.select(Some(0));
-        Ok(())
-    }
-
-    /// Exit the application
-    fn exit(&mut self) -> Result<()> {
-        bail!("Exiting the application")
-    }
-
-    /// Rebase the selected PRs
-    async fn rebase(&mut self) -> Result<()> {
-        // for all selected PRs, authored by `dependabot` we rebase by adding the commend `@dependabot rebase`
-
-        let Some(repo) = self.repo() else {
-            bail!("No repository selected for rebasing");
-        };
-        let octocrab = self.octocrab()?;
-        for &pr_index in &self.store.state().repos.selected_prs {
-            if let Some(pr) = self.store.state().repos.prs.get(pr_index) {
-                if pr.author.starts_with("dependabot") {
-                    debug!("Rebasing PR #{}", pr.number);
-
-                    comment(&octocrab, repo, pr, "@dependabot rebase").await?;
-                } else {
-                    debug!("Skipping PR #{} authored by {}", pr.number, pr.author);
-                }
-            } else {
-                debug!("No PR found at index {}", pr_index);
-            }
-        }
-        debug!(
-            "Rebasing selected PRs: {:?}",
-            self.store.state().repos.selected_prs
-        );
-
-        Ok(())
-    }
-
-    /// Merge the selected PRs
-    async fn merge(&mut self) -> Result<()> {
-        let Some(repo) = self.repo() else {
-            bail!("No repository selected for merging");
-        };
-        let octocrab = self.octocrab()?;
-        let mut selected_prs = self.store.state().repos.selected_prs.clone();
-        for &pr_index in self.store.state().repos.selected_prs.iter() {
-            if let Some(pr) = self.store.state().repos.prs.get(pr_index) {
-                debug!("Merging PR #{}", pr.number);
-                match merge(&octocrab, repo, pr).await {
-                    Ok(_) => {
-                        debug!("Successfully merged PR #{}", pr.number);
-                        selected_prs.retain(|&x| x != pr_index);
-                    }
-                    Err(err) => {
-                        debug!("Failed to merge PR #{}: {}", pr.number, err);
-                    }
-                }
-            } else {
-                debug!("No PR found at index {}", pr_index);
-            }
-        }
-
-        // todo: now clean up `self.store.state().repos.prs` by those that are not in `selected_prs` anymore,
-        // there the index of the PRs is to take
-
-        self.store.state_mut().repos.selected_prs = selected_prs;
-        debug!(
-            "Merging selected PRs: {:?}",
-            self.store.state().repos.selected_prs
-        );
-
-        Ok(())
-    }
 }
 
 pub async fn fetch_github_data<'a>(
@@ -1552,8 +1346,6 @@ pub async fn fetch_github_data<'a>(
             .list()
             .state(params::State::Open)
             .head(&repo.branch)
-            .sort(params::pulls::Sort::Updated)
-            .direction(params::Direction::Ascending)
             .per_page(PER_PAGE)
             .page(page_num)
             .send()
@@ -1582,16 +1374,21 @@ pub async fn fetch_github_data<'a>(
         page_num += 1;
     }
 
+    // Sort by PR number (descending) for stable, predictable ordering
+    prs.sort_by(|a, b| b.number.cmp(&a.number));
+
     Ok(prs)
 }
 
 fn handle_events(
     show_add_repo: bool,
+    log_panel_open: bool,
+    debug_console_open: bool,
     pending_key_shared: &std::sync::Arc<std::sync::Mutex<Option<crate::state::PendingKeyPress>>>,
 ) -> Result<Action> {
     Ok(match event::read()? {
         Event::Key(key) if key.kind == KeyEventKind::Press => {
-            handle_key_event(key, show_add_repo, pending_key_shared)
+            handle_key_event(key, show_add_repo, log_panel_open, debug_console_open, pending_key_shared)
         }
         _ => Action::None,
     })
@@ -1600,6 +1397,8 @@ fn handle_events(
 fn handle_key_event(
     key: KeyEvent,
     show_add_repo: bool,
+    log_panel_open: bool,
+    debug_console_open: bool,
     pending_key_shared: &std::sync::Arc<std::sync::Mutex<Option<crate::state::PendingKeyPress>>>,
 ) -> Action {
     // Handle add repo popup keys first if popup is open
@@ -1611,6 +1410,68 @@ fn handle_key_event(
             KeyCode::Backspace => return Action::AddRepoFormBackspace,
             KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
                 return Action::AddRepoFormInput(c);
+            }
+            _ => return Action::None,
+        }
+    }
+
+    // Handle log panel keys if panel is open (before general shortcuts)
+    if log_panel_open {
+        match key.code {
+            // Close panel (x or Esc)
+            KeyCode::Char('x') | KeyCode::Esc => {
+                return Action::CloseLogPanel;
+            }
+            // Vertical scrolling (j/k or up/down)
+            KeyCode::Char('j') | KeyCode::Down => {
+                return Action::ScrollLogPanelDown;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                return Action::ScrollLogPanelUp;
+            }
+            // Horizontal scrolling (h/l or left/right)
+            KeyCode::Char('h') | KeyCode::Left => {
+                return Action::ScrollLogPanelLeft;
+            }
+            KeyCode::Char('l') | KeyCode::Right => {
+                return Action::ScrollLogPanelRight;
+            }
+            // Error navigation (n/p)
+            KeyCode::Char('n') => {
+                return Action::NextLogSection;
+            }
+            KeyCode::Char('p') => {
+                return Action::PrevLogSection;
+            }
+            // Toggle timestamps
+            KeyCode::Char('t') => {
+                return Action::ToggleTimestamps;
+            }
+            _ => return Action::None,
+        }
+    }
+
+    // Handle debug console keys if console is open (before general shortcuts)
+    if debug_console_open {
+        match key.code {
+            // Toggle console (backtick/tilde or Esc to close)
+            KeyCode::Char('`') | KeyCode::Char('~') | KeyCode::Esc => {
+                return Action::ToggleDebugConsole;
+            }
+            // Scroll up/down
+            KeyCode::Char('j') | KeyCode::Down => {
+                return Action::ScrollDebugConsoleDown;
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                return Action::ScrollDebugConsoleUp;
+            }
+            // Toggle auto-scroll
+            KeyCode::Char('a') => {
+                return Action::ToggleDebugAutoScroll;
+            }
+            // Clear logs
+            KeyCode::Char('c') => {
+                return Action::ClearDebugLogs;
             }
             _ => return Action::None,
         }

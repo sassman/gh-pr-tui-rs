@@ -1,0 +1,27 @@
+[package]
+name = "pr-bulk-review-tui"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "pr-bulk-review-tui"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+octocrab = { workspace = true }
+ratatui = { workspace = true }
+chrono = { workspace = true }
+env_logger = { workspace = true }
+log = { workspace = true }
+tokio = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+serde = { workspace = true }
+toml = { workspace = true }
+zip = { workspace = true }
+bytes = { workspace = true }
+dotenvy = { workspace = true }
+
+# Local crates
+gh-actions-log-parser = { path = "../gh-actions-log-parser" }

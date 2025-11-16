@@ -40,21 +40,21 @@ impl Config {
         const CONFIG_FILE: &str = "pr-bulk-review.toml";
 
         // Try current directory first
-        if let Ok(content) = std::fs::read_to_string(CONFIG_FILE) {
-            if let Ok(config) = toml::from_str(&content) {
-                log::debug!("Loaded config from {}", CONFIG_FILE);
-                return config;
-            }
+        if let Ok(content) = std::fs::read_to_string(CONFIG_FILE)
+            && let Ok(config) = toml::from_str(&content)
+        {
+            log::debug!("Loaded config from {}", CONFIG_FILE);
+            return config;
         }
 
         // Try home directory
         if let Some(home) = env::var_os("HOME") {
             let home_config = PathBuf::from(home).join(format!(".{}", CONFIG_FILE));
-            if let Ok(content) = std::fs::read_to_string(&home_config) {
-                if let Ok(config) = toml::from_str(&content) {
-                    log::debug!("Loaded config from {}", home_config.display());
-                    return config;
-                }
+            if let Ok(content) = std::fs::read_to_string(&home_config)
+                && let Ok(config) = toml::from_str(&content)
+            {
+                log::debug!("Loaded config from {}", home_config.display());
+                return config;
             }
         }
 
