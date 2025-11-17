@@ -26,7 +26,7 @@ mod commands;
 mod parser;
 
 pub use types::*;
-pub use parser::parse_workflow_logs;
+pub use parser::{parse_workflow_logs, job_log_to_tree};
 
 #[cfg(test)]
 mod tests {

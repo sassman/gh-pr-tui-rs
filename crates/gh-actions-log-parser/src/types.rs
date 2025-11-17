@@ -24,6 +24,9 @@ pub struct LogLine {
     /// Raw text content (ANSI codes preserved)
     pub content: String,
 
+    /// Cleaned display content (workflow commands removed, ready for display)
+    pub display_content: String,
+
     /// Extracted timestamp (if present in GitHub Actions format)
     pub timestamp: Option<String>,
 
@@ -38,6 +41,10 @@ pub struct LogLine {
 
     /// Title of the containing group (if inside a group)
     pub group_title: Option<String>,
+
+    /// True if this line is pure metadata that should be hidden in normal view
+    /// (e.g., ##[endgroup] with no message, empty lines with commands)
+    pub is_metadata: bool,
 }
 
 /// A segment of text with preserved ANSI styling
@@ -209,13 +216,16 @@ impl JobLog {
 impl LogLine {
     /// Create a new log line with just content
     pub fn new(content: String) -> Self {
+        let display_content = content.clone();
         Self {
             content,
+            display_content,
             timestamp: None,
             styled_segments: Vec::new(),
             command: None,
             group_level: 0,
             group_title: None,
+            is_metadata: false,
         }
     }
 
@@ -226,6 +236,11 @@ impl LogLine {
             .map(|seg| seg.text.as_str())
             .collect::<Vec<_>>()
             .join("")
+    }
+
+    /// Check if this line should be displayed (not pure metadata)
+    pub fn should_display(&self) -> bool {
+        !self.is_metadata
     }
 }
 
@@ -241,5 +256,68 @@ impl StyledSegment {
     /// Create a segment with specific styling
     pub fn with_style(text: String, style: AnsiStyle) -> Self {
         Self { text, style }
+    }
+}
+
+/// Hierarchical view of workflow logs
+/// Structure: Workflow contains Jobs, Jobs contain Steps, Steps contain Lines
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogTree {
+    /// Root-level workflows
+    pub workflows: Vec<WorkflowNode>,
+}
+
+/// A workflow containing multiple jobs
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkflowNode {
+    /// Workflow name (e.g., "CI", "Deploy")
+    pub name: String,
+    /// Jobs within this workflow
+    pub jobs: Vec<JobNode>,
+    /// Total error count across all jobs
+    pub total_errors: usize,
+    /// Whether any job failed
+    pub has_failures: bool,
+}
+
+/// A job within a workflow
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct JobNode {
+    /// Original job log name from ZIP
+    pub name: String,
+    /// Steps within this job
+    pub steps: Vec<StepNode>,
+    /// Total errors in this job
+    pub error_count: usize,
+}
+
+/// A step within a job (corresponds to ::group:: sections)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StepNode {
+    /// Step name from ::group:: title
+    pub name: String,
+    /// Log lines in this step
+    pub lines: Vec<LogLine>,
+    /// Error count in this step
+    pub error_count: usize,
+}
+
+impl LogTree {
+    /// Create an empty log tree
+    pub fn new() -> Self {
+        Self {
+            workflows: Vec::new(),
+        }
+    }
+
+    /// Count total errors across all workflows
+    pub fn total_errors(&self) -> usize {
+        self.workflows.iter().map(|w| w.total_errors).sum()
+    }
+}
+
+impl Default for LogTree {
+    fn default() -> Self {
+        Self::new()
     }
 }

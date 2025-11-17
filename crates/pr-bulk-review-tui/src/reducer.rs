@@ -1070,10 +1070,10 @@ fn repos_reducer(
 /// Log panel state reducer
 fn log_panel_reducer(mut state: LogPanelState, action: &Action) -> (LogPanelState, Vec<Effect>) {
     match action {
-        Action::BuildLogsLoaded(sections, pr_context) => {
-            // Convert legacy log sections into new unified format
-            state.panel = Some(crate::log::create_log_panel_from_sections(
-                sections.clone(),
+        Action::BuildLogsLoaded(jobs, pr_context) => {
+            // Create master-detail log panel from job logs
+            state.panel = Some(crate::log::create_log_panel_from_jobs(
+                jobs.clone(),
                 pr_context.clone(),
             ));
         }
@@ -1111,12 +1111,14 @@ fn log_panel_reducer(mut state: LogPanelState, action: &Action) -> (LogPanelStat
         }
         Action::NextLogSection => {
             if let Some(ref mut panel) = state.panel {
-                panel.next_error();
+                panel.find_next_error();
             }
         }
         Action::PrevLogSection => {
             if let Some(ref mut panel) = state.panel {
-                panel.prev_error();
+                // Find previous error - move up until we find a node with errors
+                // For now, just navigate up
+                panel.navigate_up();
             }
         }
         Action::ToggleTimestamps => {
@@ -1127,6 +1129,39 @@ fn log_panel_reducer(mut state: LogPanelState, action: &Action) -> (LogPanelStat
         Action::UpdateLogPanelViewport(height) => {
             if let Some(ref mut panel) = state.panel {
                 panel.viewport_height = *height;
+            }
+        }
+        // Tree navigation
+        Action::SelectNextJob => {
+            if let Some(ref mut panel) = state.panel {
+                panel.navigate_down();
+            }
+        }
+        Action::SelectPrevJob => {
+            if let Some(ref mut panel) = state.panel {
+                panel.navigate_up();
+            }
+        }
+        Action::ToggleTreeNode => {
+            if let Some(ref mut panel) = state.panel {
+                panel.toggle_at_cursor();
+            }
+        }
+        Action::FocusJobList => {
+            // No-op in tree view - unified view has no separate focus
+        }
+        Action::FocusLogViewer => {
+            // No-op in tree view - unified view has no separate focus
+        }
+        // Step navigation
+        Action::NextStep => {
+            if let Some(ref mut panel) = state.panel {
+                panel.navigate_down();
+            }
+        }
+        Action::PrevStep => {
+            if let Some(ref mut panel) = state.panel {
+                panel.navigate_up();
             }
         }
         _ => {}

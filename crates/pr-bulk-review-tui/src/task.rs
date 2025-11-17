@@ -2,7 +2,7 @@
 use crate::{
     PrFilter,
     gh::{comment, merge},
-    log::{LogSection, PrContext},
+    log::PrContext,
     pr::{MergeableStatus, Pr},
     state::{Repo, TaskStatus},
 };
@@ -42,8 +42,8 @@ pub enum TaskResult {
     /// PR approval operation completed
     ApprovalComplete(Result<(), String>),
 
-    /// Build logs loaded
-    BuildLogsLoaded(Vec<LogSection>, PrContext),
+    /// Build logs loaded - Vec of (metadata, logs) pairs
+    BuildLogsLoaded(Vec<(crate::log::JobMetadata, gh_actions_log_parser::JobLog)>, crate::log::PrContext),
 
     /// IDE open operation completed
     IDEOpenComplete(Result<(), String>),
@@ -727,6 +727,9 @@ pub fn start_task_worker(
                             id: u64,
                             name: String,
                             html_url: String,
+                            conclusion: Option<String>,
+                            started_at: String,
+                            completed_at: Option<String>,
                         }
 
                         let jobs_response: Result<JobsResponse, _> =
@@ -747,145 +750,118 @@ pub fn start_task_worker(
                                 // Parse using the gh-actions-log-parser crate
                                 match gh_actions_log_parser::parse_workflow_logs(&log_data) {
                                     Ok(parsed_log) => {
-                                        // Process each job's logs separately
+                                        // Process each job's logs and build metadata
                                         for job_log in parsed_log.jobs {
-                                            // Try to find matching job URL by name
-                                            let job_url = if let Ok(ref jobs) = jobs_response {
+                                            // Try to find matching GitHub API job by name
+                                            let github_job = if let Ok(ref jobs) = jobs_response {
                                                 jobs.jobs
                                                     .iter()
                                                     .find(|j| job_log.name.contains(&j.name))
-                                                    .map(|j| j.html_url.clone())
                                             } else {
                                                 None
                                             };
 
-                                            let mut job_metadata = metadata_lines.clone();
-                                            job_metadata.push(format!("Job: {}", job_log.name));
-                                            if let Some(url) = &job_url {
-                                                job_metadata.push(format!("Job URL: {}", url));
+                                            // Extract real job name from log content (look for "Complete job name:" line)
+                                            let mut display_name = job_log.name.clone();
+                                            for line in &job_log.lines {
+                                                if line.content.contains("Complete job name:") {
+                                                    // Extract: "2025-11-15T19:56:48.3220210Z Complete job name: lint (macos-latest, clippy)"
+                                                    if let Some(name_part) = line.content.split("Complete job name:").nth(1) {
+                                                        display_name = name_part.trim().to_string();
+                                                        break;
+                                                    }
+                                                }
                                             }
-                                            job_metadata.push("".to_string());
 
-                                            // Convert LogLines to text content for legacy error extraction
-                                            let content_lines: Vec<String> = job_log
-                                                .lines
-                                                .iter()
-                                                .map(|line| line.content.clone())
-                                                .collect();
-                                            let full_log_text = content_lines.join("\n");
-                                            let error_context = crate::log::extract_error_context(
-                                                &full_log_text,
-                                                &job_log.name,
-                                            );
+                                            // Count errors in this job
+                                            let error_count = job_log.lines.iter().filter(|line| {
+                                                // Count lines with error workflow command OR containing "error:"
+                                                if let Some(ref cmd) = line.command {
+                                                    matches!(cmd, gh_actions_log_parser::WorkflowCommand::Error { .. })
+                                                } else {
+                                                    line.content.to_lowercase().contains("error:")
+                                                }
+                                            }).count();
 
-                                            if !error_context.is_empty() {
-                                                // We found specific errors - create error context section
-                                                let mut error_lines = job_metadata.clone();
-                                                error_lines.push("Error Context:".to_string());
-                                                error_lines.push("".to_string());
-                                                error_lines.extend(error_context);
-
-                                                log_sections.push(LogSection {
-                                                    step_name: format!(
-                                                        "{} / {} - Errors",
-                                                        workflow_name, job_log.name
-                                                    ),
-                                                    error_lines,
-                                                    has_extracted_errors: true,
-                                                });
-
-                                                // Also create full log section (will be sorted to bottom)
-                                                let mut full_lines = job_metadata.clone();
-                                                full_lines.push("Full Job Logs:".to_string());
-                                                full_lines.push("".to_string());
-                                                full_lines.extend(content_lines.clone());
-
-                                                log_sections.push(LogSection {
-                                                    step_name: format!(
-                                                        "{} / {} - Full Log",
-                                                        workflow_name, job_log.name
-                                                    ),
-                                                    error_lines: full_lines,
-                                                    has_extracted_errors: false,
-                                                });
+                                            // Parse job status from GitHub API
+                                            let status = if let Some(job) = github_job {
+                                                match job.conclusion.as_deref() {
+                                                    Some("success") => crate::log::JobStatus::Success,
+                                                    Some("failure") => crate::log::JobStatus::Failure,
+                                                    Some("cancelled") => crate::log::JobStatus::Cancelled,
+                                                    Some("skipped") => crate::log::JobStatus::Skipped,
+                                                    None => crate::log::JobStatus::InProgress,
+                                                    _ => crate::log::JobStatus::Unknown,
+                                                }
                                             } else {
-                                                // No specific errors found - just show full log
-                                                let mut full_lines = job_metadata;
-                                                full_lines.push("Job Logs:".to_string());
-                                                full_lines.push("".to_string());
-                                                full_lines.extend(content_lines);
+                                                // Infer from error count if no API data
+                                                if error_count > 0 {
+                                                    crate::log::JobStatus::Failure
+                                                } else {
+                                                    crate::log::JobStatus::Success
+                                                }
+                                            };
 
-                                                log_sections.push(LogSection {
-                                                    step_name: format!(
-                                                        "{} / {}",
-                                                        workflow_name, job_log.name
-                                                    ),
-                                                    error_lines: full_lines,
-                                                    has_extracted_errors: false,
-                                                });
-                                            }
+                                            // Calculate duration from GitHub API
+                                            let duration = if let Some(job) = github_job {
+                                                if let Some(ref completed) = job.completed_at {
+                                                    // Parse timestamps and calculate duration
+                                                    use chrono::DateTime;
+                                                    if let (Ok(started), Ok(completed)) = (
+                                                        DateTime::parse_from_rfc3339(&job.started_at),
+                                                        DateTime::parse_from_rfc3339(completed),
+                                                    ) {
+                                                        let duration = completed.signed_duration_since(started);
+                                                        Some(std::time::Duration::from_secs(duration.num_seconds().max(0) as u64))
+                                                    } else {
+                                                        None
+                                                    }
+                                                } else {
+                                                    None
+                                                }
+                                            } else {
+                                                None
+                                            };
+
+                                            // Build job metadata
+                                            let metadata = crate::log::JobMetadata {
+                                                name: display_name,
+                                                workflow_name: workflow_name.clone(),
+                                                status,
+                                                error_count,
+                                                duration,
+                                                html_url: github_job.map(|j| j.html_url.clone()).unwrap_or_default(),
+                                            };
+
+                                            // Add to jobs list (preserve full JobLog from parser)
+                                            log_sections.push((metadata, job_log));
                                         }
                                     }
-                                    Err(err) => {
-                                        let mut error_lines = metadata_lines;
-                                        error_lines.push(format!("Failed to parse logs: {}", err));
-                                        error_lines.push("".to_string());
-                                        error_lines.push(format!(
-                                            "View logs at: {}",
-                                            workflow_run.html_url
-                                        ));
-
-                                        log_sections.push(LogSection {
-                                            step_name: format!(
-                                                "{} [{}]",
-                                                workflow_name, conclusion_str
-                                            ),
-                                            error_lines,
-                                            has_extracted_errors: false,
-                                        });
+                                    Err(_err) => {
+                                        // Parser error - skip this workflow run
+                                        // User will see error in the PR list or can open in browser
                                     }
                                 }
                             }
                             Err(_) => {
-                                let mut error_lines = metadata_lines;
-                                error_lines.push("Unable to download logs via API".to_string());
-                                error_lines.push(
-                                    "This may require authentication or the logs may have expired."
-                                        .to_string(),
-                                );
-                                error_lines.push("".to_string());
-                                error_lines
-                                    .push(format!("View logs at: {}", workflow_run.html_url));
-
-                                log_sections.push(LogSection {
-                                    step_name: format!("{} [{}]", workflow_name, conclusion_str),
-                                    error_lines,
-                                    has_extracted_errors: false,
-                                });
+                                // Download error - skip this workflow run
+                                // Common if logs expired or auth issues
                             }
                         }
                     }
 
-                    // Sort sections: error contexts first, full logs last
-                    log_sections.sort_by_key(|section| !section.has_extracted_errors);
-
-                    // If we didn't find any workflow runs, add a helpful message
-                    if log_sections.is_empty() {
-                        log_sections.push(LogSection {
-                            step_name: "No Workflow Runs Found".to_string(),
-                            error_lines: vec![
-                                "This PR doesn't have any GitHub Actions workflow runs.".to_string(),
-                                "".to_string(),
-                                "This could mean:".to_string(),
-                                "- No GitHub Actions workflows configured for this repository".to_string(),
-                                "- Workflows haven't been triggered yet for this commit".to_string(),
-                                "- CI/CD is using a different system (CircleCI, Travis, Jenkins, etc.)".to_string(),
-                                "".to_string(),
-                                "Try opening the PR in browser (press Enter) to check for other CI systems.".to_string(),
-                            ],
-                            has_extracted_errors: false,
-                        });
-                    }
+                    // Sort jobs: failed first, then successful
+                    // UI will display them in order with failed at top
+                    log_sections.sort_by_key(|(metadata, _)| {
+                        match metadata.status {
+                            crate::log::JobStatus::Failure => 0,
+                            crate::log::JobStatus::Cancelled => 1,
+                            crate::log::JobStatus::InProgress => 2,
+                            crate::log::JobStatus::Unknown => 3,
+                            crate::log::JobStatus::Skipped => 4,
+                            crate::log::JobStatus::Success => 5,
+                        }
+                    });
 
                     let _ = result_tx.send(TaskResult::BuildLogsLoaded(log_sections, pr_context));
                 }

@@ -90,8 +90,8 @@ fn parse_job_log(job_name: &str, content: &str) -> JobLog {
             .collect();
 
         // Parse workflow command if present
-        let command = match parse_command(&plain_text) {
-            Some((cmd, _msg)) => {
+        let (command, display_content, is_metadata) = match parse_command(&plain_text) {
+            Some((cmd, cleaned_msg)) => {
                 // Update group tracker based on command
                 match &cmd {
                     WorkflowCommand::GroupStart { title } => {
@@ -103,9 +103,16 @@ fn parse_job_log(job_name: &str, content: &str) -> JobLog {
                     _ => {}
                 }
 
-                Some(cmd)
+                // Determine if this is pure metadata (should be hidden)
+                let is_metadata = match &cmd {
+                    WorkflowCommand::GroupEnd => cleaned_msg.is_empty(),
+                    WorkflowCommand::Debug { message } if message.is_empty() => true,
+                    _ => false,
+                };
+
+                (Some(cmd), cleaned_msg, is_metadata)
             }
-            None => None,
+            None => (None, plain_text.clone(), false),
         };
 
         // Get current group state
@@ -114,11 +121,13 @@ fn parse_job_log(job_name: &str, content: &str) -> JobLog {
         // Create log line
         lines.push(LogLine {
             content: line_content.to_string(), // Keep raw content with ANSI
+            display_content,
             timestamp,
             styled_segments,
             command,
             group_level,
             group_title,
+            is_metadata,
         });
     }
 
@@ -126,6 +135,87 @@ fn parse_job_log(job_name: &str, content: &str) -> JobLog {
         name: job_name.to_string(),
         lines,
     }
+}
+
+/// Convert a JobLog to a hierarchical JobNode with steps
+pub fn job_log_to_tree(job_log: JobLog) -> crate::types::JobNode {
+    let mut steps: Vec<crate::types::StepNode> = Vec::new();
+    let mut current_step_lines: Vec<LogLine> = Vec::new();
+    let mut current_step_name: Option<String> = None;
+
+    for line in job_log.lines {
+        // Check for step boundaries
+        if let Some(ref cmd) = line.command {
+            match cmd {
+                WorkflowCommand::GroupStart { title } => {
+                    // Save previous step if exists
+                    if let Some(step_name) = current_step_name.take() {
+                        let error_count = count_step_errors(&current_step_lines);
+                        steps.push(crate::types::StepNode {
+                            name: step_name,
+                            lines: current_step_lines.clone(),
+                            error_count,
+                        });
+                        current_step_lines.clear();
+                    }
+
+                    // Start new step
+                    current_step_name = Some(title.clone());
+                }
+                WorkflowCommand::GroupEnd => {
+                    // End current step
+                    if let Some(step_name) = current_step_name.take() {
+                        let error_count = count_step_errors(&current_step_lines);
+                        steps.push(crate::types::StepNode {
+                            name: step_name,
+                            lines: current_step_lines.clone(),
+                            error_count,
+                        });
+                        current_step_lines.clear();
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Add non-metadata lines to current step
+        if !line.is_metadata {
+            current_step_lines.push(line);
+        }
+    }
+
+    // Save final step if exists
+    if let Some(step_name) = current_step_name {
+        let error_count = count_step_errors(&current_step_lines);
+        steps.push(crate::types::StepNode {
+            name: step_name,
+            lines: current_step_lines,
+            error_count,
+        });
+    }
+
+    // Calculate total job error count
+    let error_count: usize = steps.iter().map(|s| s.error_count).sum();
+
+    crate::types::JobNode {
+        name: job_log.name,
+        steps,
+        error_count,
+    }
+}
+
+/// Count errors in a list of log lines
+fn count_step_errors(lines: &[LogLine]) -> usize {
+    lines
+        .iter()
+        .filter(|line| {
+            if let Some(ref cmd) = line.command {
+                matches!(cmd, WorkflowCommand::Error { .. })
+            } else {
+                line.display_content.to_lowercase().contains("error:")
+            }
+        })
+        .count()
 }
 
 /// Extract timestamp from GitHub Actions log line format

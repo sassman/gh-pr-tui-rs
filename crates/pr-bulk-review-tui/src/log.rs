@@ -2,7 +2,54 @@ use ratatui::{
     prelude::*,
     widgets::*,
 };
-use gh_actions_log_parser::{AnsiStyle, Color as ParserColor, NamedColor, StyledSegment};
+use gh_actions_log_parser::{AnsiStyle, Color as ParserColor, JobLog, NamedColor, StyledSegment};
+use std::time::Duration;
+
+/// Job execution status
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum JobStatus {
+    Success,
+    Failure,
+    Cancelled,
+    Skipped,
+    InProgress,
+    Unknown,
+}
+
+impl JobStatus {
+    pub fn icon(&self) -> &'static str {
+        match self {
+            JobStatus::Success => "✓",
+            JobStatus::Failure => "✗",
+            JobStatus::Cancelled => "⊘",
+            JobStatus::Skipped => "⊝",
+            JobStatus::InProgress => "⋯",
+            JobStatus::Unknown => "?",
+        }
+    }
+
+    pub fn color(&self, theme: &crate::theme::Theme) -> ratatui::style::Color {
+        match self {
+            JobStatus::Success => theme.status_success,
+            JobStatus::Failure => theme.status_error,
+            JobStatus::Cancelled => theme.text_muted,
+            JobStatus::Skipped => theme.text_muted,
+            JobStatus::InProgress => theme.status_warning,
+            JobStatus::Unknown => theme.text_secondary,
+        }
+    }
+}
+
+/// Metadata for a single build job
+#[derive(Debug, Clone)]
+pub struct JobMetadata {
+    pub name: String,           // Full job name (e.g., "lint (macos-latest, clippy)")
+    pub workflow_name: String,  // Workflow name (e.g., "CI")
+    pub status: JobStatus,      // Success/Failure/etc
+    pub error_count: usize,     // Number of errors found
+    pub duration: Option<Duration>, // Job duration
+    pub html_url: String,       // GitHub URL to job
+}
 
 /// Represents a single line in the log with metadata
 #[derive(Debug, Clone)]
@@ -36,21 +83,44 @@ pub enum ErrorLevel {
     Critical,
 }
 
+/// UI state for a tree node (expanded/collapsed)
+#[derive(Debug, Clone)]
+pub struct TreeNodeState {
+    /// Path to this node: [workflow_idx, job_idx, step_idx]
+    pub path: Vec<usize>,
+    /// Is this node expanded?
+    pub expanded: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct LogPanel {
-    /// All log lines in a flat unified view
-    pub lines: Vec<LogLine>,
-    /// Indices of lines that contain errors (for fast n/p navigation)
-    pub error_indices: Vec<usize>,
-    /// Current error index we're focused on (index into error_indices)
-    pub current_error_idx: usize,
-    /// Scroll offset (line number at top of viewport)
+    /// Tree data from parser (WorkflowNode contains JobNode contains StepNode)
+    pub workflows: Vec<gh_actions_log_parser::WorkflowNode>,
+
+    /// Job metadata from GitHub API (indexed by workflow.name + job.name)
+    pub job_metadata: std::collections::HashMap<String, JobMetadata>,
+
+    /// UI state: which nodes are expanded
+    /// Key: "workflow_idx" or "workflow_idx:job_idx" or "workflow_idx:job_idx:step_idx"
+    pub expanded_nodes: std::collections::HashSet<String>,
+
+    /// Current cursor position in tree (path from root)
+    /// [workflow_idx, job_idx, step_idx]
+    /// Length indicates depth: 1=workflow, 2=job, 3=step
+    pub cursor_path: Vec<usize>,
+
+    /// Scroll offset (which tree node is at top of viewport)
     pub scroll_offset: usize,
+
+    /// Horizontal scroll (for long log lines)
     pub horizontal_scroll: usize,
-    pub pr_context: PrContext,
+
+    // UI state
     pub show_timestamps: bool,
-    /// Viewport height (updated during rendering for page down)
+    /// Viewport height (updated during rendering)
     pub viewport_height: usize,
+    /// PR context for header
+    pub pr_context: PrContext,
 }
 
 #[derive(Debug, Clone)]
@@ -229,194 +299,140 @@ pub fn render_log_panel_card(f: &mut Frame, panel: &LogPanel, theme: &crate::the
 /// OPTIMIZED: Only renders visible lines (viewport-based rendering)
 /// Returns the visible viewport height for page down scrolling
 fn render_log_panel_content(f: &mut Frame, panel: &LogPanel, area: Rect, theme: &crate::theme::Theme) -> usize {
-    let visible_height = area.height.saturating_sub(2) as usize; // -2 for borders
+    if panel.workflows.is_empty() {
+        let empty_msg = Paragraph::new("No build logs found")
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Build Logs ")
+                    .border_style(Style::default().fg(theme.accent_primary))
+                    .style(Style::default().bg(theme.bg_panel)),
+            )
+            .style(Style::default().fg(theme.text_muted).bg(theme.bg_panel))
+            .alignment(ratatui::layout::Alignment::Center);
+        f.render_widget(empty_msg, area);
+        return 0;
+    }
 
-    // Calculate viewport (only render visible lines)
-    let total_lines = panel.lines.len();
-    let max_scroll = total_lines.saturating_sub(visible_height);
-    let start_line = panel.scroll_offset.min(max_scroll);
-    let end_line = (start_line + visible_height).min(total_lines);
+    render_log_tree(f, panel, area, theme)
+}
 
-    // Get current error line index (for highlighting)
-    let current_error_line = panel.error_indices.get(panel.current_error_idx).copied();
+/// Render the tree view of workflows/jobs/steps
+fn render_log_tree(f: &mut Frame, panel: &LogPanel, area: Rect, theme: &crate::theme::Theme) -> usize {
+    let visible_height = area.height.saturating_sub(2) as usize;
 
-    // Get current step name for context (from first visible line or current error)
-    let current_step = if let Some(error_line_idx) = current_error_line {
-        panel.lines.get(error_line_idx).map(|l| l.step_name.as_str())
-    } else {
-        panel.lines.get(start_line).map(|l| l.step_name.as_str())
-    }.unwrap_or("Unknown");
+    // Build tree rows
+    let mut rows = Vec::new();
+    let visible_paths = panel.flatten_visible_nodes();
 
-    // Build table rows ONLY for visible lines (PERFORMANCE OPTIMIZATION)
-    let rows: Vec<Row> = panel.lines[start_line..end_line]
-        .iter()
-        .enumerate()
-        .map(|(viewport_idx, log_line)| {
-            let actual_line_idx = start_line + viewport_idx;
-            let is_current_error = Some(actual_line_idx) == current_error_line;
+    for (display_idx, path) in visible_paths.iter().enumerate() {
+        if display_idx < panel.scroll_offset {
+            continue;
+        }
+        if rows.len() >= visible_height {
+            break;
+        }
 
-            // Group marker prefix based on nesting level
-            let group_marker = match log_line.group_level {
-                0 => "",
-                _ => {
-                    // Check if this is a group command line
-                    if let Some(ref cmd) = log_line.command {
-                        use gh_actions_log_parser::WorkflowCommand;
-                        match cmd {
-                            WorkflowCommand::GroupStart { .. } => "┏ ",
-                            WorkflowCommand::GroupEnd => "┗ ",
-                            _ => "┃ ",
-                        }
-                    } else {
-                        "┃ "
-                    }
-                }
-            };
+        let is_cursor = path == &panel.cursor_path;
+        let row_text = build_tree_row(panel, path, theme);
 
-            // Error marker for error section starts
-            let error_marker = if log_line.is_error_start { "▶ " } else { "" };
+        let style = if is_cursor {
+            Style::default().bg(theme.selected_bg).fg(theme.text_primary)
+        } else {
+            Style::default().bg(theme.bg_panel).fg(theme.text_primary)
+        };
 
-            // Combine markers
-            let prefix = format!("{}{}", group_marker, error_marker);
+        rows.push(Row::new(vec![Cell::from(row_text)]).style(style));
+    }
 
-            // Determine base style based on line metadata
-            let base_style = if log_line.is_header {
-                // Section headers - bright cyan
-                Style::default()
-                    .fg(theme.accent_primary)
-                    .add_modifier(Modifier::BOLD)
-                    .bg(theme.bg_panel)
-            } else if log_line.is_error_start {
-                // Error section start - bright red with bold
-                Style::default()
-                    .fg(theme.status_error)
-                    .add_modifier(Modifier::BOLD)
-                    .bg(theme.bg_panel)
-            } else if log_line.is_error {
-                // Error section continuation - red
-                Style::default()
-                    .fg(theme.status_error)
-                    .bg(theme.bg_panel)
-            } else if log_line.is_warning {
-                // Warnings - yellow
-                Style::default()
-                    .fg(theme.status_warning)
-                    .bg(theme.bg_panel)
-            } else {
-                // Normal lines - light slate
-                Style::default()
-                    .fg(theme.text_primary)
-                    .bg(theme.bg_panel)
-            };
-
-            // Build the line content with styling
-            let line_content = if !log_line.styled_segments.is_empty() {
-                // Use styled segments from parser (ANSI colors preserved)
-                let mut line = styled_segments_to_line(&log_line.styled_segments, base_style, panel.horizontal_scroll);
-
-                // Prepend markers if needed
-                if !prefix.is_empty() {
-                    let marker_style = if log_line.group_level > 0 {
-                        Style::default().fg(theme.accent_primary).bg(theme.bg_panel)
-                    } else {
-                        base_style
-                    };
-                    let mut spans = vec![Span::styled(prefix.clone(), marker_style)];
-                    spans.extend(line.spans);
-                    line = Line::from(spans);
-                }
-
-                // Apply current error highlighting
-                if is_current_error {
-                    line = line.style(Style::default().add_modifier(Modifier::REVERSED));
-                }
-
-                line
-            } else {
-                // Fallback: use plain content with base styling
-                let visible_content = if panel.horizontal_scroll > 0 {
-                    let full_content = format!("{}{}", prefix, log_line.content);
-                    full_content.chars()
-                        .skip(panel.horizontal_scroll)
-                        .collect::<String>()
-                } else {
-                    format!("{}{}", prefix, log_line.content)
-                };
-
-                let mut style = base_style;
-                if is_current_error {
-                    style = style.add_modifier(Modifier::REVERSED);
-                }
-
-                Line::from(Span::styled(visible_content, style))
-            };
-
-            // Create cells based on timestamp visibility
-            if panel.show_timestamps {
-                Row::new(vec![
-                    Cell::from(log_line.timestamp.clone()).style(
-                        Style::default()
-                            .fg(theme.text_muted)
-                            .bg(theme.bg_panel)
-                    ),
-                    Cell::from(line_content),
-                ])
-            } else {
-                // When timestamps hidden, use single column
-                Row::new(vec![Cell::from(line_content)])
-            }
-        })
-        .collect();
-
-    // Build scroll info with error navigation and step context
-    let scroll_info = if !panel.error_indices.is_empty() {
-        format!(
-            " Build Logs [Line {}/{}] | Step: {} | Error {}/{} | n: next, p: prev, h/l: scroll H, j/k: scroll V, t: timestamps, x: close ",
-            start_line + 1,
-            total_lines,
-            current_step,
-            panel.current_error_idx + 1,
-            panel.error_indices.len()
-        )
-    } else {
-        format!(
-            " Build Logs [Line {}/{}] | Step: {} | No errors | h/l: scroll H, j/k: scroll V, t: timestamps, x: close ",
-            start_line + 1,
-            total_lines,
-            current_step
-        )
-    };
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .title(scroll_info)
-        .border_style(
-            Style::default()
-                .fg(theme.accent_primary)
-                .add_modifier(Modifier::BOLD),
+    let table = Table::new(rows, vec![Constraint::Percentage(100)])
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" Build Logs - PR #{} | j/k: navigate, Enter: toggle, n: next error, x: close ", panel.pr_context.number))
+                .border_style(Style::default().fg(theme.accent_primary))
+                .style(Style::default().bg(theme.bg_panel)),
         )
         .style(Style::default().bg(theme.bg_panel));
 
-    // Configure table with or without timestamp column
-    let widths = if panel.show_timestamps {
-        vec![Constraint::Length(30), Constraint::Min(0)]
-    } else {
-        vec![Constraint::Percentage(100)]
-    };
-
-    let table = Table::new(rows, widths)
-        .block(block)
-        .column_spacing(0) // No spacing between columns to prevent gaps
-        .style(
-            Style::default()
-                .fg(theme.text_primary)
-                .bg(theme.bg_panel),
-        );
-
     f.render_widget(table, area);
-
     visible_height
 }
+
+/// Build display text for a single tree row
+fn build_tree_row(panel: &LogPanel, path: &[usize], theme: &crate::theme::Theme) -> Line<'static> {
+    let indent_level = path.len();
+    let indent = "  ".repeat(indent_level.saturating_sub(1));
+
+    match path.len() {
+        1 => {
+            // Workflow node
+            let workflow = &panel.workflows[path[0]];
+            let expanded = panel.is_expanded(path);
+            let icon = if expanded { "▼" } else { "▶" };
+            let status_icon = if workflow.has_failures { "✗" } else { "✓" };
+            let error_info = if workflow.total_errors > 0 {
+                format!(" ({} errors)", workflow.total_errors)
+            } else {
+                String::new()
+            };
+
+            Line::from(format!("{}{} {} {}{}", indent, icon, status_icon, workflow.name, error_info))
+        }
+        2 => {
+            // Job node
+            let workflow = &panel.workflows[path[0]];
+            let job = &workflow.jobs[path[1]];
+            let expanded = panel.is_expanded(path);
+            let icon = if expanded { "▼" } else { "▶" };
+            let status_icon = if job.error_count > 0 { "✗" } else { "✓" };
+
+            let error_info = if job.error_count > 0 {
+                format!(" ({} errors)", job.error_count)
+            } else {
+                String::new()
+            };
+
+            // Try to get metadata for duration
+            let key = format!("{}:{}", workflow.name, job.name);
+            let duration_info = if let Some(metadata) = panel.job_metadata.get(&key) {
+                if let Some(duration) = metadata.duration {
+                    let secs = duration.as_secs();
+                    if secs >= 60 {
+                        format!(", {}m {}s", secs / 60, secs % 60)
+                    } else {
+                        format!(", {}s", secs)
+                    }
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+
+            Line::from(format!("{}├─ {} {} {}{}{}", indent, icon, status_icon, job.name, error_info, duration_info))
+        }
+        3 => {
+            // Step node
+            let workflow = &panel.workflows[path[0]];
+            let job = &workflow.jobs[path[1]];
+            let step = &job.steps[path[2]];
+            let expanded = panel.is_expanded(path);
+            let icon = if expanded { "▼" } else { "▶" };
+            let status_icon = if step.error_count > 0 { "✗" } else { "✓" };
+            let error_info = if step.error_count > 0 {
+                format!(" ({} errors)", step.error_count)
+            } else {
+                String::new()
+            };
+
+            Line::from(format!("{}│  ├─ {} {}{}{}", indent, icon, status_icon, step.name, error_info))
+        }
+        _ => Line::from(""),
+    }
+}
+
+// Old master-detail rendering functions removed - now using unified tree view
 
 /// Convert parser ANSI color to ratatui Color
 fn convert_color(color: &ParserColor) -> Color {
@@ -538,150 +554,319 @@ fn extract_timestamp(line: &str) -> (String, String) {
     (String::new(), line.to_string())
 }
 
-/// Convert legacy LogSections into unified LogPanel format
-/// This flattens all sections into a single view with error highlighting
-/// Error sections start with "error:" and end with an empty line
-pub fn create_log_panel_from_sections(
-    log_sections: Vec<LogSection>,
+// /// Convert legacy LogSections into unified LogPanel format
+// /// This flattens all sections into a single view with error highlighting
+// /// Error sections start with "error:" and end with an empty line
+// pub fn create_log_panel_from_sections(
+//     log_sections: Vec<LogSection>,
+//     pr_context: PrContext,
+// ) -> LogPanel {
+//     let mut lines = Vec::new();
+//     let mut error_indices = Vec::new();
+// 
+//     for (section_idx, section) in log_sections.iter().enumerate() {
+//         let step_name = section.step_name.clone();
+// 
+//         // Add section header
+//         let header = format!("━━━ {} ━━━", step_name);
+//         lines.push(LogLine {
+//             content: header,
+//             timestamp: String::new(),
+//             is_error: false,
+//             is_warning: false,
+//             is_header: true,
+//             error_level: ErrorLevel::None,
+//             step_name: step_name.clone(),
+//             is_error_start: false,
+//             styled_segments: Vec::new(),
+//             command: None,
+//             group_level: 0,
+//             group_title: None,
+//         });
+// 
+//         // Track if we're inside an error section
+//         let mut in_error_section = false;
+// 
+//         // Add all lines from this section
+//         for line in &section.error_lines {
+//             let (timestamp, content) = extract_timestamp(line);
+//             let content_lower = content.to_lowercase();
+// 
+//             // Check if this line starts an error section
+//             let starts_error = content_lower.contains("error:");
+// 
+//             // Check if this is an empty line (ends error section)
+//             let is_empty = content.trim().is_empty();
+// 
+//             // State machine for error sections
+//             if starts_error && !in_error_section {
+//                 // Start of new error section
+//                 in_error_section = true;
+//                 error_indices.push(lines.len()); // Store start index of error section
+//             }
+// 
+//             let is_in_error_section = in_error_section;
+// 
+//             // Add the line
+//             lines.push(LogLine {
+//                 content,
+//                 timestamp,
+//                 is_error: is_in_error_section,
+//                 is_warning: false,
+//                 is_header: false,
+//                 error_level: if is_in_error_section { ErrorLevel::Error } else { ErrorLevel::None },
+//                 step_name: step_name.clone(),
+//                 is_error_start: starts_error,
+//                 styled_segments: Vec::new(),
+//                 command: None,
+//                 group_level: 0,
+//                 group_title: None,
+//             });
+// 
+//             // End error section on empty line
+//             if is_empty && in_error_section {
+//                 in_error_section = false;
+//             }
+//         }
+// 
+//         // Add separator between sections (except after last section)
+//         if section_idx < log_sections.len() - 1 {
+//             lines.push(LogLine {
+//                 content: "─".repeat(80),
+//                 timestamp: String::new(),
+//                 is_error: false,
+//                 is_warning: false,
+//                 is_header: false,
+//                 error_level: ErrorLevel::None,
+//                 step_name: step_name.clone(),
+//                 is_error_start: false,
+//                 styled_segments: Vec::new(),
+//                 command: None,
+//                 group_level: 0,
+//                 group_title: None,
+//             });
+//         }
+//     }
+// 
+//     LogPanel {
+//         jobs: Vec::new(), // Legacy path - no jobs
+//         selected_job_idx: 0,
+//         job_list_focused: false,
+//         scroll_offset: 0,
+//         horizontal_scroll: 0,
+//         error_indices,
+//         current_error_idx: 0,
+//         step_indices: Vec::new(),
+//         current_step_idx: 0,
+//         expanded_groups: std::collections::HashSet::new(), // Legacy - no groups
+//         show_timestamps: false,
+//         viewport_height: 20,
+//         pr_context,
+//     }
+// }
+// 
+// /// Create LogPanel from parsed job logs (tree view)
+// /// Builds a hierarchical tree: Workflow → Job → Step
+pub fn create_log_panel_from_jobs(
+    jobs: Vec<(JobMetadata, JobLog)>,
     pr_context: PrContext,
 ) -> LogPanel {
-    let mut lines = Vec::new();
-    let mut error_indices = Vec::new();
+    use std::collections::HashMap;
 
-    for (section_idx, section) in log_sections.iter().enumerate() {
-        let step_name = section.step_name.clone();
+    // Group jobs by workflow name and convert to tree using parser
+    let mut workflows_map: HashMap<String, Vec<(JobMetadata, gh_actions_log_parser::JobNode)>> = HashMap::new();
+    let mut job_metadata_map: HashMap<String, JobMetadata> = HashMap::new();
 
-        // Add section header
-        let header = format!("━━━ {} ━━━", step_name);
-        lines.push(LogLine {
-            content: header,
-            timestamp: String::new(),
-            is_error: false,
-            is_warning: false,
-            is_header: true,
-            error_level: ErrorLevel::None,
-            step_name: step_name.clone(),
-            is_error_start: false,
-            styled_segments: Vec::new(),
-            command: None,
-            group_level: 0,
-            group_title: None,
-        });
+    for (metadata, job_log) in jobs {
+        let job_node = gh_actions_log_parser::job_log_to_tree(job_log);
+        let key = format!("{}:{}", metadata.workflow_name, job_node.name);
+        job_metadata_map.insert(key, metadata.clone());
 
-        // Track if we're inside an error section
-        let mut in_error_section = false;
+        workflows_map
+            .entry(metadata.workflow_name.clone())
+            .or_insert_with(Vec::new)
+            .push((metadata, job_node));
+    }
 
-        // Add all lines from this section
-        for line in &section.error_lines {
-            let (timestamp, content) = extract_timestamp(line);
-            let content_lower = content.to_lowercase();
+    // Build workflow nodes
+    let mut workflows: Vec<gh_actions_log_parser::WorkflowNode> = workflows_map
+        .into_iter()
+        .map(|(workflow_name, jobs)| {
+            let job_nodes: Vec<gh_actions_log_parser::JobNode> = jobs.into_iter().map(|(_, job)| job).collect();
 
-            // Check if this line starts an error section
-            let starts_error = content_lower.contains("error:");
+            let total_errors: usize = job_nodes.iter().map(|j| j.error_count).sum();
+            let has_failures = total_errors > 0; // Simplified - we don't have job status from parser
 
-            // Check if this is an empty line (ends error section)
-            let is_empty = content.trim().is_empty();
-
-            // State machine for error sections
-            if starts_error && !in_error_section {
-                // Start of new error section
-                in_error_section = true;
-                error_indices.push(lines.len()); // Store start index of error section
+            gh_actions_log_parser::WorkflowNode {
+                name: workflow_name,
+                jobs: job_nodes,
+                total_errors,
+                has_failures,
             }
+        })
+        .collect();
 
-            let is_in_error_section = in_error_section;
+    // Sort workflows: failed first, then by name
+    workflows.sort_by(|a, b| {
+        b.has_failures.cmp(&a.has_failures).then(a.name.cmp(&b.name))
+    });
 
-            // Add the line
-            lines.push(LogLine {
-                content,
-                timestamp,
-                is_error: is_in_error_section,
-                is_warning: false,
-                is_header: false,
-                error_level: if is_in_error_section { ErrorLevel::Error } else { ErrorLevel::None },
-                step_name: step_name.clone(),
-                is_error_start: starts_error,
-                styled_segments: Vec::new(),
-                command: None,
-                group_level: 0,
-                group_title: None,
-            });
+    // Auto-expand nodes with errors
+    let mut expanded_nodes = std::collections::HashSet::new();
+    for (w_idx, workflow) in workflows.iter().enumerate() {
+        if workflow.has_failures {
+            expanded_nodes.insert(w_idx.to_string());
 
-            // End error section on empty line
-            if is_empty && in_error_section {
-                in_error_section = false;
+            for (j_idx, job) in workflow.jobs.iter().enumerate() {
+                if job.error_count > 0 {
+                    expanded_nodes.insert(format!("{}:{}", w_idx, j_idx));
+
+                    for (s_idx, step) in job.steps.iter().enumerate() {
+                        if step.error_count > 0 {
+                            expanded_nodes.insert(format!("{}:{}:{}", w_idx, j_idx, s_idx));
+                        }
+                    }
+                }
             }
-        }
-
-        // Add separator between sections (except after last section)
-        if section_idx < log_sections.len() - 1 {
-            lines.push(LogLine {
-                content: "─".repeat(80),
-                timestamp: String::new(),
-                is_error: false,
-                is_warning: false,
-                is_header: false,
-                error_level: ErrorLevel::None,
-                step_name: step_name.clone(),
-                is_error_start: false,
-                styled_segments: Vec::new(),
-                command: None,
-                group_level: 0,
-                group_title: None,
-            });
         }
     }
 
     LogPanel {
-        lines,
-        error_indices,
-        current_error_idx: 0,
+        workflows,
+        job_metadata: job_metadata_map,
+        expanded_nodes,
+        cursor_path: vec![0], // Start at first workflow
         scroll_offset: 0,
         horizontal_scroll: 0,
-        pr_context,
         show_timestamps: false,
-        viewport_height: 20, // Default, updated during rendering
+        viewport_height: 20,
+        pr_context,
     }
 }
 
 impl LogPanel {
-    /// Navigate to the next error
-    pub fn next_error(&mut self) {
-        if self.error_indices.is_empty() {
+    /// Navigate down to next visible tree node
+    pub fn navigate_down(&mut self) {
+        let visible = self.flatten_visible_nodes();
+        if visible.is_empty() {
             return;
         }
 
-        // Move to next error
-        if self.current_error_idx < self.error_indices.len() - 1 {
-            self.current_error_idx += 1;
-        } else {
-            // Wrap around to first error
-            self.current_error_idx = 0;
-        }
-
-        // Scroll to make the error visible (centered if possible)
-        if let Some(&line_idx) = self.error_indices.get(self.current_error_idx) {
-            self.scroll_offset = line_idx.saturating_sub(5); // Show 5 lines of context above
+        // Find current position in flattened list
+        if let Some(current_idx) = visible.iter().position(|path| path == &self.cursor_path) {
+            if current_idx < visible.len() - 1 {
+                self.cursor_path = visible[current_idx + 1].clone();
+            }
         }
     }
 
-    /// Navigate to the previous error
-    pub fn prev_error(&mut self) {
-        if self.error_indices.is_empty() {
+    /// Navigate up to previous visible tree node
+    pub fn navigate_up(&mut self) {
+        let visible = self.flatten_visible_nodes();
+        if visible.is_empty() {
             return;
         }
 
-        // Move to previous error
-        if self.current_error_idx > 0 {
-            self.current_error_idx -= 1;
-        } else {
-            // Wrap around to last error
-            self.current_error_idx = self.error_indices.len() - 1;
-        }
-
-        // Scroll to make the error visible (centered if possible)
-        if let Some(&line_idx) = self.error_indices.get(self.current_error_idx) {
-            self.scroll_offset = line_idx.saturating_sub(5); // Show 5 lines of context above
+        // Find current position in flattened list
+        if let Some(current_idx) = visible.iter().position(|path| path == &self.cursor_path) {
+            if current_idx > 0 {
+                self.cursor_path = visible[current_idx - 1].clone();
+            }
         }
     }
+
+    /// Toggle expand/collapse at cursor
+    pub fn toggle_at_cursor(&mut self) {
+        let key = self.path_to_key(&self.cursor_path);
+
+        if self.expanded_nodes.contains(&key) {
+            self.expanded_nodes.remove(&key);
+        } else {
+            self.expanded_nodes.insert(key);
+        }
+    }
+
+    /// Convert path to string key for expanded_nodes
+    fn path_to_key(&self, path: &[usize]) -> String {
+        path.iter()
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join(":")
+    }
+
+    /// Check if a node is expanded
+    fn is_expanded(&self, path: &[usize]) -> bool {
+        self.expanded_nodes.contains(&self.path_to_key(path))
+    }
+
+    /// Flatten tree to list of visible node paths
+    fn flatten_visible_nodes(&self) -> Vec<Vec<usize>> {
+        let mut result = Vec::new();
+
+        for (w_idx, workflow) in self.workflows.iter().enumerate() {
+            result.push(vec![w_idx]);
+
+            if self.is_expanded(&[w_idx]) {
+                for (j_idx, job) in workflow.jobs.iter().enumerate() {
+                    result.push(vec![w_idx, j_idx]);
+
+                    if self.is_expanded(&[w_idx, j_idx]) {
+                        for (s_idx, _step) in job.steps.iter().enumerate() {
+                            result.push(vec![w_idx, j_idx, s_idx]);
+                        }
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Find next error across entire tree
+    pub fn find_next_error(&mut self) {
+        // Collect all paths with errors
+        let error_paths = self.collect_error_paths();
+        if error_paths.is_empty() {
+            return;
+        }
+
+        // Find next error after current cursor
+        let visible = self.flatten_visible_nodes();
+        if let Some(current_idx) = visible.iter().position(|path| path == &self.cursor_path) {
+            // Look for next error path after current position
+            for path in visible.iter().skip(current_idx + 1) {
+                if error_paths.contains(path) {
+                    self.cursor_path = path.clone();
+                    return;
+                }
+            }
+        }
+
+        // Wrap to first error
+        if let Some(first_error) = error_paths.first() {
+            self.cursor_path = first_error.clone();
+        }
+    }
+
+    /// Collect all tree paths that have errors
+    fn collect_error_paths(&self) -> Vec<Vec<usize>> {
+        let mut result = Vec::new();
+
+        for (w_idx, workflow) in self.workflows.iter().enumerate() {
+            for (j_idx, job) in workflow.jobs.iter().enumerate() {
+                if job.error_count > 0 {
+                    result.push(vec![w_idx, j_idx]);
+                }
+
+                for (s_idx, step) in job.steps.iter().enumerate() {
+                    if step.error_count > 0 {
+                        result.push(vec![w_idx, j_idx, s_idx]);
+                    }
+                }
+            }
+        }
+
+        result
+    }
+
 }

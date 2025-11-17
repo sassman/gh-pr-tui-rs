@@ -144,6 +144,8 @@ fn start_event_handler(
     // Clone the shared log panel state for the event loop
     let log_panel_open_shared = app.store.state().log_panel.log_panel_open_shared.clone();
     let log_panel_open = log_panel_open_shared.clone();
+    let job_list_focused_shared = app.store.state().log_panel.job_list_focused_shared.clone();
+    let job_list_focused = job_list_focused_shared.clone();
     // Create shared debug console state for event loop
     let debug_console_open_shared = Arc::new(Mutex::new(false));
     let debug_console_open = debug_console_open_shared.clone();
@@ -153,8 +155,9 @@ fn start_event_handler(
             let action = if crossterm::event::poll(tick_rate).unwrap() {
                 let show_add_repo = *show_add_repo_shared.lock().unwrap();
                 let log_panel_open_val = *log_panel_open.lock().unwrap();
+                let job_list_focused_val = *job_list_focused.lock().unwrap();
                 let console_open = *debug_console_open.lock().unwrap();
-                handle_events(show_add_repo, log_panel_open_val, console_open, &pending_key_shared).unwrap_or(Action::None)
+                handle_events(show_add_repo, log_panel_open_val, job_list_focused_val, console_open, &pending_key_shared).unwrap_or(Action::None)
             } else {
                 Action::None
             };
@@ -1390,12 +1393,13 @@ pub async fn fetch_github_data<'a>(
 fn handle_events(
     show_add_repo: bool,
     log_panel_open: bool,
+    job_list_focused: bool,
     debug_console_open: bool,
     pending_key_shared: &std::sync::Arc<std::sync::Mutex<Option<crate::state::PendingKeyPress>>>,
 ) -> Result<Action> {
     Ok(match event::read()? {
         Event::Key(key) if key.kind == KeyEventKind::Press => {
-            handle_key_event(key, show_add_repo, log_panel_open, debug_console_open, pending_key_shared)
+            handle_key_event(key, show_add_repo, log_panel_open, job_list_focused, debug_console_open, pending_key_shared)
         }
         _ => Action::None,
     })
@@ -1405,6 +1409,7 @@ fn handle_key_event(
     key: KeyEvent,
     show_add_repo: bool,
     log_panel_open: bool,
+    job_list_focused: bool,
     debug_console_open: bool,
     pending_key_shared: &std::sync::Arc<std::sync::Mutex<Option<crate::state::PendingKeyPress>>>,
 ) -> Action {
@@ -1429,34 +1434,58 @@ fn handle_key_event(
             KeyCode::Char('x') | KeyCode::Esc => {
                 return Action::CloseLogPanel;
             }
-            // Vertical scrolling (j/k or up/down)
+            // Tab: Switch focus between job list and log viewer
+            KeyCode::Tab => {
+                return if job_list_focused {
+                    Action::FocusLogViewer
+                } else {
+                    Action::FocusJobList
+                };
+            }
+            // j/k: Tree navigation (move through visible nodes)
             KeyCode::Char('j') | KeyCode::Down => {
-                return Action::ScrollLogPanelDown;
+                return Action::SelectNextJob; // Navigates down in tree
             }
             KeyCode::Char('k') | KeyCode::Up => {
-                return Action::ScrollLogPanelUp;
+                return Action::SelectPrevJob; // Navigates up in tree
             }
-            // Page down (space)
+            // Page down (space) - only in log viewer
             KeyCode::Char(' ') => {
-                return Action::PageLogPanelDown;
+                if !job_list_focused {
+                    return Action::PageLogPanelDown;
+                }
             }
-            // Horizontal scrolling (h/l or left/right)
+            // Horizontal scrolling (h/l or left/right) - only in log viewer
             KeyCode::Char('h') | KeyCode::Left => {
-                return Action::ScrollLogPanelLeft;
+                if !job_list_focused {
+                    return Action::ScrollLogPanelLeft;
+                }
             }
             KeyCode::Char('l') | KeyCode::Right => {
-                return Action::ScrollLogPanelRight;
+                if !job_list_focused {
+                    return Action::ScrollLogPanelRight;
+                }
             }
-            // Error navigation (n/p)
+            // Step navigation (n/p) - only in log viewer
             KeyCode::Char('n') => {
-                return Action::NextLogSection;
+                if !job_list_focused {
+                    return Action::NextStep;
+                }
             }
             KeyCode::Char('p') => {
-                return Action::PrevLogSection;
+                if !job_list_focused {
+                    return Action::PrevStep;
+                }
             }
-            // Toggle timestamps
+            // Toggle timestamps - only in log viewer
             KeyCode::Char('t') => {
-                return Action::ToggleTimestamps;
+                if !job_list_focused {
+                    return Action::ToggleTimestamps;
+                }
+            }
+            // Enter: Toggle tree node expand/collapse
+            KeyCode::Enter => {
+                return Action::ToggleTreeNode;
             }
             _ => return Action::None,
         }

@@ -28,13 +28,23 @@ pub enum Action {
     OpenBuildLogs,
     OpenInIDE,
     CloseLogPanel,
+    // Log panel - tree navigation
+    SelectNextJob,
+    SelectPrevJob,
+    FocusJobList,
+    FocusLogViewer,
+    ToggleTreeNode,  // Toggle expand/collapse at cursor
+    // Log panel - log viewer scrolling
     ScrollLogPanelUp,
     ScrollLogPanelDown,
     PageLogPanelDown,
     ScrollLogPanelLeft,
     ScrollLogPanelRight,
-    NextLogSection,
-    PrevLogSection,
+    // Log panel - step and error navigation
+    NextStep,
+    PrevStep,
+    NextLogSection,   // Error navigation (kept for backwards compat)
+    PrevLogSection,   // Error navigation (kept for backwards compat)
     ToggleTimestamps,
     ToggleShortcuts,
     ScrollShortcutsUp,
@@ -71,7 +81,7 @@ pub enum Action {
     RerunJobsComplete(Result<(), String>),
     ApprovalComplete(Result<(), String>),
     PRMergedConfirmed(usize, usize, bool), // repo_index, pr_number, is_merged
-    BuildLogsLoaded(Vec<crate::log::LogSection>, crate::log::PrContext),
+    BuildLogsLoaded(Vec<(crate::log::JobMetadata, gh_actions_log_parser::JobLog)>, crate::log::PrContext),
     IDEOpenComplete(Result<(), String>),
 
     // Auto-merge queue management

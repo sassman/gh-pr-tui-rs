@@ -87,6 +87,8 @@ pub struct LogPanelState {
     pub panel: Option<LogPanel>,
     /// Shared state for event handler to know if log panel is open
     pub log_panel_open_shared: Arc<Mutex<bool>>,
+    /// Shared state for event handler to know if job list has focus
+    pub job_list_focused_shared: Arc<Mutex<bool>>,
 }
 
 /// Merge bot state (wrapper around existing MergeBot)
@@ -344,6 +346,7 @@ impl Default for LogPanelState {
         Self {
             panel: None,
             log_panel_open_shared: Arc::new(Mutex::new(false)),
+            job_list_focused_shared: Arc::new(Mutex::new(true)), // Start with job list focused
         }
     }
 }
