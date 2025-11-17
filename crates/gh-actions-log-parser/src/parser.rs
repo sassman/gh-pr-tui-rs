@@ -63,12 +63,37 @@ pub fn parse_workflow_logs(zip_data: &[u8]) -> Result<ParsedLog, ParseError> {
         file.read_to_end(&mut content_bytes)?;
         let content = String::from_utf8(content_bytes)?;
 
+        // Clean the job name (remove .txt extension and number prefix)
+        let clean_name = clean_job_name(&file_name);
+
         // Parse the job log
-        let job_log = parse_job_log(&file_name, &content);
+        let job_log = parse_job_log(&clean_name, &content);
         jobs.push(job_log);
     }
 
     Ok(ParsedLog { jobs })
+}
+
+/// Clean job name from GitHub Actions ZIP file
+/// Removes `.txt` extension and leading `{number}_` prefix
+/// Example: `2_check (ubuntu-latest).txt` -> `check (ubuntu-latest)`
+fn clean_job_name(file_name: &str) -> String {
+    let mut name = file_name.to_string();
+
+    // Remove .txt extension
+    if name.ends_with(".txt") {
+        name = name[..name.len() - 4].to_string();
+    }
+
+    // Remove leading number prefix (e.g., "2_" from "2_check (ubuntu-latest)")
+    if let Some(underscore_pos) = name.find('_') {
+        // Check if everything before underscore is a number
+        if name[..underscore_pos].chars().all(|c| c.is_ascii_digit()) {
+            name = name[underscore_pos + 1..].to_string();
+        }
+    }
+
+    name
 }
 
 /// Parse a single job's log content
@@ -320,5 +345,38 @@ mod tests {
 
         tracker.exit_group();
         assert_eq!(tracker.current_group(), (0, None));
+    }
+
+    #[test]
+    fn test_clean_job_name() {
+        // Test removing .txt extension and number prefix
+        assert_eq!(
+            clean_job_name("2_check (ubuntu-latest).txt"),
+            "check (ubuntu-latest)"
+        );
+
+        // Test removing .txt only
+        assert_eq!(
+            clean_job_name("build.txt"),
+            "build"
+        );
+
+        // Test removing number prefix only
+        assert_eq!(
+            clean_job_name("1_test"),
+            "test"
+        );
+
+        // Test no changes needed
+        assert_eq!(
+            clean_job_name("my-job"),
+            "my-job"
+        );
+
+        // Test underscore in job name (not a number prefix)
+        assert_eq!(
+            clean_job_name("my_job.txt"),
+            "my_job"
+        );
     }
 }

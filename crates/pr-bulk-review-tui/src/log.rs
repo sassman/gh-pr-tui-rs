@@ -368,8 +368,15 @@ fn build_tree_row(panel: &LogPanel, path: &[usize], theme: &crate::theme::Theme)
         1 => {
             // Workflow node
             let workflow = &panel.workflows[path[0]];
+            let has_children = !workflow.jobs.is_empty();
             let expanded = panel.is_expanded(path);
-            let icon = if expanded { "▼" } else { "▶" };
+            let icon = if !has_children {
+                " "  // No icon if no children
+            } else if expanded {
+                "▼"
+            } else {
+                "▶"
+            };
             let status_icon = if workflow.has_failures { "✗" } else { "✓" };
             let error_info = if workflow.total_errors > 0 {
                 format!(" ({} errors)", workflow.total_errors)
@@ -383,8 +390,15 @@ fn build_tree_row(panel: &LogPanel, path: &[usize], theme: &crate::theme::Theme)
             // Job node
             let workflow = &panel.workflows[path[0]];
             let job = &workflow.jobs[path[1]];
+            let has_children = !job.steps.is_empty();
             let expanded = panel.is_expanded(path);
-            let icon = if expanded { "▼" } else { "▶" };
+            let icon = if !has_children {
+                " "  // No icon if no children
+            } else if expanded {
+                "▼"
+            } else {
+                "▶"
+            };
             let status_icon = if job.error_count > 0 { "✗" } else { "✓" };
 
             let error_info = if job.error_count > 0 {
@@ -417,8 +431,15 @@ fn build_tree_row(panel: &LogPanel, path: &[usize], theme: &crate::theme::Theme)
             let workflow = &panel.workflows[path[0]];
             let job = &workflow.jobs[path[1]];
             let step = &job.steps[path[2]];
+            let has_children = !step.lines.is_empty();
             let expanded = panel.is_expanded(path);
-            let icon = if expanded { "▼" } else { "▶" };
+            let icon = if !has_children {
+                " "  // No icon if no children
+            } else if expanded {
+                "▼"
+            } else {
+                "▶"
+            };
             let status_icon = if step.error_count > 0 { "✗" } else { "✓" };
             let error_info = if step.error_count > 0 {
                 format!(" ({} errors)", step.error_count)
@@ -798,7 +819,14 @@ impl LogPanel {
         // Find current position in flattened list
         if let Some(current_idx) = visible.iter().position(|path| path == &self.cursor_path) {
             if current_idx < visible.len() - 1 {
-                self.cursor_path = visible[current_idx + 1].clone();
+                let new_idx = current_idx + 1;
+                self.cursor_path = visible[new_idx].clone();
+
+                // Auto-scroll to keep cursor visible
+                let max_visible_idx = self.scroll_offset + self.viewport_height.saturating_sub(1);
+                if new_idx > max_visible_idx {
+                    self.scroll_offset = new_idx.saturating_sub(self.viewport_height.saturating_sub(1));
+                }
             }
         }
     }
@@ -813,7 +841,13 @@ impl LogPanel {
         // Find current position in flattened list
         if let Some(current_idx) = visible.iter().position(|path| path == &self.cursor_path) {
             if current_idx > 0 {
-                self.cursor_path = visible[current_idx - 1].clone();
+                let new_idx = current_idx - 1;
+                self.cursor_path = visible[new_idx].clone();
+
+                // Auto-scroll to keep cursor visible
+                if new_idx < self.scroll_offset {
+                    self.scroll_offset = new_idx;
+                }
             }
         }
     }
