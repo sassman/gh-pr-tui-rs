@@ -766,7 +766,10 @@ pub fn create_log_panel_from_jobs(
     let mut workflows: Vec<gh_actions_log_parser::WorkflowNode> = workflows_map
         .into_iter()
         .map(|(workflow_name, jobs)| {
-            let job_nodes: Vec<gh_actions_log_parser::JobNode> = jobs.into_iter().map(|(_, job)| job).collect();
+            let mut job_nodes: Vec<gh_actions_log_parser::JobNode> = jobs.into_iter().map(|(_, job)| job).collect();
+
+            // Sort jobs alphabetically by name
+            job_nodes.sort_by(|a, b| a.name.cmp(&b.name));
 
             let total_errors: usize = job_nodes.iter().map(|j| j.error_count).sum();
             let has_failures = total_errors > 0;
@@ -785,20 +788,20 @@ pub fn create_log_panel_from_jobs(
         b.has_failures.cmp(&a.has_failures).then(a.name.cmp(&b.name))
     });
 
-    // Auto-expand nodes with errors
+    // Auto-expand workflows (top level) and nodes with errors
     let mut expanded_nodes = std::collections::HashSet::new();
     for (w_idx, workflow) in workflows.iter().enumerate() {
-        if workflow.has_failures {
-            expanded_nodes.insert(w_idx.to_string());
+        // Always expand workflows (top level)
+        expanded_nodes.insert(w_idx.to_string());
 
-            for (j_idx, job) in workflow.jobs.iter().enumerate() {
-                if job.error_count > 0 {
-                    expanded_nodes.insert(format!("{}:{}", w_idx, j_idx));
+        // Auto-expand jobs and steps with errors
+        for (j_idx, job) in workflow.jobs.iter().enumerate() {
+            if job.error_count > 0 {
+                expanded_nodes.insert(format!("{}:{}", w_idx, j_idx));
 
-                    for (s_idx, step) in job.steps.iter().enumerate() {
-                        if step.error_count > 0 {
-                            expanded_nodes.insert(format!("{}:{}:{}", w_idx, j_idx, s_idx));
-                        }
+                for (s_idx, step) in job.steps.iter().enumerate() {
+                    if step.error_count > 0 {
+                        expanded_nodes.insert(format!("{}:{}:{}", w_idx, j_idx, s_idx));
                     }
                 }
             }

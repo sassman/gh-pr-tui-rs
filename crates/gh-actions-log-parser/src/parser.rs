@@ -219,6 +219,9 @@ pub fn job_log_to_tree(job_log: JobLog) -> crate::types::JobNode {
         });
     }
 
+    // Sort steps alphabetically by name
+    steps.sort_by(|a, b| a.name.cmp(&b.name));
+
     // Calculate total job error count
     let error_count: usize = steps.iter().map(|s| s.error_count).sum();
 
