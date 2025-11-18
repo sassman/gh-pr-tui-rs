@@ -25,8 +25,8 @@ Also note that every feature is a subject of change as I continue to use and ref
 
 ```bash
 # Clone the repository
-git clone https://github.com/sassman/pr-bulk-review-tui-rs.git
-cd pr-bulk-review-tui-rs
+git clone https://github.com/sassman/gh-pr-tui-rs.git
+cd gh-pr-tui-rs
 
 # Build and run
 cargo build --release

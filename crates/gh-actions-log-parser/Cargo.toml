@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["sassman"]
 description = "Parser for GitHub Actions workflow logs with ANSI color preservation and workflow command support"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/sassman/pr-bulk-review-tui-rs"
+repository = "https://github.com/sassman/gh-pr-tui-rs"
 
 [dependencies]
 ansi-parser = { workspace = true }
