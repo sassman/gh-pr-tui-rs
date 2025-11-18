@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "crates/gh-actions-log-parser",
-    "crates/pr-bulk-review-tui",
+    "crates/gh-pr-tui",
 ]
 resolver = "2"
 
