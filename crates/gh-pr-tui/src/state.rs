@@ -5,6 +5,7 @@ use std::{
 };
 
 use crate::{config::Config, log::LogPanel, merge_bot::MergeBot, pr::Pr, theme::Theme};
+use gh_pr_tui_command_palette::CommandItem;
 
 /// Root application state following Redux pattern
 #[derive(Debug, Clone, Default)]
@@ -40,6 +41,8 @@ pub struct UiState {
     pub show_add_repo_shared: Arc<Mutex<bool>>,
     /// Close PR popup state (None = hidden, Some = visible with state)
     pub close_pr_state: Option<ClosePrState>,
+    /// Command palette state (None = hidden, Some = visible with state)
+    pub command_palette: Option<CommandPaletteState>,
     /// Pending key press for two-key combinations (3 second timeout)
     /// Shared with event handler for checking multi-key shortcuts
     pub pending_key: Arc<Mutex<Option<PendingKeyPress>>>,
@@ -78,6 +81,33 @@ impl ClosePrState {
     pub fn new() -> Self {
         Self {
             comment: "Not needed anymore".to_string(),
+        }
+    }
+}
+
+/// State for the command palette
+#[derive(Debug, Clone)]
+pub struct CommandPaletteState {
+    /// User input query
+    pub input: String,
+    /// Index of the currently selected command
+    pub selected_index: usize,
+    /// Filtered and scored commands (command, score)
+    pub filtered_commands: Vec<(CommandItem<crate::actions::Action>, u16)>,
+}
+
+impl Default for CommandPaletteState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CommandPaletteState {
+    pub fn new() -> Self {
+        Self {
+            input: String::new(),
+            selected_index: 0,
+            filtered_commands: Vec::new(),
         }
     }
 }
@@ -325,6 +355,7 @@ impl Default for UiState {
             add_repo_form: AddRepoForm::default(),
             show_add_repo_shared: Arc::new(Mutex::new(false)),
             close_pr_state: None,
+            command_palette: None,
             pending_key: Arc::new(Mutex::new(None)),
         }
     }

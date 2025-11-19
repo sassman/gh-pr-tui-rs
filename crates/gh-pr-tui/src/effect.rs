@@ -135,6 +135,9 @@ pub enum Effect {
     /// Batch multiple effects
     Batch(Vec<Effect>),
 
+    /// Update command palette filtered commands based on current input
+    UpdateCommandPaletteFilter,
+
     /// No effect
     None,
 }
@@ -673,6 +676,28 @@ pub async fn execute_effect(app: &mut App, effect: Effect) -> Result<Vec<Action>
             for effect in effects {
                 let actions = Box::pin(execute_effect(app, effect)).await?;
                 follow_up_actions.extend(actions);
+            }
+        }
+
+        Effect::UpdateCommandPaletteFilter => {
+            // Filter commands based on current input
+            if let Some(palette_state) = &app.store.state().ui.command_palette {
+                use crate::command_palette_integration::ShortcutCommandProvider;
+                use gh_pr_tui_command_palette::{CommandPalette, filter_commands};
+
+                // Create command palette with providers
+                let mut palette = CommandPalette::new();
+                palette.register(Box::new(ShortcutCommandProvider));
+
+                // Get all available commands for current state
+                let all_commands = palette.all_commands(app.store.state());
+
+                // Filter commands based on user input
+                let filtered = filter_commands(&all_commands, &palette_state.input);
+
+                // Update state with filtered results (dispatch action)
+                use crate::actions::Action;
+                follow_up_actions.push(Action::UpdateCommandPaletteResults(filtered));
             }
         }
 

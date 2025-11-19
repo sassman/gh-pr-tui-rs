@@ -248,6 +248,69 @@ fn ui_reducer(mut state: UiState, action: &Action) -> (UiState, Vec<Effect>) {
                 return (state, vec![Effect::ClosePrs { comment }]);
             }
         }
+
+        // Command palette actions
+        Action::ShowCommandPalette => {
+            state.command_palette = Some(crate::state::CommandPaletteState::new());
+            // Trigger filter update to populate initial commands
+            return (state, vec![Effect::UpdateCommandPaletteFilter]);
+        }
+        Action::HideCommandPalette => {
+            state.command_palette = None;
+        }
+        Action::CommandPaletteInput(ch) => {
+            if let Some(ref mut palette) = state.command_palette {
+                palette.input.push(*ch);
+                palette.selected_index = 0; // Reset selection when typing
+                return (state, vec![Effect::UpdateCommandPaletteFilter]);
+            }
+        }
+        Action::CommandPaletteBackspace => {
+            if let Some(ref mut palette) = state.command_palette {
+                palette.input.pop();
+                palette.selected_index = 0; // Reset selection when typing
+                return (state, vec![Effect::UpdateCommandPaletteFilter]);
+            }
+        }
+        Action::CommandPaletteSelectNext => {
+            if let Some(ref mut palette) = state.command_palette {
+                if !palette.filtered_commands.is_empty() {
+                    palette.selected_index =
+                        (palette.selected_index + 1) % palette.filtered_commands.len();
+                }
+            }
+        }
+        Action::CommandPaletteSelectPrev => {
+            if let Some(ref mut palette) = state.command_palette {
+                if !palette.filtered_commands.is_empty() {
+                    palette.selected_index = palette
+                        .selected_index
+                        .checked_sub(1)
+                        .unwrap_or(palette.filtered_commands.len() - 1);
+                }
+            }
+        }
+        Action::CommandPaletteExecute => {
+            // Execute the selected command and close palette
+            if let Some(palette) = state.command_palette.take() {
+                if let Some((cmd, _score)) = palette.filtered_commands.get(palette.selected_index) {
+                    // Dispatch the selected action
+                    return (state, vec![Effect::DispatchAction(cmd.action.clone())]);
+                }
+            }
+        }
+        Action::UpdateCommandPaletteResults(results) => {
+            // Update filtered commands in palette state
+            if let Some(ref mut palette) = state.command_palette {
+                palette.filtered_commands = results.clone();
+                // Clamp selected_index to valid range
+                if !palette.filtered_commands.is_empty() {
+                    palette.selected_index = palette.selected_index.min(palette.filtered_commands.len() - 1);
+                } else {
+                    palette.selected_index = 0;
+                }
+            }
+        }
         _ => {}
     }
 

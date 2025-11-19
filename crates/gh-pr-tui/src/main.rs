@@ -31,6 +31,7 @@ use crate::task::{BackgroundTask, TaskResult, start_task_worker};
 use crate::theme::Theme;
 
 mod actions;
+mod command_palette_integration;
 mod config;
 mod effect;
 mod gh;

@@ -125,6 +125,7 @@ pub enum Action {
     CommandPaletteSelectNext,
     CommandPaletteSelectPrev,
     CommandPaletteExecute,
+    UpdateCommandPaletteResults(Vec<(gh_pr_tui_command_palette::CommandItem<Action>, u16)>),
 
     Quit,
     None,
