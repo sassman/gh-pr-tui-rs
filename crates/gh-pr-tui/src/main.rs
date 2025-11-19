@@ -856,49 +856,46 @@ fn render_close_pr_popup(f: &mut Frame, area: Rect, comment: &str, theme: &Theme
     });
 
     // Build form content
-    let mut text_lines = Vec::new();
-
-    // Instructions
-    text_lines.push(Line::from(vec![Span::styled(
-        "Edit comment (dependabot PRs will use @dependabot close):",
-        Style::default().fg(theme.text_secondary),
-    )]));
-    text_lines.push(Line::from(""));
-
-    // Comment field
-    text_lines.push(Line::from(vec![
-        Span::styled(
-            "Comment: ",
-            Style::default()
-                .fg(theme.active_fg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            comment,
-            Style::default().fg(theme.active_fg).bg(theme.active_bg),
-        ),
-    ]));
-
-    text_lines.push(Line::from(""));
-    text_lines.push(Line::from(""));
-
-    // Footer with shortcuts
-    text_lines.push(Line::from(vec![
-        Span::styled(
-            "Enter",
-            Style::default()
-                .fg(theme.accent_primary)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" submit & close  ", Style::default().fg(theme.text_muted)),
-        Span::styled(
-            "Esc/x/q",
-            Style::default()
-                .fg(theme.accent_primary)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" cancel", Style::default().fg(theme.text_muted)),
-    ]));
+    let text_lines = vec![
+        // Instructions
+        Line::from(vec![Span::styled(
+            "Edit comment (dependabot PRs will use @dependabot close):",
+            Style::default().fg(theme.text_secondary),
+        )]),
+        Line::from(""),
+        // Comment field
+        Line::from(vec![
+            Span::styled(
+                "Comment: ",
+                Style::default()
+                    .fg(theme.active_fg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                comment,
+                Style::default().fg(theme.active_fg).bg(theme.active_bg),
+            ),
+        ]),
+        Line::from(""),
+        Line::from(""),
+        // Footer with shortcuts
+        Line::from(vec![
+            Span::styled(
+                "Enter",
+                Style::default()
+                    .fg(theme.accent_primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" submit & close  ", Style::default().fg(theme.text_muted)),
+            Span::styled(
+                "Esc/x/q",
+                Style::default()
+                    .fg(theme.accent_primary)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" cancel", Style::default().fg(theme.text_muted)),
+        ]),
+    ];
 
     // Render content
     let paragraph = Paragraph::new(text_lines)
@@ -1412,7 +1409,7 @@ impl App {
     }
 }
 
-pub async fn fetch_github_data<'a>(
+pub async fn fetch_github_data(
     octocrab: &Octocrab,
     repo: &Repo,
     filter: &PrFilter,
@@ -1587,8 +1584,8 @@ fn handle_key_event(
 
     // Handle double-Esc to clear PR selection (before other Esc handling)
     // This needs to happen before popup/panel-specific Esc handling
-    if !show_add_repo && !show_close_pr && !log_panel_open && !debug_console_open {
-        if key.code == KeyCode::Esc {
+    if !show_add_repo && !show_close_pr && !log_panel_open && !debug_console_open
+        && key.code == KeyCode::Esc {
             // Check if there's a pending Esc key (represented as '\x1b')
             let pending_guard = pending_key_shared.lock().unwrap();
             let has_pending_esc = pending_guard
@@ -1614,7 +1611,6 @@ fn handle_key_event(
                 return Action::None;
             }
         }
-    }
 
     // Handle debug console keys if console is open (before general shortcuts)
     if debug_console_open {

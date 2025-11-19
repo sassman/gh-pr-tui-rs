@@ -8,6 +8,7 @@ use crate::{config::Config, log::LogPanel, merge_bot::MergeBot, pr::Pr, theme::T
 
 /// Root application state following Redux pattern
 #[derive(Debug, Clone)]
+#[derive(Default)]
 pub struct AppState {
     pub ui: UiState,
     pub repos: ReposState,
@@ -66,6 +67,12 @@ pub enum AddRepoField {
 #[derive(Debug, Clone)]
 pub struct ClosePrState {
     pub comment: String,
+}
+
+impl Default for ClosePrState {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ClosePrState {
@@ -306,20 +313,6 @@ impl Default for TableColors {
 }
 
 // Default implementations
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            ui: UiState::default(),
-            repos: ReposState::default(),
-            log_panel: LogPanelState::default(),
-            merge_bot: MergeBotState::default(),
-            task: TaskState::default(),
-            debug_console: DebugConsoleState::default(),
-            config: Config::default(),
-            theme: Theme::default(),
-        }
-    }
-}
 
 impl Default for UiState {
     fn default() -> Self {

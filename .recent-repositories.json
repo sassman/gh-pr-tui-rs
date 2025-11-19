@@ -23,5 +23,10 @@
     "org": "sassman",
     "repo": "ssd-benchmark-rs",
     "branch": "main"
+  },
+  {
+    "org": "sassman",
+    "repo": "gh-pr-tui-rs",
+    "branch": "main"
   }
 ]

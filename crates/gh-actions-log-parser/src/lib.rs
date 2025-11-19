@@ -30,7 +30,7 @@ pub use parser::{parse_workflow_logs, job_log_to_tree};
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    
 
     #[test]
     fn test_basic_parsing() {

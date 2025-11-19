@@ -7,82 +7,78 @@ pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
     let mut effects = Vec::new();
 
     // Handle cross-cutting actions that need access to multiple state slices
-    match action {
-        Action::MergeBotTick => {
-            // Process merge bot queue if bot is running
-            if state.merge_bot.bot.is_running() {
-                if let Some(repo) = state.repos.recent_repos.get(state.repos.selected_repo).cloned() {
-                    let repo_data = state.repos.repo_data
-                        .get(&state.repos.selected_repo)
-                        .cloned()
-                        .unwrap_or_default();
+    if let Action::MergeBotTick = action {
+        // Process merge bot queue if bot is running
+        if state.merge_bot.bot.is_running()
+            && let Some(repo) = state.repos.recent_repos.get(state.repos.selected_repo).cloned() {
+                let repo_data = state.repos.repo_data
+                    .get(&state.repos.selected_repo)
+                    .cloned()
+                    .unwrap_or_default();
 
-                    // Process next PR in queue
-                    if let Some(bot_action) = state.merge_bot.bot.process_next(&repo_data.prs) {
-                        use crate::merge_bot::MergeBotAction;
-                        match bot_action {
-                            MergeBotAction::DispatchMerge(_indices) => {
-                                effects.push(Effect::PerformMerge {
-                                    repo: repo.clone(),
-                                    prs: repo_data.prs.clone(),
-                                });
-                                effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
-                                    message: state.merge_bot.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                }))));
-                            }
-                            MergeBotAction::DispatchRebase(_indices) => {
-                                effects.push(Effect::PerformRebase {
-                                    repo: repo.clone(),
-                                    prs: repo_data.prs.clone(),
-                                });
-                                effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
-                                    message: state.merge_bot.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                }))));
-                            }
-                            MergeBotAction::WaitForCI(_pr_number) => {
-                                effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
-                                    message: state.merge_bot.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                }))));
-                            }
-                            MergeBotAction::PollMergeStatus(pr_number, is_checking_ci) => {
-                                effects.push(Effect::PollPRMergeStatus {
-                                    repo_index: state.repos.selected_repo,
-                                    repo: repo.clone(),
-                                    pr_number,
-                                    is_checking_ci,
-                                });
-                                effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
-                                    message: state.merge_bot.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                }))));
-                            }
-                            MergeBotAction::PrSkipped(_pr_number, _reason) => {
-                                effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
-                                    message: state.merge_bot.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                }))));
-                            }
-                            MergeBotAction::Completed => {
-                                effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
-                                    message: state.merge_bot.bot.status_message(),
-                                    status_type: TaskStatusType::Success,
-                                }))));
-                                // Refresh the PR list
-                                effects.push(Effect::LoadSingleRepo {
-                                    repo_index: state.repos.selected_repo,
-                                    repo: repo.clone(),
-                                    filter: state.repos.filter.clone(),
-                                });
-                            }
+                // Process next PR in queue
+                if let Some(bot_action) = state.merge_bot.bot.process_next(&repo_data.prs) {
+                    use crate::merge_bot::MergeBotAction;
+                    match bot_action {
+                        MergeBotAction::DispatchMerge(_indices) => {
+                            effects.push(Effect::PerformMerge {
+                                repo: repo.clone(),
+                                prs: repo_data.prs.clone(),
+                            });
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
+                                message: state.merge_bot.bot.status_message(),
+                                status_type: TaskStatusType::Running,
+                            }))));
+                        }
+                        MergeBotAction::DispatchRebase(_indices) => {
+                            effects.push(Effect::PerformRebase {
+                                repo: repo.clone(),
+                                prs: repo_data.prs.clone(),
+                            });
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
+                                message: state.merge_bot.bot.status_message(),
+                                status_type: TaskStatusType::Running,
+                            }))));
+                        }
+                        MergeBotAction::WaitForCI(_pr_number) => {
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
+                                message: state.merge_bot.bot.status_message(),
+                                status_type: TaskStatusType::Running,
+                            }))));
+                        }
+                        MergeBotAction::PollMergeStatus(pr_number, is_checking_ci) => {
+                            effects.push(Effect::PollPRMergeStatus {
+                                repo_index: state.repos.selected_repo,
+                                repo: repo.clone(),
+                                pr_number,
+                                is_checking_ci,
+                            });
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
+                                message: state.merge_bot.bot.status_message(),
+                                status_type: TaskStatusType::Running,
+                            }))));
+                        }
+                        MergeBotAction::PrSkipped(_pr_number, _reason) => {
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
+                                message: state.merge_bot.bot.status_message(),
+                                status_type: TaskStatusType::Running,
+                            }))));
+                        }
+                        MergeBotAction::Completed => {
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
+                                message: state.merge_bot.bot.status_message(),
+                                status_type: TaskStatusType::Success,
+                            }))));
+                            // Refresh the PR list
+                            effects.push(Effect::LoadSingleRepo {
+                                repo_index: state.repos.selected_repo,
+                                repo: repo.clone(),
+                                filter: state.repos.filter.clone(),
+                            });
                         }
                     }
                 }
             }
-        }
-        _ => {}
     }
 
     // Apply each sub-reducer and collect effects

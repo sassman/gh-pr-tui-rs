@@ -106,8 +106,8 @@ fn parse_job_log(job_name: &str, content: &str) -> JobLog {
         let (timestamp, line_content) = extract_timestamp(raw_line);
 
         // Check for [command] prefix and remove it
-        let (is_command, line_after_command_prefix) = if line_content.starts_with("[command]") {
-            (true, &line_content[9..]) // Remove "[command]" prefix
+        let (is_command, line_after_command_prefix) = if let Some(stripped) = line_content.strip_prefix("[command]") {
+            (true, stripped) // Remove "[command]" prefix
         } else {
             (false, line_content)
         };
@@ -180,26 +180,22 @@ pub fn job_log_to_tree(job_log: JobLog) -> crate::types::JobNode {
     for line in job_log.lines {
         // Check for step boundaries - only GroupStart creates a new step
         // GroupEnd is just metadata, actual content continues after it
-        if let Some(ref cmd) = line.command {
-            match cmd {
-                WorkflowCommand::GroupStart { title } => {
-                    // Save previous step if exists
-                    if let Some(step_name) = current_step_name.take() {
-                        let error_count = count_step_errors(&current_step_lines);
-                        steps.push(crate::types::StepNode {
-                            name: step_name,
-                            lines: current_step_lines.clone(),
-                            error_count,
-                        });
-                        current_step_lines.clear();
-                    }
-
-                    // Start new step
-                    current_step_name = Some(title.clone());
+        if let Some(ref cmd) = line.command
+            && let WorkflowCommand::GroupStart { title } = cmd {
+                // Save previous step if exists
+                if let Some(step_name) = current_step_name.take() {
+                    let error_count = count_step_errors(&current_step_lines);
+                    steps.push(crate::types::StepNode {
+                        name: step_name,
+                        lines: current_step_lines.clone(),
+                        error_count,
+                    });
+                    current_step_lines.clear();
                 }
-                _ => {}
+
+                // Start new step
+                current_step_name = Some(title.clone());
             }
-        }
 
         // Add non-metadata lines to current step
         // This includes all lines AFTER ##[endgroup] until next ##[group]
@@ -272,7 +268,7 @@ fn extract_timestamp(line: &str) -> (Option<String>, &str) {
             } else if let Some(pos) = line.find('Z') {
                 // 'Z' at end of line (empty line case)
                 // Verify this is actually the timestamp 'Z' by checking position
-                if pos >= 20 && pos < 30 {  // 'Z' should be around position 20-29 in timestamp
+                if (20..30).contains(&pos) {  // 'Z' should be around position 20-29 in timestamp
                     let timestamp = line[..=pos].to_string(); // Include the 'Z'
                     let content = &line[pos + 1..]; // Everything after 'Z' (should be empty or whitespace)
                     return (Some(timestamp), content);
