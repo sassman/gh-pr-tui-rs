@@ -51,10 +51,7 @@ pub struct CacheStats {
 impl ApiCache {
     /// Create cache with 20-minute TTL (hardcoded for development workflow)
     pub fn new() -> Result<Self> {
-        let cache_dir = std::env::current_dir()?.join(".cache");
-        std::fs::create_dir_all(&cache_dir)?;
-
-        let cache_file = cache_dir.join("gh-api-cache.json");
+        let cache_file = crate::infra::files::get_cache_file_path()?;
         let ttl_seconds = 20 * 60; // 20 minutes
 
         let entries = if cache_file.exists() {
