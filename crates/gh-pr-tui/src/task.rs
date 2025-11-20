@@ -1485,8 +1485,8 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 let mut consecutive_failures = 0;
                 const MAX_CONSECUTIVE_FAILURES: u32 = 5;
 
-                // Monitor for up to 40 checks (20 minutes at 30s intervals)
-                for check_num in 0..40 {
+                // Monitor for up to 120 checks (1 hour at 30s intervals)
+                for check_num in 0..120 {
                     // Wait between checks (30 seconds)
                     tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
 
@@ -1721,7 +1721,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
 
                 // If we exit the loop without completing, it's a timeout
                 debug!(
-                    "Operation monitor timed out for PR #{} after 20 minutes",
+                    "Operation monitor timed out for PR #{} after 1 hour",
                     pr_number
                 );
                 let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(
@@ -1729,10 +1729,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 ));
                 let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
                     crate::state::TaskStatus {
-                        message: format!(
-                            "Monitoring timed out for PR #{} after 20 minutes",
-                            pr_number
-                        ),
+                        message: format!("Monitoring timed out for PR #{} after 1 hour", pr_number),
                         status_type: crate::state::TaskStatusType::Warning,
                     },
                 )));

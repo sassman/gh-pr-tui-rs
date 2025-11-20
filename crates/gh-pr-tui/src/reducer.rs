@@ -1407,8 +1407,8 @@ fn repos_reducer(
             {
                 monitor.check_count += 1;
 
-                // Timeout after 40 checks (20 minutes at 30s intervals)
-                if monitor.check_count >= 40 {
+                // Timeout after 120 checks (1 hour at 30s intervals)
+                if monitor.check_count >= 120 {
                     // Remove from queue - timeout reached
                     data.operation_monitor_queue
                         .retain(|op| op.pr_number != *pr_number);
