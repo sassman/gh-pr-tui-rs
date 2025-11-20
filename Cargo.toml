@@ -21,7 +21,7 @@ log = "0.4"
 ansi-parser = "0.9"
 
 # GitHub API
-octocrab = "0.43.0"
+octocrab = "0.48.0"
 
 # TUI
 ratatui = "0.29.0"
