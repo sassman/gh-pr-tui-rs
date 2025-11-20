@@ -300,6 +300,14 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
             .lock()
             .unwrap() = app.store.state().log_panel.panel.is_some();
 
+        // Handle force redraw flag - clear terminal if requested
+        if app.store.state().ui.force_redraw {
+            t.clear()?;
+            // Reset the flag after clearing
+            let state = app.store.state_mut();
+            state.ui.force_redraw = false;
+        }
+
         t.draw(|f| {
             ui(f, &mut app);
         })?;

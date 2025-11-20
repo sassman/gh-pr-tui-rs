@@ -46,6 +46,8 @@ pub struct UiState {
     /// Pending key press for two-key combinations (3 second timeout)
     /// Shared with event handler for checking multi-key shortcuts
     pub pending_key: Arc<Mutex<Option<PendingKeyPress>>>,
+    /// Flag to trigger full terminal redraw (fixes broken UI from error logs)
+    pub force_redraw: bool,
 }
 
 /// Form state for adding a new repository
@@ -357,6 +359,7 @@ impl Default for UiState {
             close_pr_state: None,
             command_palette: None,
             pending_key: Arc::new(Mutex::new(None)),
+            force_redraw: false,
         }
     }
 }

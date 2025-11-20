@@ -127,6 +127,17 @@ impl CommandProvider<Action, AppState> for ShortcutCommandProvider {
             });
         }
 
+        // UI management commands (always available)
+        commands.push(CommandItem {
+            title: "Redraw UI".to_string(),
+            description: "Force a full terminal redraw (fixes broken UI from error logs)"
+                .to_string(),
+            category: "UI".to_string(),
+            shortcut_hint: None,
+            context: None,
+            action: Action::ForceRedraw,
+        });
+
         commands
     }
 
@@ -175,6 +186,8 @@ fn extract_category(shortcut: &Shortcut) -> String {
         Action::ClearCache | Action::ShowCacheStats | Action::InvalidateRepoCache(_) => {
             "Cache".to_string()
         }
+
+        Action::ForceRedraw => "UI".to_string(),
 
         _ => "Other".to_string(),
     }

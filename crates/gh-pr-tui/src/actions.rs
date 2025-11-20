@@ -120,6 +120,9 @@ pub enum Action {
     ShowCacheStats,
     InvalidateRepoCache(usize), // Invalidate cache for specific repo index
 
+    // UI management
+    ForceRedraw, // Force a full terminal redraw (fixes broken UI from error logs)
+
     // Viewport height updates (for page down scrolling)
     UpdateLogPanelViewport(usize),
     UpdateDebugConsoleViewport(usize),
