@@ -46,7 +46,10 @@ pub enum Effect {
     },
 
     /// Trigger delayed repo reload (waits before reloading)
-    DelayedRepoReload { repo_index: usize, delay_ms: u64 },
+    DelayedRepoReload {
+        repo_index: usize,
+        delay_ms: u64,
+    },
 
     /// Trigger background merge status checks
     CheckMergeStatus {
@@ -70,10 +73,16 @@ pub enum Effect {
     },
 
     /// Perform rebase operation
-    PerformRebase { repo: Repo, prs: Vec<Pr> },
+    PerformRebase {
+        repo: Repo,
+        prs: Vec<Pr>,
+    },
 
     /// Perform merge operation
-    PerformMerge { repo: Repo, prs: Vec<Pr> },
+    PerformMerge {
+        repo: Repo,
+        prs: Vec<Pr>,
+    },
 
     /// Approve PRs with configured message
     ApprovePrs {
@@ -83,22 +92,38 @@ pub enum Effect {
     },
 
     /// Close PRs with comment
-    ClosePrs { comment: String },
+    ClosePrs {
+        comment: String,
+    },
 
     /// Open PR in browser
-    OpenInBrowser { url: String },
+    OpenInBrowser {
+        url: String,
+    },
 
     /// Open in IDE
-    OpenInIDE { repo: Repo, pr_number: usize },
+    OpenInIDE {
+        repo: Repo,
+        pr_number: usize,
+    },
 
     /// Load build logs
-    LoadBuildLogs { repo: Repo, pr: Pr },
+    LoadBuildLogs {
+        repo: Repo,
+        pr: Pr,
+    },
 
     /// Start merge bot
-    StartMergeBot { repo: Repo, prs: Vec<Pr> },
+    StartMergeBot {
+        repo: Repo,
+        prs: Vec<Pr>,
+    },
 
     /// Rerun failed CI jobs for PRs
-    RerunFailedJobs { repo: Repo, pr_numbers: Vec<usize> },
+    RerunFailedJobs {
+        repo: Repo,
+        pr_numbers: Vec<usize>,
+    },
 
     /// Enable auto-merge on PR and monitor until ready
     EnableAutoMerge {
@@ -137,6 +162,11 @@ pub enum Effect {
 
     /// Update command palette filtered commands based on current input
     UpdateCommandPaletteFilter,
+
+    /// Cache management effects
+    ClearCache,
+    ShowCacheStats,
+    InvalidateRepoCache(usize), // Invalidate cache for specific repo index
 
     /// No effect
     None,
@@ -680,6 +710,60 @@ pub async fn execute_effect(app: &mut App, effect: Effect) -> Result<Vec<Action>
             for effect in effects {
                 let actions = Box::pin(execute_effect(app, effect)).await?;
                 follow_up_actions.extend(actions);
+            }
+        }
+
+        Effect::ClearCache => {
+            let mut cache = app.cache.lock().unwrap();
+            match cache.clear() {
+                Ok(_) => {
+                    follow_up_actions.push(crate::actions::Action::SetTaskStatus(Some(
+                        crate::state::TaskStatus {
+                            message: "Cache cleared successfully".to_string(),
+                            status_type: crate::state::TaskStatusType::Success,
+                        },
+                    )));
+                }
+                Err(e) => {
+                    follow_up_actions.push(crate::actions::Action::SetTaskStatus(Some(
+                        crate::state::TaskStatus {
+                            message: format!("Failed to clear cache: {}", e),
+                            status_type: crate::state::TaskStatusType::Error,
+                        },
+                    )));
+                }
+            }
+        }
+
+        Effect::ShowCacheStats => {
+            let cache = app.cache.lock().unwrap();
+            let stats = cache.stats();
+            let message = format!(
+                "Cache: {} total ({} fresh, {} stale) | TTL: {}min",
+                stats.total_entries,
+                stats.fresh_entries,
+                stats.stale_entries,
+                stats.ttl_seconds / 60
+            );
+            follow_up_actions.push(crate::actions::Action::SetTaskStatus(Some(
+                crate::state::TaskStatus {
+                    message,
+                    status_type: crate::state::TaskStatusType::Success,
+                },
+            )));
+        }
+
+        Effect::InvalidateRepoCache(repo_index) => {
+            if let Some(repo) = app.store.state().repos.recent_repos.get(repo_index) {
+                let mut cache = app.cache.lock().unwrap();
+                let pattern = format!("/repos/{}/{}", repo.org, repo.repo);
+                cache.invalidate_pattern(&pattern);
+                follow_up_actions.push(crate::actions::Action::SetTaskStatus(Some(
+                    crate::state::TaskStatus {
+                        message: format!("Cache invalidated for {}/{}", repo.org, repo.repo),
+                        status_type: crate::state::TaskStatusType::Success,
+                    },
+                )));
             }
         }
 

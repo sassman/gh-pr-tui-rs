@@ -272,6 +272,17 @@ fn ui_reducer(mut state: UiState, action: &Action) -> (UiState, Vec<Effect>) {
                 return (state, vec![Effect::UpdateCommandPaletteFilter]);
             }
         }
+        // Cache management actions
+        Action::ClearCache => {
+            return (state, vec![Effect::ClearCache]);
+        }
+        Action::ShowCacheStats => {
+            return (state, vec![Effect::ShowCacheStats]);
+        }
+        Action::InvalidateRepoCache(repo_index) => {
+            return (state, vec![Effect::InvalidateRepoCache(*repo_index)]);
+        }
+
         Action::CommandPaletteSelectNext => {
             if let Some(ref mut palette) = state.command_palette
                 && !palette.filtered_commands.is_empty()

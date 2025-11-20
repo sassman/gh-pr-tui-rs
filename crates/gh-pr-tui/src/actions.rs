@@ -115,6 +115,11 @@ pub enum Action {
     ToggleDebugAutoScroll,
     ClearDebugLogs,
 
+    // Cache management
+    ClearCache,
+    ShowCacheStats,
+    InvalidateRepoCache(usize), // Invalidate cache for specific repo index
+
     // Viewport height updates (for page down scrolling)
     UpdateLogPanelViewport(usize),
     UpdateDebugConsoleViewport(usize),

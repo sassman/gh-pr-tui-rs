@@ -95,6 +95,38 @@ impl CommandProvider<Action, AppState> for ShortcutCommandProvider {
             });
         }
 
+        // Cache management commands (always available)
+        commands.push(CommandItem {
+            title: "Clear API cache".to_string(),
+            description: "Clear all cached GitHub API responses".to_string(),
+            category: "Cache".to_string(),
+            shortcut_hint: None,
+            context: None,
+            action: Action::ClearCache,
+        });
+
+        commands.push(CommandItem {
+            title: "Show cache stats".to_string(),
+            description: "Display cache statistics (entries, freshness, TTL)".to_string(),
+            category: "Cache".to_string(),
+            shortcut_hint: None,
+            context: None,
+            action: Action::ShowCacheStats,
+        });
+
+        // Invalidate current repo cache (only if repos exist)
+        if !state.repos.recent_repos.is_empty() {
+            commands.push(CommandItem {
+                title: "Invalidate current repo cache".to_string(),
+                description: "Clear cached responses for the currently selected repository"
+                    .to_string(),
+                category: "Cache".to_string(),
+                shortcut_hint: None,
+                context: None,
+                action: Action::InvalidateRepoCache(state.repos.selected_repo),
+            });
+        }
+
         commands
     }
 
@@ -138,6 +170,10 @@ fn extract_category(shortcut: &Shortcut) -> String {
 
         Action::ToggleDebugConsole | Action::ClearDebugLogs | Action::ToggleDebugAutoScroll => {
             "Debug".to_string()
+        }
+
+        Action::ClearCache | Action::ShowCacheStats | Action::InvalidateRepoCache(_) => {
+            "Cache".to_string()
         }
 
         _ => "Other".to_string(),
