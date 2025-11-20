@@ -16,6 +16,7 @@ Also note that every feature is a subject of change as I continue to use and ref
 - **Merge Bot** - Automated merge queue with intelligent rebase handling
 - **CI Integration** - View build status, logs, and rerun failed jobs
 - **Hierarchical Log Viewer** - Tree-based log navigation with smart error jumping
+- **Command Palette** - Fuzzy-searchable command launcher with smart prefix matching
 - **Live Status Updates** - Background checks for merge status and rebase needs
 - **IDE Integration** - Open PRs directly in your IDE for quick review
 - **Keyboard-Driven** - Complete workflow without touching the mouse
@@ -43,6 +44,10 @@ Also note that every feature is a subject of change as I continue to use and ref
 ### Timestamp Toggle
 ![Build logs with timestamps](screenshots/Screenshot%202025-11-19%20at%2016.33.02.png)
 *Toggle timestamps on/off for cleaner log viewing*
+
+### Command Palette
+![Command palette for quick actions](screenshots/Screenshot%202025-11-20%20at%2011.54.59.png)
+*Quick access to commands and actions via command palette (press `Ctrl+P`)*
 
 ### Keyboard Shortcuts Help
 ![Shortcuts help panel](screenshots/Screenshot%202025-11-19%20at%2016.33.21.png)
@@ -99,7 +104,8 @@ Create a `.recent-repositories.json` file to configure your repositories:
 5. Press `m` to merge selected PRs
 6. Press `l` to view build logs with smart error navigation
 7. Press `i` to open PR in IDE (or main branch if no PRs)
-8. Press `?` for complete keyboard shortcuts
+8. Press `Ctrl+P` for command palette (fuzzy search all commands)
+9. Press `?` for complete keyboard shortcuts
 
 ---
 
@@ -169,6 +175,20 @@ Create a `.recent-repositories.json` file to configure your repositories:
 
 **The Solution:** Select PRs and press `Shift+R` to rerun all failed CI jobs for selected PRs (or just the current PR). The tool finds all failed workflow runs and triggers reruns via the GitHub API, handling multiple PRs in seconds.
 
+### Command Palette
+
+**The Problem:** With dozens of keyboard shortcuts across different contexts (main view, log panel, debug console), it's hard to remember every key combination. You know the tool can do something, but can't recall the exact shortcut. Looking up shortcuts breaks your flow, and discovering less-used features requires diving into documentation.
+
+**The Solution:** Press `Ctrl+P` to open the command palette - a fuzzy-searchable list of all available commands with their shortcuts and descriptions. Start typing what you want to do (like "rebase" or "merge") and the palette instantly filters to matching commands, prioritizing prefix matches. Each command shows its keyboard shortcut (if any) and context availability (e.g., "when console open"). The palette also includes commands without shortcuts, like "Select All PRs" and "Deselect All PRs", making bulk operations discoverable.
+
+**Smart Search Features:**
+- Fuzzy matching finds commands even with typos
+- Prefix matches rank higher (typing "rebase" shows "Rebase selected PRs" before "Enable auto-rebase mode")
+- Context-aware: only shows commands available in current state
+- Visual indicators: asterisk (*) marks context-dependent shortcuts
+- Categories shown for organization (PR Actions, Debug, Navigation, etc.)
+- Right-aligned categories for clean visual scanning
+
 ### IDE Integration
 
 **The Problem:** Reviewing code in GitHub's web interface is limiting - no syntax highlighting from your preferred theme, no code intelligence, no ability to run tests locally. To review in your IDE: copy the PR branch name → open terminal → git fetch → git checkout → wait for IDE to index. This takes **1-2 minutes per PR** and breaks your flow. Similarly, working on the main branch requires manual git commands.
@@ -236,6 +256,7 @@ Create a `.recent-repositories.json` file to configure your repositories:
 - `c` (when console open) - Clear debug logs
 
 ### General
+- `Ctrl+P` - Open command palette (fuzzy search all commands)
 - `?` - Toggle keyboard shortcuts help
 - `Esc → Esc` - Clear all PR selections
 - `p → a` - Add new repository
