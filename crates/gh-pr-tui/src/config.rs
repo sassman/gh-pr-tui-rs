@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{env, path::PathBuf};
+use std::env;
 
 /// Application configuration loaded from gh-pr-tui.toml
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -40,25 +40,10 @@ impl Default for Config {
 impl Config {
     /// Load config from CWD first, then home directory, or use defaults
     pub fn load() -> Self {
-        const CONFIG_FILE: &str = "gh-pr-tui.toml";
-
-        // Try current directory first
-        if let Ok(content) = std::fs::read_to_string(CONFIG_FILE)
+        if let Some(content) = crate::infra::config_file::load_config_file()
             && let Ok(config) = toml::from_str(&content)
         {
-            log::debug!("Loaded config from {}", CONFIG_FILE);
             return config;
-        }
-
-        // Try home directory
-        if let Some(home) = env::var_os("HOME") {
-            let home_config = PathBuf::from(home).join(format!(".{}", CONFIG_FILE));
-            if let Ok(content) = std::fs::read_to_string(&home_config)
-                && let Ok(config) = toml::from_str(&content)
-            {
-                log::debug!("Loaded config from {}", home_config.display());
-                return config;
-            }
         }
 
         log::debug!("Using default config");
