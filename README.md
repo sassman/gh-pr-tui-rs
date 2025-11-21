@@ -46,7 +46,7 @@ Also note that every feature is a subject of change as I continue to use and ref
 *Toggle timestamps on/off for cleaner log viewing*
 
 ### Command Palette
-![Command palette for quick actions](screenshots/Screenshot%202025-11-20%20at%2011.54.59.png)
+![Command palette for quick actions](screenshots/Screenshot%202025-11-22%20at%2000.05.39.png)
 *Quick access to commands and actions via command palette (press `Ctrl+P`)*
 
 ### Keyboard Shortcuts Help
