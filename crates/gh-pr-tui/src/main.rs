@@ -53,8 +53,6 @@ pub struct App {
     // Communication channels
     pub action_tx: mpsc::UnboundedSender<Action>,
     pub task_tx: mpsc::UnboundedSender<BackgroundTask>,
-    // Lazy-initialized octocrab client (created after .env is loaded)
-    pub octocrab: Option<Octocrab>,
     // API response cache for development workflow (Arc<Mutex> for sharing across tasks)
     pub cache: Arc<Mutex<ApiCache>>,
     // Splash screen state
@@ -519,7 +517,6 @@ impl App {
             store: Store::new(initial_state),
             action_tx,
             task_tx,
-            octocrab: None, // Initialized lazily during bootstrap after .env is loaded
             cache: Arc::new(Mutex::new(ApiCache::new(cache_file).unwrap_or_default())),
         }
     }
@@ -547,10 +544,15 @@ impl App {
     }
 
     fn octocrab(&self) -> Result<Octocrab> {
-        // Return cached octocrab instance (initialized during bootstrap)
-        self.octocrab.clone().ok_or_else(|| {
-            anyhow::anyhow!("Octocrab not initialized. This is a bug - octocrab should be initialized during bootstrap.")
-        })
+        // Return octocrab instance from Redux state (initialized during bootstrap)
+        self.store
+            .state()
+            .infrastructure
+            .octocrab
+            .clone()
+            .ok_or_else(|| {
+                anyhow::anyhow!("Octocrab not initialized. This is a bug - octocrab should be initialized during bootstrap.")
+            })
     }
 
     fn repo(&self) -> Option<&Repo> {
