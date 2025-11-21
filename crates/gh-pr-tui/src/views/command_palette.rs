@@ -120,7 +120,6 @@ pub fn render_command_palette(f: &mut Frame, area: Rect, app: &App) {
 
             let title_style = Style::default()
                 .fg(row_vm.fg_color)
-                .bg(row_vm.bg_color)
                 .add_modifier(if row_vm.is_selected {
                     Modifier::BOLD
                 } else {
@@ -136,11 +135,13 @@ pub fn render_command_palette(f: &mut Frame, area: Rect, app: &App) {
             // Combine indicator and shortcut in first cell
             let first_cell = format!("{}{}", row_vm.indicator, row_vm.shortcut_hint);
 
+            // Apply background color at row level for consistency
             Row::new(vec![
                 Cell::from(first_cell).style(indicator_shortcut_style),
                 Cell::from(row_vm.title.clone()).style(title_style),
                 Cell::from(row_vm.category.clone()).style(category_style),
             ])
+            .style(Style::default().bg(row_vm.bg_color))
         });
 
         let table = Table::new(

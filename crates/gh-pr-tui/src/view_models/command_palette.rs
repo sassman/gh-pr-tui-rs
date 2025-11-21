@@ -52,7 +52,6 @@ impl CommandPaletteViewModel {
         selected_index: usize,
         filtered_commands: &[(gh_pr_tui_command_palette::CommandItem<crate::actions::Action>, u16)],
         visible_height: usize,
-        available_width: usize,
         theme: &crate::theme::Theme,
     ) -> Self {
         let total_commands = filtered_commands.len();
@@ -91,26 +90,9 @@ impl CommandPaletteViewModel {
                     "             ".to_string()
                 };
 
-                // Calculate title truncation
-                // Total width - indicator(2) - shortcut(13) - category(len+2 for brackets) - padding(3)
-                let category_text = format!("[{}]", cmd.category);
-                let fixed_width = 2 + 13 + category_text.len() + 3;
-                let max_title_width = available_width.saturating_sub(fixed_width);
-
-                // Truncate title if needed
-                let title = if cmd.title.len() > max_title_width && max_title_width > 3 {
-                    format!("{}...", &cmd.title[..max_title_width.saturating_sub(3)])
-                } else {
-                    cmd.title.clone()
-                };
-
-                // Calculate padding for right-aligned category
-                let used_width = 2 + 13 + title.len() + category_text.len();
-                let padding = if available_width > used_width {
-                    " ".repeat(available_width.saturating_sub(used_width))
-                } else {
-                    " ".to_string()
-                };
+                // No truncation needed - Table widget handles column sizing
+                let title = cmd.title.clone();
+                let category = format!("[{}]", cmd.category);
 
                 // Colors
                 let (fg_color, bg_color) = if is_selected {
@@ -124,8 +106,8 @@ impl CommandPaletteViewModel {
                     indicator,
                     shortcut_hint,
                     title,
-                    category: category_text,
-                    padding,
+                    category,
+                    padding: String::new(), // Not needed with Table widget
                     fg_color,
                     bg_color,
                 }

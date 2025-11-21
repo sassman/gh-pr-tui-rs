@@ -268,9 +268,8 @@ fn recompute_command_palette_view_model(state: &mut UiState, theme: &crate::them
     if let Some(ref mut palette) = state.command_palette {
         // Use reasonable defaults for terminal dimensions
         // Typical terminal: 80x24, popup is 70% width x 60% height
-        // After margins/borders: ~50 columns x 10 rows for content
+        // After margins/borders: ~10 rows for content
         const VISIBLE_HEIGHT: usize = 10;
-        const AVAILABLE_WIDTH: usize = 50;
 
         palette.view_model = Some(
             crate::view_models::command_palette::CommandPaletteViewModel::from_state(
@@ -278,7 +277,6 @@ fn recompute_command_palette_view_model(state: &mut UiState, theme: &crate::them
                 palette.selected_index,
                 &palette.filtered_commands,
                 VISIBLE_HEIGHT,
-                AVAILABLE_WIDTH,
                 theme,
             ),
         );
