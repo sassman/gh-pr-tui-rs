@@ -47,6 +47,8 @@ pub struct UiState {
     pub show_shortcuts: bool,
     pub shortcuts_scroll: usize,
     pub shortcuts_max_scroll: usize,
+    /// View model for shortcuts panel
+    pub shortcuts_panel_view_model: Option<crate::view_models::shortcuts_panel::ShortcutsPanelViewModel>,
     pub spinner_frame: usize,
     pub should_quit: bool,
     pub show_add_repo: bool,
@@ -376,6 +378,7 @@ impl Default for UiState {
             show_shortcuts: false,
             shortcuts_scroll: 0,
             shortcuts_max_scroll: 0,
+            shortcuts_panel_view_model: None,
             spinner_frame: 0,
             should_quit: false,
             show_add_repo: false,

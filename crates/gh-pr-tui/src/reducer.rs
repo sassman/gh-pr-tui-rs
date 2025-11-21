@@ -76,13 +76,27 @@ fn ui_reducer(
         }
         Action::ToggleShortcuts => {
             state.show_shortcuts = !state.show_shortcuts;
+            // Recompute view model when shortcuts panel is shown
+            if state.show_shortcuts {
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            } else {
+                state.shortcuts_panel_view_model = None;
+            }
         }
         Action::ScrollShortcutsUp => {
             state.shortcuts_scroll = state.shortcuts_scroll.saturating_sub(1);
+            // Recompute view model after scroll
+            if state.show_shortcuts {
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
         }
         Action::ScrollShortcutsDown => {
             if state.shortcuts_scroll < state.shortcuts_max_scroll {
                 state.shortcuts_scroll += 1;
+            }
+            // Recompute view model after scroll
+            if state.show_shortcuts {
+                recompute_shortcuts_panel_view_model(&mut state, theme);
             }
         }
         Action::CloseLogPanel => {
@@ -326,6 +340,29 @@ fn recompute_splash_screen_view_model(state: &mut AppState) {
     } else {
         // Clear view model when splash screen should not be shown
         state.infrastructure.splash_screen_view_model = None;
+    }
+}
+
+/// Recompute shortcuts panel view model when panel is shown or scrolled
+fn recompute_shortcuts_panel_view_model(state: &mut UiState, theme: &crate::theme::Theme) {
+    if state.show_shortcuts {
+        // Use reasonable default for typical terminal dimensions
+        // Typical terminal: 80x24, popup: 80%, inner after margins: ~18 rows
+        const DEFAULT_VISIBLE_HEIGHT: usize = 18;
+
+        state.shortcuts_panel_view_model = Some(
+            crate::view_models::shortcuts_panel::ShortcutsPanelViewModel::from_state(
+                crate::shortcuts::get_shortcuts(),
+                state.shortcuts_scroll,
+                DEFAULT_VISIBLE_HEIGHT,
+                theme,
+            ),
+        );
+
+        // Update max scroll in state (returned from view model)
+        if let Some(ref vm) = state.shortcuts_panel_view_model {
+            state.shortcuts_max_scroll = vm.max_scroll;
+        }
     }
 }
 

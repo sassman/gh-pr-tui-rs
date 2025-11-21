@@ -431,8 +431,7 @@ fn ui(f: &mut Frame, app: &mut App) {
         let max_scroll = crate::views::help::render_shortcuts_panel(
             f,
             chunks[1],
-            app.store.state().ui.shortcuts_scroll,
-            &app.store.state().theme,
+            app,
         );
         app.store.state_mut().ui.shortcuts_max_scroll = max_scroll;
     }
