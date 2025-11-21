@@ -6,103 +6,9 @@ use log::{error, info};
 pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
     let mut effects = Vec::new();
 
-    // Handle cross-cutting actions that need access to multiple state slices
-    if let Action::MergeBotTick = action {
-        // Process merge bot queue if bot is running
-        if state.merge_bot.bot.is_running()
-            && let Some(repo) = state
-                .repos
-                .recent_repos
-                .get(state.repos.selected_repo)
-                .cloned()
-        {
-            let repo_data = state
-                .repos
-                .repo_data
-                .get(&state.repos.selected_repo)
-                .cloned()
-                .unwrap_or_default();
-
-            // Process next PR in queue
-            if let Some(bot_action) = state.merge_bot.bot.process_next(&repo_data.prs) {
-                use crate::merge_bot::MergeBotAction;
-                match bot_action {
-                    MergeBotAction::DispatchMerge(_indices) => {
-                        effects.push(Effect::PerformMerge {
-                            repo: repo.clone(),
-                            prs: repo_data.prs.clone(),
-                        });
-                        effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                            TaskStatus {
-                                message: state.merge_bot.bot.status_message(),
-                                status_type: TaskStatusType::Running,
-                            },
-                        ))));
-                    }
-                    MergeBotAction::DispatchRebase(_indices) => {
-                        effects.push(Effect::PerformRebase {
-                            repo: repo.clone(),
-                            prs: repo_data.prs.clone(),
-                        });
-                        effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                            TaskStatus {
-                                message: state.merge_bot.bot.status_message(),
-                                status_type: TaskStatusType::Running,
-                            },
-                        ))));
-                    }
-                    MergeBotAction::WaitForCI(_pr_number) => {
-                        effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                            TaskStatus {
-                                message: state.merge_bot.bot.status_message(),
-                                status_type: TaskStatusType::Running,
-                            },
-                        ))));
-                    }
-                    MergeBotAction::PollMergeStatus(pr_number, is_checking_ci) => {
-                        effects.push(Effect::PollPRMergeStatus {
-                            repo_index: state.repos.selected_repo,
-                            repo: repo.clone(),
-                            pr_number,
-                            is_checking_ci,
-                        });
-                        effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                            TaskStatus {
-                                message: state.merge_bot.bot.status_message(),
-                                status_type: TaskStatusType::Running,
-                            },
-                        ))));
-                    }
-                    MergeBotAction::PrSkipped(_pr_number, _reason) => {
-                        effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                            TaskStatus {
-                                message: state.merge_bot.bot.status_message(),
-                                status_type: TaskStatusType::Running,
-                            },
-                        ))));
-                    }
-                    MergeBotAction::Completed => {
-                        effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                            TaskStatus {
-                                message: state.merge_bot.bot.status_message(),
-                                status_type: TaskStatusType::Success,
-                            },
-                        ))));
-                        // Refresh the PR list (bypass cache after merge operations)
-                        effects.push(Effect::LoadSingleRepo {
-                            repo_index: state.repos.selected_repo,
-                            repo: repo.clone(),
-                            filter: state.repos.filter.clone(),
-                            bypass_cache: true, // Get fresh data after merge operations
-                        });
-                    }
-                }
-            }
-        }
-    }
-
-    // Apply each sub-reducer and collect effects
-    let (infrastructure_state, infrastructure_effects) = infrastructure_reducer(state.infrastructure, action);
+    // highest priority is the infrastructure setup, then the rest.
+    let (infrastructure_state, infrastructure_effects) =
+        infrastructure_reducer(state.infrastructure, action);
     state.infrastructure = infrastructure_state;
     effects.extend(infrastructure_effects);
 
@@ -110,8 +16,13 @@ pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
     state.ui = ui_state;
     effects.extend(ui_effects);
 
-    let (repos_state, repos_effects) =
-        repos_reducer(state.repos, action, &state.config, &state.theme, &state.infrastructure);
+    let (repos_state, repos_effects) = repos_reducer(
+        state.repos,
+        action,
+        &state.config,
+        &state.theme,
+        &state.infrastructure,
+    );
     state.repos = repos_state;
     effects.extend(repos_effects);
 
@@ -120,7 +31,7 @@ pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
     state.log_panel = log_panel_state;
     effects.extend(log_panel_effects);
 
-    let (merge_bot_state, merge_bot_effects) = merge_bot_reducer(state.merge_bot, action);
+    let (merge_bot_state, merge_bot_effects) = merge_bot_reducer(state.merge_bot, action, &state.repos);
     state.merge_bot = merge_bot_state;
     effects.extend(merge_bot_effects);
 
@@ -395,16 +306,12 @@ fn infrastructure_reducer(
             state.bootstrap_state = BootstrapState::LoadingRepositories;
 
             // Return effects for loading env and initializing octocrab
-            (state, vec![
-                Effect::LoadEnvFile,
-                Effect::InitializeOctocrab,
-                Effect::LoadRepositories,
-            ])
+            (state, vec![Effect::LoadEnvFile, Effect::InitializeOctocrab])
         }
         Action::OctocrabInitialized(client) => {
             // Store initialized Octocrab client in state (reducer responsibility)
             state.octocrab = Some(client.clone());
-            (state, vec![])
+            (state, vec![Effect::LoadRepositories])
         }
         Action::SetBootstrapState(new_state) => {
             state.bootstrap_state = new_state.clone();
@@ -416,7 +323,8 @@ fn infrastructure_reducer(
                     state.bootstrap_state = BootstrapState::UIReady;
                 }
                 Err(_) => {
-                    state.bootstrap_state = BootstrapState::Error(result.as_ref().unwrap_err().clone());
+                    state.bootstrap_state =
+                        BootstrapState::Error(result.as_ref().unwrap_err().clone());
                 }
             }
             (state, vec![])
@@ -467,7 +375,9 @@ fn repos_reducer(
             );
             state.recent_repos = result.repos.clone();
             state.selected_repo = result.selected_repo;
-            effects.push(Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::LoadingFirstRepo)));
+            effects.push(Effect::DispatchAction(Action::SetBootstrapState(
+                BootstrapState::LoadingFirstRepo,
+            )));
 
             // Load selected repo first for quick UI display
             if let Some(selected_repo) = result.repos.get(result.selected_repo) {
@@ -495,7 +405,9 @@ fn repos_reducer(
                 ))));
             } else {
                 // Fallback: load all repos if selected repo doesn't exist
-                effects.push(Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::LoadingRemainingRepos)));
+                effects.push(Effect::DispatchAction(Action::SetBootstrapState(
+                    BootstrapState::LoadingRemainingRepos,
+                )));
                 for i in 0..result.repos.len() {
                     let data = state.repo_data.entry(i).or_default();
                     data.loading_state = LoadingState::Loading;
@@ -516,7 +428,9 @@ fn repos_reducer(
             }
         }
         Action::BootstrapComplete(Err(err)) => {
-            effects.push(Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::Error(err.clone()))));
+            effects.push(Effect::DispatchAction(Action::SetBootstrapState(
+                BootstrapState::Error(err.clone()),
+            )));
         }
         Action::RepoLoadingStarted(repo_index) => {
             // Mark repo as loading (request in flight)
@@ -660,7 +574,9 @@ fn repos_reducer(
                 && *repo_index == state.selected_repo
             {
                 // First repo loaded - UI is ready to display!
-                effects.push(Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::UIReady)));
+                effects.push(Effect::DispatchAction(Action::SetBootstrapState(
+                    BootstrapState::UIReady,
+                )));
 
                 // Show success message for first repo
                 if let Some(repo) = state.recent_repos.get(*repo_index) {
@@ -684,7 +600,9 @@ fn repos_reducer(
                         "Starting background loading of {} remaining repositories",
                         state.recent_repos.len() - 1
                     );
-                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::LoadingRemainingRepos)));
+                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(
+                        BootstrapState::LoadingRemainingRepos,
+                    )));
 
                     // Mark all other repos as loading
                     for i in 0..state.recent_repos.len() {
@@ -710,7 +628,9 @@ fn repos_reducer(
                     });
                 } else {
                     // Only one repo - we're done
-                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::Completed)));
+                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(
+                        BootstrapState::Completed,
+                    )));
                 }
             } else if infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos {
                 // Show status message for each repo that loads in background
@@ -740,7 +660,8 @@ fn repos_reducer(
                 });
 
             // Effect: Dispatch bootstrap completion
-            if all_loaded && infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos {
+            if all_loaded && infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos
+            {
                 let loaded_count = state
                     .repo_data
                     .values()
@@ -777,7 +698,9 @@ fn repos_reducer(
                 && *repo_index == state.selected_repo
             {
                 // First repo failed - still show UI but with error message
-                effects.push(Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::UIReady)));
+                effects.push(Effect::DispatchAction(Action::SetBootstrapState(
+                    BootstrapState::UIReady,
+                )));
 
                 // Show error message for first repo
                 if let Some(repo) = state.recent_repos.get(*repo_index) {
@@ -795,7 +718,9 @@ fn repos_reducer(
 
                 // Start loading remaining repos in background (if any)
                 if state.recent_repos.len() > 1 {
-                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::LoadingRemainingRepos)));
+                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(
+                        BootstrapState::LoadingRemainingRepos,
+                    )));
 
                     // Mark all other repos as loading
                     for i in 0..state.recent_repos.len() {
@@ -821,7 +746,9 @@ fn repos_reducer(
                     });
                 } else {
                     // Only one repo and it failed - still complete bootstrap to show UI
-                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::Completed)));
+                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(
+                        BootstrapState::Completed,
+                    )));
                 }
             } else if infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos {
                 // Show error message for background repo that failed
@@ -849,7 +776,8 @@ fn repos_reducer(
                 });
 
             // Effect: Dispatch bootstrap completion if all done
-            if all_loaded && infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos {
+            if all_loaded && infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos
+            {
                 let loaded_count = state
                     .repo_data
                     .values()
@@ -1807,7 +1735,13 @@ fn recompute_pr_table_view_model(state: &mut ReposState, theme: &crate::theme::T
 }
 
 /// Merge bot state reducer
-fn merge_bot_reducer(mut state: MergeBotState, action: &Action) -> (MergeBotState, Vec<Effect>) {
+fn merge_bot_reducer(
+    mut state: MergeBotState,
+    action: &Action,
+    repos: &ReposState,
+) -> (MergeBotState, Vec<Effect>) {
+    let mut effects = vec![];
+
     match action {
         Action::StartMergeBot => {
             // Note: actual bot starting logic with PR data happens in the effect handler
@@ -1816,6 +1750,94 @@ fn merge_bot_reducer(mut state: MergeBotState, action: &Action) -> (MergeBotStat
         Action::StartMergeBotWithPrData(pr_data) => {
             // Initialize merge bot with PR data (reducer responsibility)
             state.bot.start(pr_data.clone());
+        }
+        Action::MergeBotTick => {
+            // Process merge bot queue if bot is running
+            if state.bot.is_running()
+                && let Some(repo) = repos.recent_repos.get(repos.selected_repo).cloned()
+            {
+                let repo_data = repos
+                    .repo_data
+                    .get(&repos.selected_repo)
+                    .cloned()
+                    .unwrap_or_default();
+
+                // Process next PR in queue
+                if let Some(bot_action) = state.bot.process_next(&repo_data.prs) {
+                    use crate::merge_bot::MergeBotAction;
+                    match bot_action {
+                        MergeBotAction::DispatchMerge(_indices) => {
+                            effects.push(Effect::PerformMerge {
+                                repo: repo.clone(),
+                                prs: repo_data.prs.clone(),
+                            });
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
+                                TaskStatus {
+                                    message: state.bot.status_message(),
+                                    status_type: TaskStatusType::Running,
+                                },
+                            ))));
+                        }
+                        MergeBotAction::DispatchRebase(_indices) => {
+                            effects.push(Effect::PerformRebase {
+                                repo: repo.clone(),
+                                prs: repo_data.prs.clone(),
+                            });
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
+                                TaskStatus {
+                                    message: state.bot.status_message(),
+                                    status_type: TaskStatusType::Running,
+                                },
+                            ))));
+                        }
+                        MergeBotAction::WaitForCI(_pr_number) => {
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
+                                TaskStatus {
+                                    message: state.bot.status_message(),
+                                    status_type: TaskStatusType::Running,
+                                },
+                            ))));
+                        }
+                        MergeBotAction::PollMergeStatus(pr_number, is_checking_ci) => {
+                            effects.push(Effect::PollPRMergeStatus {
+                                repo_index: repos.selected_repo,
+                                repo: repo.clone(),
+                                pr_number,
+                                is_checking_ci,
+                            });
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
+                                TaskStatus {
+                                    message: state.bot.status_message(),
+                                    status_type: TaskStatusType::Running,
+                                },
+                            ))));
+                        }
+                        MergeBotAction::PrSkipped(_pr_number, _reason) => {
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
+                                TaskStatus {
+                                    message: state.bot.status_message(),
+                                    status_type: TaskStatusType::Running,
+                                },
+                            ))));
+                        }
+                        MergeBotAction::Completed => {
+                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
+                                TaskStatus {
+                                    message: state.bot.status_message(),
+                                    status_type: TaskStatusType::Success,
+                                },
+                            ))));
+                            // Refresh the PR list (bypass cache after merge operations)
+                            effects.push(Effect::LoadSingleRepo {
+                                repo_index: repos.selected_repo,
+                                repo: repo.clone(),
+                                filter: repos.filter.clone(),
+                                bypass_cache: true, // Get fresh data after merge operations
+                            });
+                        }
+                    }
+                }
+            }
         }
         Action::MergeStatusUpdated(_repo_index, pr_number, status) => {
             if state.bot.is_running() {
@@ -1840,7 +1862,7 @@ fn merge_bot_reducer(mut state: MergeBotState, action: &Action) -> (MergeBotStat
         _ => {}
     }
 
-    (state, vec![])
+    (state, effects)
 }
 
 /// Task status reducer
