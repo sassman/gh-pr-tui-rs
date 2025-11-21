@@ -96,7 +96,8 @@ impl CommandPaletteViewModel {
 
                 // Colors
                 let (fg_color, bg_color) = if is_selected {
-                    (theme.selected_fg, theme.selected_bg)
+                    // Use yellow for selected row (same as error lines in build log)
+                    (theme.active_fg, theme.selected_bg)
                 } else {
                     (theme.text_primary, Color::Reset)
                 };

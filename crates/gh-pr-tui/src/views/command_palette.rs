@@ -108,7 +108,8 @@ pub fn render_command_palette(f: &mut Frame, area: Rect, app: &App) {
         let rows = vm.visible_rows.iter().map(|row_vm| {
             let indicator_shortcut_style = Style::default()
                 .fg(if row_vm.is_selected {
-                    theme.accent_primary
+                    // Use yellow for selected row (consistent with title)
+                    theme.active_fg
                 } else {
                     theme.text_muted
                 })
@@ -127,7 +128,8 @@ pub fn render_command_palette(f: &mut Frame, area: Rect, app: &App) {
                 });
 
             let category_style = Style::default().fg(if row_vm.is_selected {
-                theme.text_secondary
+                // Use yellow for selected row (consistent with title)
+                theme.active_fg
             } else {
                 theme.text_muted
             });
