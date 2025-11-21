@@ -6,11 +6,14 @@ use ratatui::{
 };
 
 use crate::App;
-use crate::state::BootstrapState;
 
 /// Render the fancy splash screen shown during application bootstrap
+/// Pure presentation - uses pre-computed view model
 pub fn render_splash_screen(f: &mut Frame, app: &App) {
-    const SPINNER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    // Get view model - if not ready yet, return early
+    let Some(ref vm) = app.store.state().infrastructure.splash_screen_view_model else {
+        return;
+    };
 
     let area = f.area();
 
@@ -61,39 +64,13 @@ pub fn render_splash_screen(f: &mut Frame, app: &App) {
         ])
         .split(inner);
 
-    // Determine stage info
-    let (stage_message, progress, is_error) = match &app.store.state().infrastructure.bootstrap_state {
-        BootstrapState::NotStarted => ("Initializing application...", 0, false),
-        BootstrapState::LoadingRepositories => ("Loading repositories...", 25, false),
-        BootstrapState::RestoringSession => ("Restoring session...", 50, false),
-        BootstrapState::LoadingFirstRepo => {
-            // Loading the selected repo first
-            if let Some(repo) = app
-                .store
-                .state()
-                .repos
-                .recent_repos
-                .get(app.store.state().repos.selected_repo)
-            {
-                (&format!("Loading {}...", repo.repo)[..], 75, false)
-            } else {
-                ("Loading repository...", 75, false)
-            }
-        }
-        BootstrapState::UIReady
-        | BootstrapState::LoadingRemainingRepos
-        | BootstrapState::Completed => {
-            // This state shouldn't be shown in splash screen as UI should be visible
-            unreachable!()
-        }
-        BootstrapState::Error(err) => (&format!("Error: {}", err)[..], 0, true),
-    };
+    // All stage info pre-computed in view model
 
-    // Title
-    let title = Paragraph::new("PR Bulk Review TUI")
+    // Title (text and color from view model)
+    let title = Paragraph::new(vm.title.clone())
         .style(
             Style::default()
-                .fg(tailwind::BLUE.c400)
+                .fg(vm.title_color)
                 .add_modifier(Modifier::BOLD),
         )
         .alignment(ratatui::layout::Alignment::Center);
@@ -105,52 +82,27 @@ pub fn render_splash_screen(f: &mut Frame, app: &App) {
         .alignment(ratatui::layout::Alignment::Center);
     f.render_widget(underline, chunks[1]);
 
-    // Spinner (animated)
-    if !is_error {
-        let spinner = SPINNER_FRAMES[app.store.state().ui.spinner_frame % SPINNER_FRAMES.len()];
-        let spinner_text = format!("{} Loading...", spinner);
-        let spinner_widget = Paragraph::new(spinner_text)
-            .style(
-                Style::default()
-                    .fg(app.store.state().theme.status_warning)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(spinner_widget, chunks[3]);
-    } else {
-        let error_icon = Paragraph::new("✗ Error")
-            .style(
-                Style::default()
-                    .fg(app.store.state().theme.status_error)
-                    .add_modifier(Modifier::BOLD),
-            )
-            .alignment(ratatui::layout::Alignment::Center);
-        f.render_widget(error_icon, chunks[3]);
-    }
+    // Spinner or error icon (pre-formatted in view model)
+    let spinner_widget = Paragraph::new(vm.spinner_text.clone())
+        .style(
+            Style::default()
+                .fg(vm.spinner_color)
+                .add_modifier(Modifier::BOLD),
+        )
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(spinner_widget, chunks[3]);
 
-    // Progress bar
-    if !is_error {
-        let bar_width = chunks[5].width.saturating_sub(10) as usize; // Reserve space for percentage
-        let filled = (bar_width * progress) / 100;
-        let empty = bar_width.saturating_sub(filled);
-
-        let progress_bar = format!("{}{}  {}%", "▰".repeat(filled), "▱".repeat(empty), progress);
-
-        let bar_widget = Paragraph::new(progress_bar)
-            .style(Style::default().fg(app.store.state().theme.status_info))
+    // Progress bar (pre-formatted in view model)
+    if !vm.is_error {
+        let bar_widget = Paragraph::new(vm.progress_bar.clone())
+            .style(Style::default().fg(vm.progress_bar_color))
             .alignment(ratatui::layout::Alignment::Center);
         f.render_widget(bar_widget, chunks[5]);
     }
 
-    // Status message
-    let message_style = if is_error {
-        Style::default().fg(app.store.state().theme.status_error)
-    } else {
-        Style::default().fg(app.store.state().theme.text_secondary)
-    };
-
-    let message_widget = Paragraph::new(stage_message)
-        .style(message_style)
+    // Status message (text and color from view model)
+    let message_widget = Paragraph::new(vm.stage_message.clone())
+        .style(Style::default().fg(vm.message_color))
         .alignment(ratatui::layout::Alignment::Center)
         .wrap(Wrap { trim: true });
     f.render_widget(message_widget, chunks[7]);

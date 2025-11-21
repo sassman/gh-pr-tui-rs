@@ -30,6 +30,8 @@ pub struct InfrastructureState {
     pub octocrab: Option<octocrab::Octocrab>,
     /// Bootstrap progress
     pub bootstrap_state: BootstrapState,
+    /// View model for splash screen
+    pub splash_screen_view_model: Option<crate::view_models::splash_screen::SplashScreenViewModel>,
 }
 
 /// Pending key press for two-key combinations

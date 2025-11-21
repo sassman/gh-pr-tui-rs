@@ -44,6 +44,19 @@ pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
     state.debug_console = debug_console_state;
     effects.extend(debug_console_effects);
 
+    // Recompute splash screen view model when needed
+    // Only recompute for actions that affect bootstrap state or spinner
+    match action {
+        Action::Bootstrap
+        | Action::SetBootstrapState(_)
+        | Action::BootstrapComplete(_)
+        | Action::OctocrabInitialized(_)
+        | Action::TickSpinner => {
+            recompute_splash_screen_view_model(&mut state);
+        }
+        _ => {}
+    }
+
     (state, effects)
 }
 
@@ -280,6 +293,39 @@ fn recompute_command_palette_view_model(state: &mut UiState, theme: &crate::them
                 theme,
             ),
         );
+    }
+}
+
+/// Recompute splash screen view model when bootstrap state changes
+fn recompute_splash_screen_view_model(state: &mut AppState) {
+    // Only show splash screen during bootstrap (before UI is ready)
+    use crate::state::BootstrapState;
+    let should_show_splash = !matches!(
+        state.infrastructure.bootstrap_state,
+        BootstrapState::UIReady
+            | BootstrapState::LoadingRemainingRepos
+            | BootstrapState::Completed
+    );
+
+    if should_show_splash {
+        // Calculate reasonable bar width (assume typical terminal width)
+        // Typical terminal: 80 cols, popup: 50 cols, inner: 46 cols after margins
+        // Progress bar area: 46 - 10 (for percentage) = 36 chars
+        const BAR_WIDTH: usize = 36;
+
+        state.infrastructure.splash_screen_view_model = Some(
+            crate::view_models::splash_screen::SplashScreenViewModel::from_state(
+                &state.infrastructure.bootstrap_state,
+                &state.repos.recent_repos,
+                state.repos.selected_repo,
+                state.ui.spinner_frame,
+                BAR_WIDTH,
+                &state.theme,
+            ),
+        );
+    } else {
+        // Clear view model when splash screen should not be shown
+        state.infrastructure.splash_screen_view_model = None;
     }
 }
 
