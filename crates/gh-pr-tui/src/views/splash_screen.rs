@@ -77,7 +77,7 @@ pub fn render_splash_screen(f: &mut Frame, app: &App) {
     f.render_widget(title, chunks[0]);
 
     // Title underline
-    let underline = Paragraph::new("─────────────────")
+    let underline = Paragraph::new("─".repeat(vm.title.len()))
         .style(Style::default().fg(tailwind::BLUE.c600))
         .alignment(ratatui::layout::Alignment::Center);
     f.render_widget(underline, chunks[1]);

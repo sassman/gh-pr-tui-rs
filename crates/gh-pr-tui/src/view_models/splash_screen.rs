@@ -94,7 +94,7 @@ impl SplashScreenViewModel {
         let progress_bar_color = theme.status_info;
 
         Self {
-            title: "PR Bulk Review TUI".to_string(),
+            title: "GitHub PR TUI".to_string(),
             stage_message,
             progress_percent: progress,
             is_error,
