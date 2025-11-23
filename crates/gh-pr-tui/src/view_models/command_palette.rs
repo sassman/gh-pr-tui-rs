@@ -28,7 +28,7 @@ pub struct CommandRow {
     pub shortcut_hint: String,
     /// Title text (pre-truncated if needed)
     pub title: String,
-    /// Category text with brackets: "[Category]"
+    /// Category text with brackets: "\[Category\]"
     pub category: String,
     /// Pre-computed padding spaces for alignment
     pub padding: String,
