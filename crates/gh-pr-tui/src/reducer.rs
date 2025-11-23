@@ -2140,16 +2140,26 @@ fn debug_console_reducer(
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::ScrollDebugConsoleDown => {
-            state.scroll_offset = state.scroll_offset.saturating_add(1);
+            // Calculate max scroll offset to prevent scrolling beyond the end
+            let log_count = state.logs.lock().map(|logs| logs.len()).unwrap_or(0);
+            let visible_height = state.viewport_height.saturating_sub(2); // Subtract borders
+            let max_scroll = log_count.saturating_sub(visible_height);
+
+            state.scroll_offset = (state.scroll_offset.saturating_add(1)).min(max_scroll);
             // Disable auto-scroll when manually scrolling
             state.auto_scroll = false;
             // Recompute view model
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::PageDebugConsoleDown => {
+            // Calculate max scroll offset to prevent scrolling beyond the end
+            let log_count = state.logs.lock().map(|logs| logs.len()).unwrap_or(0);
+            let visible_height = state.viewport_height.saturating_sub(2); // Subtract borders
+            let max_scroll = log_count.saturating_sub(visible_height);
+
             // Page down by viewport_height - 1 (keep one line of context)
             let page_size = state.viewport_height.saturating_sub(1).max(1);
-            state.scroll_offset = state.scroll_offset.saturating_add(page_size);
+            state.scroll_offset = (state.scroll_offset.saturating_add(page_size)).min(max_scroll);
             // Disable auto-scroll when manually scrolling
             state.auto_scroll = false;
             // Recompute view model
@@ -2190,15 +2200,21 @@ fn recompute_debug_console_view_model(state: &mut DebugConsoleState, theme: &cra
         Err(_) => return, // Skip if can't lock
     };
 
-    // Use reasonable default for console height (30% of 24-line terminal = ~7 lines)
+    // Use viewport_height if available (set by view after first render),
+    // otherwise use reasonable default
     const DEFAULT_CONSOLE_HEIGHT: usize = 10;
+    let console_height = if state.viewport_height > 0 {
+        state.viewport_height
+    } else {
+        DEFAULT_CONSOLE_HEIGHT
+    };
 
     state.view_model = Some(
         crate::view_models::debug_console::DebugConsoleViewModel::from_state(
             &logs,
             state.scroll_offset,
             state.auto_scroll,
-            DEFAULT_CONSOLE_HEIGHT,
+            console_height,
             theme,
         ),
     );

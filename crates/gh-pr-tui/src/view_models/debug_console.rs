@@ -38,8 +38,8 @@ impl DebugConsoleViewModel {
         let log_count = logs.len();
 
         // Calculate visible range
-        // Subtract 3 for borders and header
-        let visible_height = console_height.saturating_sub(3);
+        // Subtract 2 for top and bottom borders (title and footer are inside borders)
+        let visible_height = console_height.saturating_sub(2);
         let total_logs = logs.len();
 
         let actual_scroll_offset = if auto_scroll {

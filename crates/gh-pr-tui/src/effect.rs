@@ -801,13 +801,6 @@ pub async fn execute_effect(app: &mut App, effect: Effect) -> Result<Vec<Action>
         }
 
         Effect::StartRecurringUpdates(interval_ms) => {
-            // Start recurring background task to update all repos periodically
-            debug!(
-                "Starting recurring updates: interval={}ms ({} minutes)",
-                interval_ms,
-                interval_ms / 60000
-            );
-
             // Send RecurringTask to background worker
             // It will dispatch RecurringUpdateTriggered at the specified interval
             let _ = app.task_tx.send(BackgroundTask::RecurringTask {

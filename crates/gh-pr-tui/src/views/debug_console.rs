@@ -49,5 +49,7 @@ pub fn render_debug_console(f: &mut Frame, area: Rect, app: &App) -> usize {
 
     f.render_widget(logs_list, console_area);
 
-    vm.visible_height
+    // Return the total console height (including borders) for viewport calculations
+    // The view model will subtract borders internally
+    console_area.height as usize
 }
