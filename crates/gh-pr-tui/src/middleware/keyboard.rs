@@ -72,56 +72,6 @@ impl KeyboardMiddleware {
         self.last_key = None;
     }
 
-    /// Determine which panel/context is currently active
-    fn get_active_context(state: &AppState) -> PanelContext {
-        // Priority order: popups > log panel > shortcuts > main PR table
-
-        // Command palette (highest priority)
-        if state.ui.command_palette.is_some() {
-            return PanelContext::CommandPalette;
-        }
-
-        // Close PR popup
-        if state.ui.close_pr_state.is_some() {
-            return PanelContext::ClosePrPopup;
-        }
-
-        // Add repo popup
-        if state.ui.show_add_repo {
-            return PanelContext::AddRepoPopup;
-        }
-
-        // Log panel
-        if state.log_panel.panel.is_some() {
-            // Check job list focus via shared state
-            let job_list_focused = state
-                .log_panel
-                .job_list_focused_shared
-                .lock()
-                .map(|f| *f)
-                .unwrap_or(false);
-
-            if job_list_focused {
-                return PanelContext::LogPanelJobList;
-            } else {
-                return PanelContext::LogPanelLogViewer;
-            }
-        }
-
-        // Debug console
-        if state.debug_console.is_open {
-            return PanelContext::DebugConsole;
-        }
-
-        // Shortcuts panel
-        if state.ui.show_shortcuts {
-            return PanelContext::ShortcutsPanel;
-        }
-
-        // Default: PR table
-        PanelContext::PrTable
-    }
-
     /// Handle a key event based on panel capabilities
     ///
     /// This is capability-based: it maps keys to semantic actions based on what the
@@ -311,27 +261,6 @@ impl Middleware for KeyboardMiddleware {
 enum KeySequence {
     GoToTop,    // "gg"
     GoToBottom, // "G"
-}
-
-/// Active panel context
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PanelContext {
-    /// Main PR table view
-    PrTable,
-    /// Log panel - job list (tree view)
-    LogPanelJobList,
-    /// Log panel - log viewer (text view)
-    LogPanelLogViewer,
-    /// Shortcuts help panel
-    ShortcutsPanel,
-    /// Debug console
-    DebugConsole,
-    /// Command palette
-    CommandPalette,
-    /// Add repository popup
-    AddRepoPopup,
-    /// Close PR popup
-    ClosePrPopup,
 }
 
 #[cfg(test)]

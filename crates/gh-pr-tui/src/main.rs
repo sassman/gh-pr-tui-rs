@@ -448,7 +448,10 @@ impl App {
         // 1. Logging middleware - logs all actions for debugging
         store.add_middleware(crate::middleware::LoggingMiddleware::new());
 
-        // 2. Task middleware - handles async operations (replaces Effect system)
+        // 2. Keyboard middleware - translates key events to semantic actions based on capabilities
+        store.add_middleware(crate::middleware::KeyboardMiddleware::new());
+
+        // 3. Task middleware - handles async operations (replaces Effect system)
         store.add_middleware(crate::middleware::TaskMiddleware::new(cache));
 
         App { store, action_tx }
