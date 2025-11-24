@@ -141,6 +141,18 @@ impl Dispatcher {
 /// It logs every action for debugging purposes.
 pub struct LoggingMiddleware;
 
+impl LoggingMiddleware {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for LoggingMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Middleware for LoggingMiddleware {
     fn handle<'a>(
         &'a mut self,
@@ -154,6 +166,87 @@ impl Middleware for LoggingMiddleware {
                 log::debug!("Action: {:?}", action);
             }
             // Always continue to next middleware
+            true
+        })
+    }
+}
+
+/// TaskMiddleware - handles async operations like loading repos, merging PRs, etc.
+///
+/// This middleware replaces the old Effect/BackgroundTask system by handling
+/// async operations directly in response to actions.
+///
+/// # Example Operations
+/// - LoadRepo → fetch PR data from GitHub → dispatch RepoDataLoaded
+/// - MergeSelectedPrs → call GitHub API → dispatch MergeComplete
+/// - Rebase → call GitHub API → dispatch RebaseComplete
+///
+/// # Design
+/// The middleware spawns tokio tasks for async operations and dispatches
+/// result actions when complete. This eliminates the need for:
+/// - Effect enum
+/// - BackgroundTask enum
+/// - TaskResult enum
+/// - result_to_action() conversion
+pub struct TaskMiddleware {
+    // TODO: Add octocrab, cache, etc. when implementing specific handlers
+    // octocrab: Option<octocrab::Octocrab>,
+    // cache: Arc<Mutex<gh_api_cache::GitHubApiCache>>,
+}
+
+impl TaskMiddleware {
+    pub fn new() -> Self {
+        Self {
+            // octocrab: None,
+            // cache,
+        }
+    }
+}
+
+impl Default for TaskMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Middleware for TaskMiddleware {
+    fn handle<'a>(
+        &'a mut self,
+        action: &'a Action,
+        _state: &'a AppState,
+        _dispatcher: &'a Dispatcher,
+    ) -> BoxFuture<'a, bool> {
+        Box::pin(async move {
+            match action {
+                // Example: Handle Bootstrap action
+                // In full implementation, this would:
+                // 1. Load .env file
+                // 2. Initialize Octocrab
+                // 3. Load repositories
+                // 4. Dispatch BootstrapComplete
+                Action::Bootstrap => {
+                    log::debug!("TaskMiddleware: Bootstrap action (not yet implemented)");
+                    // For now, just pass through to let effect system handle it
+                }
+
+                // Example: Handle ReloadRepo action
+                // In full implementation, this would:
+                // 1. Spawn async task
+                // 2. Fetch PR data from GitHub
+                // 3. Dispatch RepoDataLoaded(idx, Ok(prs))
+                Action::ReloadRepo(repo_index) => {
+                    log::debug!(
+                        "TaskMiddleware: ReloadRepo {} (not yet implemented)",
+                        repo_index
+                    );
+                    // For now, just pass through to let effect system handle it
+                }
+
+                // All other actions pass through unchanged
+                _ => {}
+            }
+
+            // Always continue to next middleware/reducer
             true
         })
     }

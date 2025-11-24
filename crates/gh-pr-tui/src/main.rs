@@ -132,9 +132,15 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
         msg
     };
 
-    // Pure Redux/Elm architecture: Dispatch action to reducers, get effects back
-    let effects = app.store.dispatch(msg);
+    // NEW: Middleware-based dispatch (Phase 1)
+    // Create dispatcher from action channel
+    let dispatcher = crate::middleware::Dispatcher::new(app.action_tx.clone());
 
+    // Dispatch through middleware chain, then reducer
+    // Middleware can handle async operations and dispatch follow-up actions
+    let effects = app.store.dispatch_async(msg, &dispatcher).await;
+
+    // OLD: Effect system (kept for backward compatibility during migration)
     // Execute effects returned by reducers and dispatch follow-up actions
     for effect in effects {
         let follow_up_actions = execute_effect(app, effect).await?;
@@ -507,8 +513,18 @@ impl App {
         let cache_file = crate::infra::files::get_cache_file_path()
             .unwrap_or_else(|_| std::env::temp_dir().join("gh-api-cache.json"));
 
+        // Create store and wire up middleware
+        let mut store = Store::new(initial_state);
+
+        // Add middleware in order (first added = first called)
+        // 1. Logging middleware - logs all actions for debugging
+        store.add_middleware(crate::middleware::LoggingMiddleware::new());
+
+        // 2. Task middleware - handles async operations (will replace effects)
+        store.add_middleware(crate::middleware::TaskMiddleware::new());
+
         App {
-            store: Store::new(initial_state),
+            store,
             action_tx,
             task_tx,
             cache: Arc::new(Mutex::new(ApiCache::new(cache_file).unwrap_or_default())),
