@@ -52,10 +52,6 @@ pub struct App {
     pub store: Store,
     // Communication channels
     pub action_tx: mpsc::UnboundedSender<Action>,
-    pub task_tx: mpsc::UnboundedSender<BackgroundTask>,
-    // API response cache for development workflow (Arc<Mutex> for sharing across tasks)
-    pub cache: Arc<Mutex<ApiCache>>,
-    // Splash screen state
 }
 
 #[derive(Debug, Serialize, Deserialize, Eq, Clone, PartialEq)]
@@ -202,7 +198,6 @@ fn start_event_handler(
 
     (handle, debug_console_open_shared)
 }
-
 
 async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
     let mut t = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
@@ -371,7 +366,9 @@ fn ui(f: &mut Frame, app: &mut App) {
     if app.store.state().ui.show_shortcuts {
         let max_scroll = crate::views::help::render_shortcuts_panel(f, chunks[1], app);
         // Update max scroll via Redux action
-        let _ = app.action_tx.send(Action::UpdateShortcutsMaxScroll(max_scroll));
+        let _ = app
+            .action_tx
+            .send(Action::UpdateShortcutsMaxScroll(max_scroll));
     }
 
     // Render add repo popup on top of everything if visible
@@ -456,17 +453,9 @@ impl App {
         store.add_middleware(crate::middleware::LoggingMiddleware::new());
 
         // 2. Task middleware - handles async operations (replaces Effect system)
-        store.add_middleware(crate::middleware::TaskMiddleware::new(
-            cache.clone(),
-            task_tx.clone(),
-        ));
+        store.add_middleware(crate::middleware::TaskMiddleware::new(cache, task_tx));
 
-        App {
-            store,
-            action_tx,
-            task_tx,
-            cache,
-        }
+        App { store, action_tx }
     }
 
     /// Get the current repo data (read-only)
