@@ -2133,6 +2133,7 @@ fn debug_console_reducer(
             }
         }
         Action::ScrollDebugConsoleUp => {
+            // Immediate viewport scrolling - scroll up by 1 line
             state.scroll_offset = state.scroll_offset.saturating_sub(1);
             // Disable auto-scroll when manually scrolling
             state.auto_scroll = false;
@@ -2140,34 +2141,27 @@ fn debug_console_reducer(
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::ScrollDebugConsoleDown => {
-            // Calculate max scroll offset to prevent scrolling beyond the end
+            // Immediate viewport scrolling - scroll down by 1 line (with bounds check)
             let log_count = state.logs.lock().map(|logs| logs.len()).unwrap_or(0);
-            let visible_height = state.viewport_height.saturating_sub(2); // Subtract borders
-            let max_scroll = log_count.saturating_sub(visible_height);
-
-            state.scroll_offset = (state.scroll_offset.saturating_add(1)).min(max_scroll);
+            if log_count > 0 {
+                state.scroll_offset = state.scroll_offset.saturating_add(1);
+            }
             // Disable auto-scroll when manually scrolling
             state.auto_scroll = false;
-            // Recompute view model
+            // Recompute view model (will clamp scroll_offset to valid range)
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::PageDebugConsoleDown => {
-            // Calculate max scroll offset to prevent scrolling beyond the end
-            let log_count = state.logs.lock().map(|logs| logs.len()).unwrap_or(0);
-            let visible_height = state.viewport_height.saturating_sub(2); // Subtract borders
-            let max_scroll = log_count.saturating_sub(visible_height);
-
-            // Page down by viewport_height - 1 (keep one line of context)
-            let page_size = state.viewport_height.saturating_sub(1).max(1);
-            state.scroll_offset = (state.scroll_offset.saturating_add(page_size)).min(max_scroll);
+            // Page down - scroll by 10 lines
+            state.scroll_offset = state.scroll_offset.saturating_add(10);
             // Disable auto-scroll when manually scrolling
             state.auto_scroll = false;
-            // Recompute view model
+            // Recompute view model (will clamp scroll_offset to valid range)
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::ToggleDebugAutoScroll => {
             state.auto_scroll = !state.auto_scroll;
-            // Recompute view model
+            // Recompute view model (auto-scroll will jump to end in view model)
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::ClearDebugLogs => {
@@ -2178,9 +2172,8 @@ fn debug_console_reducer(
             // Recompute view model
             recompute_debug_console_view_model(&mut state, theme);
         }
-        Action::UpdateDebugConsoleViewport(height) => {
-            state.viewport_height = *height;
-            // Recompute view model
+        Action::UpdateDebugConsoleViewport(_height) => {
+            // Just recompute view model in case logs changed
             recompute_debug_console_view_model(&mut state, theme);
         }
         _ => {}
@@ -2200,21 +2193,17 @@ fn recompute_debug_console_view_model(state: &mut DebugConsoleState, theme: &cra
         Err(_) => return, // Skip if can't lock
     };
 
-    // Use viewport_height if available (set by view after first render),
-    // otherwise use reasonable default
-    const DEFAULT_CONSOLE_HEIGHT: usize = 10;
-    let console_height = if state.viewport_height > 0 {
-        state.viewport_height
-    } else {
-        DEFAULT_CONSOLE_HEIGHT
-    };
+    // Calculate visible height (console height is 50% of screen, minus 2 for borders)
+    // Use a reasonable default - will be accurate enough for scrolling
+    const CONSOLE_HEIGHT: usize = 15; // Approximate visible lines
+    let visible_height = CONSOLE_HEIGHT;
 
     state.view_model = Some(
         crate::view_models::debug_console::DebugConsoleViewModel::from_state(
             &logs,
             state.scroll_offset,
             state.auto_scroll,
-            console_height,
+            visible_height,
             theme,
         ),
     );

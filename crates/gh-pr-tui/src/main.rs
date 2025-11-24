@@ -460,10 +460,7 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     // Render debug console (Quake-style drop-down) if visible
     if app.store.state().debug_console.is_open {
-        let viewport_height = crate::views::debug_console::render_debug_console(f, f.area(), app);
-        // Update viewport height for page down scrolling
-        app.store
-            .dispatch(Action::UpdateDebugConsoleViewport(viewport_height));
+        crate::views::debug_console::render_debug_console(f, f.area(), app);
     }
 }
 

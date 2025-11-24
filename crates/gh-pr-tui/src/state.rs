@@ -179,11 +179,10 @@ pub struct TaskState {
 #[derive(Debug, Clone)]
 pub struct DebugConsoleState {
     pub is_open: bool,
-    pub scroll_offset: usize,
-    pub auto_scroll: bool,   // Follow new logs as they arrive
-    pub height_percent: u16, // Height as percentage of screen (30-70)
+    pub scroll_offset: usize, // Viewport scroll position (first visible line)
+    pub auto_scroll: bool,    // Follow new logs as they arrive
+    pub height_percent: u16,  // Height as percentage of screen (30-70)
     pub logs: crate::log_capture::LogBuffer,
-    pub viewport_height: usize, // Updated during rendering for page down
     /// View model - pre-computed presentation data
     pub view_model: Option<crate::view_models::debug_console::DebugConsoleViewModel>,
 }
@@ -220,7 +219,7 @@ impl PrNumber {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RepoData {
     pub prs: Vec<Pr>,
     pub table_state: TableState,
@@ -234,21 +233,6 @@ pub struct RepoData {
 
     /// Timestamp when this repo was last successfully loaded/updated
     pub last_updated: Option<chrono::DateTime<chrono::Local>>,
-}
-
-impl Default for RepoData {
-    fn default() -> Self {
-        Self {
-            prs: Vec::new(),
-            table_state: TableState::default(),
-            selected_pr_numbers: HashSet::new(),
-            loading_state: LoadingState::default(),
-            auto_merge_queue: Vec::new(),
-            operation_monitor_queue: Vec::new(),
-            pr_table_view_model: None,
-            last_updated: None,
-        }
-    }
 }
 
 /// Represents a PR in the auto-merge queue
@@ -447,7 +431,6 @@ impl Default for DebugConsoleState {
             auto_scroll: true,
             height_percent: 50, // 50% of screen height
             logs: crate::log_capture::DebugConsoleLogger::create_buffer(),
-            viewport_height: 20, // Default, updated during rendering
             view_model: None,
         }
     }
