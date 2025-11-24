@@ -37,6 +37,7 @@ mod infra;
 mod log;
 mod log_capture;
 mod merge_bot;
+mod middleware;
 mod pr;
 mod reducer;
 mod shortcuts;
