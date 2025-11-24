@@ -55,10 +55,21 @@ impl Store {
         &self.state
     }
 
-    /// Get mutable reference to current state
-    /// Note: Direct mutation should be avoided - prefer dispatch() for state changes
-    pub fn state_mut(&mut self) -> &mut AppState {
-        &mut self.state
+    /// Get mutable table state for ratatui rendering ONLY
+    ///
+    /// This violates Redux immutability but is required by ratatui's StatefulWidget API.
+    /// Do NOT use for business logic - use actions/reducers instead.
+    pub(crate) fn table_state_for_rendering(
+        &mut self,
+        repo_index: usize,
+    ) -> &mut ratatui::widgets::TableState {
+        &mut self
+            .state
+            .repos
+            .repo_data
+            .entry(repo_index)
+            .or_default()
+            .table_state
     }
 
     /// Dispatch an action through middleware chain, then reducer

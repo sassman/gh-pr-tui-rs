@@ -292,9 +292,8 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
         // Handle force redraw flag - clear terminal if requested
         if app.store.state().ui.force_redraw {
             t.clear()?;
-            // Reset the flag after clearing
-            let state = app.store.state_mut();
-            state.ui.force_redraw = false;
+            // Reset the flag after clearing (Redux action)
+            let _ = app.action_tx.send(Action::ResetForceRedraw);
         }
 
         t.draw(|f| {
@@ -319,10 +318,9 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
         match maybe_action {
             Ok(Some(action)) => {
                 if let Err(err) = update(&mut app, action).await {
-                    app.store.state_mut().repos.loading_state =
-                        LoadingState::Error(err.to_string());
-                    app.store.state_mut().ui.should_quit = true;
-                    debug!("Error updating app: {}", err);
+                    debug!("Fatal error updating app: {}", err);
+                    // Dispatch fatal error action (Redux)
+                    let _ = app.action_tx.send(Action::FatalError(err.to_string()));
                 }
             }
             Ok(None) => break, // Channel closed
@@ -357,7 +355,7 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
 fn ui(f: &mut Frame, app: &mut App) {
     // Show bootstrap/splash screen until UI is ready (first repo loaded)
     let ui_ready = matches!(
-        app.store.state().infrastructure.bootstrap_state,
+        app.store.state().infra.bootstrap_state,
         BootstrapState::UIReady | BootstrapState::LoadingRemainingRepos | BootstrapState::Completed
     );
 
@@ -421,7 +419,8 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Render shortcuts panel on top of everything if visible
     if app.store.state().ui.show_shortcuts {
         let max_scroll = crate::views::help::render_shortcuts_panel(f, chunks[1], app);
-        app.store.state_mut().ui.shortcuts_max_scroll = max_scroll;
+        // Update max scroll via Redux action
+        let _ = app.action_tx.send(Action::UpdateShortcutsMaxScroll(max_scroll));
     }
 
     // Render add repo popup on top of everything if visible
@@ -491,7 +490,7 @@ impl App {
             },
             config: Config::load(),
             theme,
-            infrastructure: InfrastructureState::default(),
+            infra: InfrastructureState::default(),
         };
 
         let cache_file = crate::infra::files::get_cache_file_path()
@@ -530,22 +529,11 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Get the current repo data (mutable)
-    fn get_current_repo_data_mut(&mut self) -> &mut RepoData {
-        let selected_repo = self.store.state().repos.selected_repo;
-        self.store
-            .state_mut()
-            .repos
-            .repo_data
-            .entry(selected_repo)
-            .or_default()
-    }
-
     fn octocrab(&self) -> Result<Octocrab> {
         // Return octocrab instance from Redux state (initialized during bootstrap)
         self.store
             .state()
-            .infrastructure
+            .infra
             .octocrab
             .clone()
             .ok_or_else(|| {
@@ -559,6 +547,19 @@ impl App {
             .repos
             .recent_repos
             .get(self.store.state().repos.selected_repo)
+    }
+
+    /// Get mutable table state for ratatui rendering
+    ///
+    /// IMPORTANT: This is ONLY for ratatui's StatefulWidget API requirement.
+    /// Do NOT use this for business logic - use actions/reducers instead.
+    ///
+    /// Ratatui's render_stateful_widget requires &mut TableState to update
+    /// internal scroll offsets during rendering. This is a necessary evil
+    /// when interfacing with ratatui's API.
+    fn table_state_for_rendering(&mut self) -> &mut ratatui::widgets::TableState {
+        let selected_repo = self.store.state().repos.selected_repo;
+        self.store.table_state_for_rendering(selected_repo)
     }
 }
 
