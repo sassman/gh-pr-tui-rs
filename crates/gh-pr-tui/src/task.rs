@@ -4,9 +4,9 @@ use crate::{
     actions::Action,
     gh::{comment, merge},
     log::PrContext,
+    middleware::Dispatcher,
     pr::Pr,
     state::Repo,
-    middleware::Dispatcher,
 };
 use gh_api_cache::ApiCache;
 use log::{debug, error};
@@ -1298,15 +1298,13 @@ async fn process_task(task: BackgroundTask) {
                             }
                         };
 
-                        dispatcher.dispatch(Action::MergeStatusUpdated(
-                            repo_index, pr_number, status,
-                        ));
+                        dispatcher
+                            .dispatch(Action::MergeStatusUpdated(repo_index, pr_number, status));
                     } else {
                         // When checking merge confirmation, just check if PR is merged
                         let is_merged = pr_detail.merged_at.is_some();
-                        dispatcher.dispatch(Action::PRMergedConfirmed(
-                            repo_index, pr_number, is_merged,
-                        ));
+                        dispatcher
+                            .dispatch(Action::PRMergedConfirmed(repo_index, pr_number, is_merged));
                     }
                 }
                 Err(_) => {
@@ -1319,7 +1317,8 @@ async fn process_task(task: BackgroundTask) {
                         ));
                     } else {
                         // Can't fetch PR, assume not merged yet
-                        dispatcher.dispatch(Action::PRMergedConfirmed(repo_index, pr_number, false));
+                        dispatcher
+                            .dispatch(Action::PRMergedConfirmed(repo_index, pr_number, false));
                     }
                 }
             }
@@ -1337,15 +1336,10 @@ async fn process_task(task: BackgroundTask) {
             match result {
                 Ok(_) => {
                     // Success - schedule periodic status checks
-                    dispatcher.dispatch(Action::SetTaskStatus(Some(
-                        crate::state::TaskStatus {
-                            message: format!(
-                                "Auto-merge enabled for PR #{}, monitoring...",
-                                pr_number
-                            ),
-                            status_type: crate::state::TaskStatusType::Success,
-                        },
-                    )));
+                    dispatcher.dispatch(Action::SetTaskStatus(Some(crate::state::TaskStatus {
+                        message: format!("Auto-merge enabled for PR #{}, monitoring...", pr_number),
+                        status_type: crate::state::TaskStatusType::Success,
+                    })));
 
                     // Spawn a task to periodically check PR status
                     let dispatcher_clone = dispatcher.clone();
@@ -1357,7 +1351,8 @@ async fn process_task(task: BackgroundTask) {
                             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
                             // Send status check result
-                            dispatcher_clone.dispatch(Action::AutoMergeStatusCheck(repo_index, pr_number));
+                            dispatcher_clone
+                                .dispatch(Action::AutoMergeStatusCheck(repo_index, pr_number));
 
                             // Check merge status to update PR state
                             if let Ok(pr_detail) = octocrab_clone
@@ -1373,15 +1368,15 @@ async fn process_task(task: BackgroundTask) {
                                     let _ = dispatcher_clone.dispatch(
                                         Action::RemoveFromAutoMergeQueue(repo_index, pr_number),
                                     );
-                                    let _ = dispatcher_clone.dispatch(Action::SetTaskStatus(
-                                        Some(crate::state::TaskStatus {
+                                    let _ = dispatcher_clone.dispatch(Action::SetTaskStatus(Some(
+                                        crate::state::TaskStatus {
                                             message: format!(
                                                 "PR #{} successfully merged!",
                                                 pr_number
                                             ),
                                             status_type: crate::state::TaskStatusType::Success,
-                                        }),
-                                    ));
+                                        },
+                                    )));
                                     break;
                                 } else {
                                     // Check CI status
@@ -1416,17 +1411,15 @@ async fn process_task(task: BackgroundTask) {
                 }
                 Err(e) => {
                     // Failed to enable auto-merge
-                    let _ =
-                        dispatcher.dispatch(Action::RemoveFromAutoMergeQueue(repo_index, pr_number));
-                    dispatcher.dispatch(Action::SetTaskStatus(Some(
-                        crate::state::TaskStatus {
-                            message: format!(
-                                "Failed to enable auto-merge for PR #{}: {}",
-                                pr_number, e
-                            ),
-                            status_type: crate::state::TaskStatusType::Error,
-                        },
-                    )));
+                    let _ = dispatcher
+                        .dispatch(Action::RemoveFromAutoMergeQueue(repo_index, pr_number));
+                    dispatcher.dispatch(Action::SetTaskStatus(Some(crate::state::TaskStatus {
+                        message: format!(
+                            "Failed to enable auto-merge for PR #{}: {}",
+                            pr_number, e
+                        ),
+                        status_type: crate::state::TaskStatusType::Error,
+                    })));
                 }
             }
         }
@@ -1665,8 +1658,7 @@ async fn process_task(task: BackgroundTask) {
                                     },
                                 )));
                                 // Trigger repo reload to remove merged PR from list
-                                let _ =
-                                    dispatcher_clone.dispatch(Action::ReloadRepo(repo_index));
+                                let _ = dispatcher_clone.dispatch(Action::ReloadRepo(repo_index));
                                 break;
                             } else if matches!(
                                 pr_detail.state,
@@ -1705,9 +1697,8 @@ async fn process_task(task: BackgroundTask) {
                     "Operation monitor timed out for PR #{} after 1 hour",
                     pr_number
                 );
-                let _ = dispatcher_clone.dispatch(Action::RemoveFromOperationMonitor(
-                    repo_index, pr_number,
-                ));
+                let _ = dispatcher_clone
+                    .dispatch(Action::RemoveFromOperationMonitor(repo_index, pr_number));
                 let _ = dispatcher_clone.dispatch(Action::SetTaskStatus(Some(
                     crate::state::TaskStatus {
                         message: format!("Monitoring timed out for PR #{} after 1 hour", pr_number),

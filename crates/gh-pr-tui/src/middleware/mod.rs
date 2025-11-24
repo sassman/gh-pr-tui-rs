@@ -42,11 +42,13 @@ use std::pin::Pin;
 
 // Module declarations
 mod dispatcher;
+mod keyboard;
 mod logging;
 mod task;
 
 // Re-exports
 pub use dispatcher::Dispatcher;
+pub use keyboard::KeyboardMiddleware;
 pub use logging::LoggingMiddleware;
 pub use task::TaskMiddleware;
 

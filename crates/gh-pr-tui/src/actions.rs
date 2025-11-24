@@ -1,9 +1,13 @@
 use anyhow::Result;
+use ratatui::crossterm::event::KeyEvent;
 
 /// Action enum - represents all possible actions in the application
 /// Actions are dispatched to the reducer to update state
 #[derive(Debug, Clone)]
 pub enum Action {
+    // Raw keyboard input (processed by KeyboardMiddleware)
+    KeyPressed(KeyEvent),
+
     // User-initiated actions
     Bootstrap,
     Rebase,

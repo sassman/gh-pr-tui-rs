@@ -72,6 +72,9 @@ fn ui_reducer(
     theme: &crate::theme::Theme,
 ) -> (UiState, Vec<Effect>) {
     match action {
+        // KeyPressed is handled by KeyboardMiddleware - no-op in reducer
+        Action::KeyPressed(_) => {}
+
         Action::Quit => {
             state.should_quit = true;
         }

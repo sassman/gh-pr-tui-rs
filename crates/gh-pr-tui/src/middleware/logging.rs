@@ -51,9 +51,7 @@ mod tests {
         let dispatcher = Dispatcher::new(tx);
         let state = AppState::default();
 
-        let should_continue = middleware
-            .handle(&Action::Quit, &state, &dispatcher)
-            .await;
+        let should_continue = middleware.handle(&Action::Quit, &state, &dispatcher).await;
 
         assert!(should_continue);
     }
