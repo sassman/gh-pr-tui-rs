@@ -99,8 +99,8 @@ pub fn render_pr_table(f: &mut Frame, area: Rect, app: &mut App) {
         .block(block)
         .row_highlight_style(selected_row_style);
 
-    // Get mutable reference to the current repo's table state
-    let table_state = &mut app.get_current_repo_data_mut().table_state;
+    // Get mutable reference to the current repo's table state (for ratatui rendering only)
+    let table_state = app.table_state_for_rendering();
     f.render_stateful_widget(table, area, table_state);
 }
 

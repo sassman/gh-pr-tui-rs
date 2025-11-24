@@ -132,6 +132,9 @@ pub enum Action {
 
     // UI management
     ForceRedraw, // Force a full terminal redraw (fixes broken UI from error logs)
+    ResetForceRedraw, // Reset force_redraw flag after render (internal)
+    FatalError(String), // Fatal error - set error state and quit
+    UpdateShortcutsMaxScroll(usize), // Update shortcuts panel max scroll
 
     // Viewport height updates (for page down scrolling)
     UpdateLogPanelViewport(usize),

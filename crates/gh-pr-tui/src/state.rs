@@ -20,7 +20,7 @@ pub struct AppState {
     pub theme: Theme,
 
     /// Infrastructure state
-    pub infrastructure: InfrastructureState,
+    pub infra: InfrastructureState,
 }
 
 /// Infrastructure state (GitHub client, etc.)

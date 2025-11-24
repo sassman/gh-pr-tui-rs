@@ -11,8 +11,8 @@ pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
 
     // highest priority is the infrastructure setup, then the rest.
     let (infrastructure_state, infrastructure_effects) =
-        infrastructure_reducer(state.infrastructure, action);
-    state.infrastructure = infrastructure_state;
+        infrastructure_reducer(state.infra, action);
+    state.infra = infrastructure_state;
     effects.extend(infrastructure_effects);
 
     let (ui_state, ui_effects) = ui_reducer(state.ui, action, &state.theme);
@@ -24,7 +24,7 @@ pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
         action,
         &state.config,
         &state.theme,
-        &state.infrastructure,
+        &state.infra,
     );
     state.repos = repos_state;
     effects.extend(repos_effects);
@@ -236,6 +236,17 @@ fn ui_reducer(
         Action::ForceRedraw => {
             state.force_redraw = true;
         }
+        Action::ResetForceRedraw => {
+            state.force_redraw = false;
+        }
+        Action::FatalError(err) => {
+            state.should_quit = true;
+            // Also set error in loading state for visibility
+            // Note: Using repos.loading_state as a general error indicator
+        }
+        Action::UpdateShortcutsMaxScroll(max_scroll) => {
+            state.shortcuts_max_scroll = *max_scroll;
+        }
 
         Action::CommandPaletteSelectNext => {
             if let Some(ref mut palette) = state.command_palette
@@ -315,7 +326,7 @@ fn recompute_splash_screen_view_model(state: &mut AppState) {
     // Only show splash screen during bootstrap (before UI is ready)
     use crate::state::BootstrapState;
     let should_show_splash = !matches!(
-        state.infrastructure.bootstrap_state,
+        state.infra.bootstrap_state,
         BootstrapState::UIReady | BootstrapState::LoadingRemainingRepos | BootstrapState::Completed
     );
 
@@ -325,9 +336,9 @@ fn recompute_splash_screen_view_model(state: &mut AppState) {
         // Progress bar area: 46 - 10 (for percentage) = 36 chars
         const BAR_WIDTH: usize = 36;
 
-        state.infrastructure.splash_screen_view_model = Some(
+        state.infra.splash_screen_view_model = Some(
             crate::view_models::splash_screen::SplashScreenViewModel::from_state(
-                &state.infrastructure.bootstrap_state,
+                &state.infra.bootstrap_state,
                 &state.repos.recent_repos,
                 state.repos.selected_repo,
                 state.ui.spinner_frame,
@@ -337,7 +348,7 @@ fn recompute_splash_screen_view_model(state: &mut AppState) {
         );
     } else {
         // Clear view model when splash screen should not be shown
-        state.infrastructure.splash_screen_view_model = None;
+        state.infra.splash_screen_view_model = None;
     }
 }
 
@@ -443,7 +454,6 @@ fn infrastructure_reducer(
                     // Start recurring updates every 30 minutes (1800000 milliseconds)
                     const THIRTY_MINUTES_MS: u64 = 30 * 60 * 1000;
                     debug!("Bootstrap completed, starting recurring updates");
-                     
                 }
                 Err(_) => {
                     state.bootstrap_state =
@@ -498,7 +508,6 @@ fn repos_reducer(
             );
             state.recent_repos = result.repos.clone();
             state.selected_repo = result.selected_repo;
-             
 
             // Load selected repo first for quick UI display
             if let Some(selected_repo) = result.repos.get(result.selected_repo) {
@@ -510,13 +519,11 @@ fn repos_reducer(
                 data.loading_state = LoadingState::Loading;
 
                 // Effect: Load just the selected repo first (use cache for fast startup)
-                 
 
                 // Effect: Show status message
-                 
             } else {
                 // Fallback: load all repos if selected repo doesn't exist
-                 
+
                 for i in 0..result.repos.len() {
                     let data = state.repo_data.entry(i).or_default();
                     data.loading_state = LoadingState::Loading;
@@ -531,9 +538,7 @@ fn repos_reducer(
                     .collect();
             }
         }
-        Action::BootstrapComplete(Err(err)) => {
-             
-        }
+        Action::BootstrapComplete(Err(err)) => {}
         Action::RepoLoadingStarted(repo_index) => {
             // Mark repo as loading (request in flight)
             let data = state.repo_data.entry(*repo_index).or_default();
@@ -653,7 +658,7 @@ fn repos_reducer(
             // Effect: Check merge status for loaded PRs
             if let Some(repo) = state.recent_repos.get(*repo_index).cloned() {
                 let pr_numbers: Vec<usize> = prs.iter().map(|pr| pr.number).collect();
-                 
+
                 // Effect: Check comment counts for loaded PRs
             }
 
@@ -662,7 +667,6 @@ fn repos_reducer(
                 && *repo_index == state.selected_repo
             {
                 // First repo loaded - UI is ready to display!
-                 
 
                 // Show success message for first repo
                 if let Some(repo) = state.recent_repos.get(*repo_index) {
@@ -672,7 +676,6 @@ fn repos_reducer(
                         repo.repo,
                         prs.len()
                     );
-                     
                 }
 
                 // Start loading remaining repos in background
@@ -681,7 +684,6 @@ fn repos_reducer(
                         "Starting background loading of {} remaining repositories",
                         state.recent_repos.len() - 1
                     );
-                     
 
                     // Mark all other repos as loading
                     for i in 0..state.recent_repos.len() {
@@ -703,7 +705,6 @@ fn repos_reducer(
                     // Effect: Load remaining repos
                 } else {
                     // Only one repo - we're done
-                     
                 }
             } else if infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos {
                 // Show status message for each repo that loads in background
@@ -714,7 +715,6 @@ fn repos_reducer(
                         repo.repo,
                         prs.len()
                     );
-                     
                 }
             }
 
@@ -740,7 +740,6 @@ fn repos_reducer(
                     loaded_count,
                     state.recent_repos.len()
                 );
-                 
             }
 
             // Recompute view model after PR data loaded
@@ -758,7 +757,6 @@ fn repos_reducer(
                 && *repo_index == state.selected_repo
             {
                 // First repo failed - still show UI but with error message
-                 
 
                 // Show error message for first repo
                 if let Some(repo) = state.recent_repos.get(*repo_index) {
@@ -766,13 +764,10 @@ fn repos_reducer(
                         "Failed to load first repo {}/{}: {}",
                         repo.org, repo.repo, err
                     );
-                     
                 }
 
                 // Start loading remaining repos in background (if any)
                 if state.recent_repos.len() > 1 {
-                     
-
                     // Mark all other repos as loading
                     for i in 0..state.recent_repos.len() {
                         if i != state.selected_repo {
@@ -793,7 +788,6 @@ fn repos_reducer(
                     // Effect: Load remaining repos
                 } else {
                     // Only one repo and it failed - still complete bootstrap to show UI
-                     
                 }
             } else if infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos {
                 // Show error message for background repo that failed
@@ -802,7 +796,6 @@ fn repos_reducer(
                         "Failed to load background repo {}/{}: {}",
                         repo.org, repo.repo, err
                     );
-                     
                 }
             }
 
@@ -828,16 +821,13 @@ fn repos_reducer(
                     .values()
                     .filter(|d| matches!(d.loading_state, LoadingState::Error(_)))
                     .count();
-
-                 
             }
         }
         Action::CycleFilter => {
             state.filter = state.filter.next();
 
             // Reload current repository with new filter (use cache, filter is client-side)
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-            }
+            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {}
 
             // Note: View model will be recomputed when RepoDataLoaded action fires
         }
@@ -903,8 +893,7 @@ fn repos_reducer(
 
                 // Automatically advance to next PR if not on the last row
                 // Note: NavigateToNextPr will trigger another recompute, but that's OK
-                if selected < state.prs.len().saturating_sub(1) {
-                }
+                if selected < state.prs.len().saturating_sub(1) {}
             }
         }
         Action::ClearPrSelection => {
@@ -963,7 +952,7 @@ fn repos_reducer(
                 && let Some(repo) = state.recent_repos.get(*repo_index).cloned()
             {
                 // First dispatch action to update state immediately
-                 
+
                 // Then start background monitoring
             }
         }
@@ -1038,9 +1027,7 @@ fn repos_reducer(
         Action::RecurringUpdateTriggered => {
             // Effect: Reload all repositories (triggered by recurring background task)
             debug!("Recurring update triggered, reloading all repos");
-            for (repo_index, repo) in state.recent_repos.iter().enumerate() {
-                 
-            }
+            for (repo_index, repo) in state.recent_repos.iter().enumerate() {}
         }
         Action::Rebase => {
             // MIGRATION NOTE: PerformRebase and StartOperationMonitoring now handled by TaskMiddleware
@@ -1056,9 +1043,7 @@ fn repos_reducer(
                 false
             };
 
-            if has_selection
-                && let Some(data) = state.repo_data.get_mut(&state.selected_repo)
-            {
+            if has_selection && let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
                 data.selected_pr_numbers.clear();
             }
         }
@@ -1092,8 +1077,7 @@ fn repos_reducer(
                     Vec::new()
                 };
 
-                if !pr_numbers.is_empty() {
-                }
+                if !pr_numbers.is_empty() {}
             }
         }
         Action::ApprovePrs => {
@@ -1120,9 +1104,7 @@ fn repos_reducer(
                 false
             };
 
-            if has_selection
-                && let Some(data) = state.repo_data.get_mut(&state.selected_repo)
-            {
+            if has_selection && let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
                 data.selected_pr_numbers.clear();
             }
         }
@@ -1142,8 +1124,7 @@ fn repos_reducer(
                         Vec::new()
                     };
 
-                if !prs_to_process.is_empty() {
-                }
+                if !prs_to_process.is_empty() {}
             }
         }
         Action::OpenCurrentPrInBrowser => {
@@ -1269,7 +1250,6 @@ fn repos_reducer(
                     // Remove from queue - timeout reached
                     data.operation_monitor_queue
                         .retain(|op| op.pr_number != *pr_number);
-                     
                 }
             }
         }
@@ -1312,7 +1292,6 @@ fn repos_reducer(
                     // Remove from queue - timeout reached
                     data.auto_merge_queue
                         .retain(|pr| pr.pr_number != *pr_number);
-                     
                 } else {
                     // Check PR status
                     if let Some(repo) = state.recent_repos.get(*repo_index).cloned() {
@@ -1321,19 +1300,17 @@ fn repos_reducer(
                             match pr.mergeable {
                                 crate::pr::MergeableStatus::Ready => {
                                     // PR is ready - trigger merge
-                                     
+
                                     // Remove from queue
                                     data.auto_merge_queue.retain(|p| p.pr_number != *pr_number);
                                 }
                                 crate::pr::MergeableStatus::BuildFailed => {
                                     // Build failed - stop monitoring
                                     data.auto_merge_queue.retain(|p| p.pr_number != *pr_number);
-                                     
                                 }
                                 crate::pr::MergeableStatus::NeedsRebase => {
                                     // Needs rebase - stop monitoring
                                     data.auto_merge_queue.retain(|p| p.pr_number != *pr_number);
-                                     
                                 }
                                 crate::pr::MergeableStatus::BuildInProgress => {
                                     // Still building - schedule next check
@@ -1570,27 +1547,14 @@ fn merge_bot_reducer(
                 if let Some(bot_action) = state.bot.process_next(&repo_data.prs) {
                     use crate::merge_bot::MergeBotAction;
                     match bot_action {
-                        MergeBotAction::DispatchMerge(_indices) => {
-                             
-                             
-                        }
-                        MergeBotAction::DispatchRebase(_indices) => {
-                             
-                             
-                        }
-                        MergeBotAction::WaitForCI(_pr_number) => {
-                             
-                        }
-                        MergeBotAction::PollMergeStatus(pr_number, is_checking_ci) => {
-                             
-                        }
-                        MergeBotAction::PrSkipped(_pr_number, _reason) => {
-                             
-                        }
+                        MergeBotAction::DispatchMerge(_indices) => {}
+                        MergeBotAction::DispatchRebase(_indices) => {}
+                        MergeBotAction::WaitForCI(_pr_number) => {}
+                        MergeBotAction::PollMergeStatus(pr_number, is_checking_ci) => {}
+                        MergeBotAction::PrSkipped(_pr_number, _reason) => {}
                         MergeBotAction::Completed => {
-                             
+
                             // Refresh the PR list (bypass cache after merge operations)
-                             
                         }
                     }
                 }
