@@ -1,5 +1,5 @@
 use crate::{
-    actions::Action, effect::Effect, middleware::{Dispatcher, Middleware}, reducer::reduce,
+    actions::Action, middleware::{Dispatcher, Middleware}, reducer::reduce,
     state::AppState,
 };
 
@@ -67,8 +67,8 @@ impl Store {
     /// the middleware chain before reaching the reducer, allowing
     /// side effects to be handled cleanly.
     ///
-    /// Returns Vec<Effect> for backward compatibility during migration.
-    /// Will eventually return () when effect system is removed.
+    /// All side effects are now handled by middleware, so this method
+    /// returns nothing.
     ///
     /// # Example
     /// ```rust
@@ -78,7 +78,7 @@ impl Store {
         &mut self,
         action: Action,
         dispatcher: &Dispatcher,
-    ) -> Vec<Effect> {
+    ) {
         // Run action through middleware chain
         let mut should_continue = true;
         for middleware in &mut self.middleware {
@@ -90,12 +90,9 @@ impl Store {
 
         // If not blocked by middleware, apply to reducer
         if should_continue {
-            let (new_state, effects) = reduce(self.state.clone(), &action);
+            let (new_state, _effects) = reduce(self.state.clone(), &action);
             self.state = new_state;
-            effects
-        } else {
-            // Action was blocked by middleware
-            Vec::new()
+            // Effects are always empty now - all side effects in middleware
         }
     }
 
@@ -104,27 +101,22 @@ impl Store {
     /// This is the old synchronous dispatch method. It bypasses middleware
     /// and goes straight to the reducer.
     ///
-    /// Prefer `dispatch_async()` for new code. This method will be deprecated
-    /// once all code is migrated to the middleware system.
-    ///
-    /// Returns a vector of effects to be executed by the caller.
-    pub fn dispatch(&mut self, action: Action) -> Vec<Effect> {
-        // Apply reducer to get new state and effects
-        let (new_state, effects) = reduce(self.state.clone(), &action);
+    /// Prefer `dispatch_async()` for new code. This method should only be used
+    /// in tests or simple scenarios where middleware is not needed.
+    pub fn dispatch(&mut self, action: Action) {
+        // Apply reducer to get new state (effects ignored)
+        let (new_state, _effects) = reduce(self.state.clone(), &action);
 
         // Replace old state with new state
         self.state = new_state;
-
-        // Return effects to be executed by caller
-        effects
+        // Effects are always empty now - all side effects in middleware
     }
 
     /// Dispatch an action by reference (useful when action should not be moved)
-    /// Returns a vector of effects to be executed by the caller.
-    pub fn dispatch_ref(&mut self, action: &Action) -> Vec<Effect> {
-        let (new_state, effects) = reduce(self.state.clone(), action);
+    pub fn dispatch_ref(&mut self, action: &Action) {
+        let (new_state, _effects) = reduce(self.state.clone(), action);
         self.state = new_state;
-        effects
+        // Effects are always empty now - all side effects in middleware
     }
 
     /// Replace entire state (useful for initialization or testing)
@@ -148,7 +140,7 @@ mod tests {
         let mut store = Store::default();
         assert!(!store.state().ui.should_quit);
 
-        let _effects = store.dispatch(Action::Quit);
+        store.dispatch(Action::Quit);
         assert!(store.state().ui.should_quit);
     }
 
@@ -157,10 +149,10 @@ mod tests {
         let mut store = Store::default();
         assert!(!store.state().ui.show_shortcuts);
 
-        let _effects = store.dispatch(Action::ToggleShortcuts);
+        store.dispatch(Action::ToggleShortcuts);
         assert!(store.state().ui.show_shortcuts);
 
-        let _effects = store.dispatch(Action::ToggleShortcuts);
+        store.dispatch(Action::ToggleShortcuts);
         assert!(!store.state().ui.show_shortcuts);
     }
 }

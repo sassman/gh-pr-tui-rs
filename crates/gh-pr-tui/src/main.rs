@@ -21,7 +21,6 @@ use ::log::debug;
 
 use crate::actions::Action;
 use crate::config::Config;
-use crate::effect::execute_effect;
 use crate::pr::Pr;
 use crate::state::*;
 use crate::store::Store;
@@ -31,7 +30,7 @@ use crate::theme::Theme;
 mod actions;
 mod command_palette_integration;
 mod config;
-mod effect;
+// Effect module removed - all side effects now in middleware
 mod gh;
 mod infra;
 mod log;
@@ -138,27 +137,12 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
 
     // Dispatch through middleware chain, then reducer
     // Middleware can handle async operations and dispatch follow-up actions
-    let effects = app.store.dispatch_async(msg, &dispatcher).await;
+    let _effects = app.store.dispatch_async(msg, &dispatcher).await;
 
-    // OLD: Effect system (kept for backward compatibility during migration)
-    // Execute effects returned by reducers and dispatch follow-up actions
-    for effect in effects {
-        let follow_up_actions = execute_effect(app, effect).await?;
-
-        // Dispatch all follow-up actions returned from the effect
-        for action in follow_up_actions {
-            // Recursively process each follow-up action
-            // This creates a chain: Action → Effects → Follow-up Actions → More Effects...
-            let nested_effects = app.store.dispatch(action);
-            for nested_effect in nested_effects {
-                let nested_actions = execute_effect(app, nested_effect).await?;
-                // Continue dispatching nested actions
-                for nested_action in nested_actions {
-                    let _ = app.action_tx.send(nested_action);
-                }
-            }
-        }
-    }
+    // MIGRATION COMPLETE: Effect system removed!
+    // All side effects are now handled by TaskMiddleware
+    // The effects vector above is always empty - kept for backward compatibility
+    // Future: Change dispatch_async() to return () instead of Vec<Effect>
 
     Ok(Action::None)
 }
