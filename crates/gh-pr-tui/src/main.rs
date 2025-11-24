@@ -218,7 +218,9 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
         show_command_palette_shared.clone(),
     );
 
-    app.store.dispatch(Action::Bootstrap);
+    app.action_tx
+        .send(Action::Bootstrap)
+        .expect("Failed to send bootstrap action");
 
     loop {
         // Sync the shared popup states for event handler
@@ -415,7 +417,7 @@ impl App {
         // Initialize Redux store with default state
         let theme = Theme::default();
 
-        let initial_state = AppState {
+        let mut initial_state = AppState {
             ui: UiState::default(),
             repos: ReposState {
                 colors: TableColors::from_theme(&theme),
@@ -429,9 +431,22 @@ impl App {
                 ..DebugConsoleState::default()
             },
             config: Config::load(),
-            theme,
+            theme: theme.clone(),
             infra: InfrastructureState::default(),
         };
+
+        // Initialize splash screen view model for first render
+        const BAR_WIDTH: usize = 36;
+        initial_state.infra.splash_screen_view_model = Some(
+            crate::view_models::splash_screen::SplashScreenViewModel::from_state(
+                &initial_state.infra.bootstrap_state,
+                &initial_state.repos.recent_repos,
+                initial_state.repos.selected_repo,
+                initial_state.ui.spinner_frame,
+                BAR_WIDTH,
+                &theme,
+            ),
+        );
 
         let cache_file = crate::infra::files::get_cache_file_path()
             .unwrap_or_else(|_| std::env::temp_dir().join("gh-api-cache.json"));
