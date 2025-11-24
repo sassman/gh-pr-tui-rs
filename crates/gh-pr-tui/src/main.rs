@@ -24,10 +24,10 @@ use crate::config::Config;
 use crate::pr::Pr;
 use crate::state::*;
 use crate::store::Store;
-use crate::task::{BackgroundTask, start_task_worker};
 use crate::theme::Theme;
 
 mod actions;
+mod capabilities;
 mod command_palette_integration;
 mod config;
 // Effect module removed - all side effects now in middleware
@@ -203,9 +203,8 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
     let mut t = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel();
-    let (task_tx, task_rx) = mpsc::unbounded_channel();
 
-    let mut app = App::new(action_tx.clone(), task_tx, log_buffer);
+    let mut app = App::new(action_tx.clone(), log_buffer);
 
     // Create shared state for close PR popup (synced in main loop)
     let show_close_pr_shared = Arc::new(Mutex::new(false));
@@ -217,7 +216,6 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
         show_close_pr_shared.clone(),
         show_command_palette_shared.clone(),
     );
-    let worker_task = start_task_worker(task_rx);
 
     app.action_tx
         .send(Action::Bootstrap)
@@ -293,7 +291,6 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
     }
 
     event_task.abort();
-    worker_task.abort();
 
     Ok(())
 }
@@ -417,7 +414,6 @@ async fn main() -> Result<()> {
 impl App {
     fn new(
         action_tx: mpsc::UnboundedSender<Action>,
-        task_tx: mpsc::UnboundedSender<BackgroundTask>,
         log_buffer: log_capture::LogBuffer,
     ) -> App {
         // Initialize Redux store with default state
@@ -453,7 +449,7 @@ impl App {
         store.add_middleware(crate::middleware::LoggingMiddleware::new());
 
         // 2. Task middleware - handles async operations (replaces Effect system)
-        store.add_middleware(crate::middleware::TaskMiddleware::new(cache, task_tx));
+        store.add_middleware(crate::middleware::TaskMiddleware::new(cache));
 
         App { store, action_tx }
     }

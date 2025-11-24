@@ -57,6 +57,14 @@ pub enum Action {
     ScrollShortcutsUp,
     ScrollShortcutsDown,
 
+    // Semantic scroll actions (vim-style, capability-based)
+    ScrollToTop,        // vim: gg - scroll to top of current panel
+    ScrollToBottom,     // vim: G - scroll to bottom of current panel
+    ScrollPageUp,       // Page up in current panel
+    ScrollPageDown,     // Page down in current panel
+    ScrollHalfPageUp,   // Half page up (vim: Ctrl+u)
+    ScrollHalfPageDown, // Half page down (vim: Ctrl+d)
+
     // Add repository popup
     ShowAddRepoPopup,
     HideAddRepoPopup,
@@ -135,8 +143,8 @@ pub enum Action {
     InvalidateRepoCache(usize), // Invalidate cache for specific repo index
 
     // UI management
-    ForceRedraw, // Force a full terminal redraw (fixes broken UI from error logs)
-    ResetForceRedraw, // Reset force_redraw flag after render (internal)
+    ForceRedraw,        // Force a full terminal redraw (fixes broken UI from error logs)
+    ResetForceRedraw,   // Reset force_redraw flag after render (internal)
     FatalError(String), // Fatal error - set error state and quit
     UpdateShortcutsMaxScroll(usize), // Update shortcuts panel max scroll
 

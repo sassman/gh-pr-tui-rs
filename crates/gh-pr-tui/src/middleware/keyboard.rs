@@ -43,14 +43,19 @@ impl KeyboardMiddleware {
         if let Some((last_char, last_time)) = self.last_key {
             // Check if timeout expired
             if last_time.elapsed() > self.sequence_timeout {
-                self.last_key = None;
+                self.clear_sequence();
                 return None;
             }
 
             // Check for "gg" sequence (go to top)
-            if last_char == 'g' && current_key == 'g' {
-                self.last_key = None; // Consume the sequence
-                return Some(KeySequence::GoToTop);
+            match (last_char, current_key) {
+                ('g', 'g') => {
+                    self.clear_sequence();
+                    return Some(KeySequence::GoToTop);
+                }
+                (_, _) => {
+                    // do nothing
+                }
             }
         }
 
@@ -118,10 +123,13 @@ impl KeyboardMiddleware {
     }
 
     /// Handle a key event in the current context
+    ///
+    /// Takes both context (for backwards compat) and capabilities (for new semantic actions)
     fn handle_key(
         &mut self,
         key: KeyEvent,
         context: PanelContext,
+        capabilities: crate::capabilities::PanelCapabilities,
         dispatcher: &Dispatcher,
     ) -> bool {
         // Handle character keys (vim-style)
@@ -133,7 +141,7 @@ impl KeyboardMiddleware {
 
             // Check for multi-key sequences first
             if let Some(sequence) = self.check_sequence(c) {
-                return self.handle_sequence(sequence, context, dispatcher);
+                return self.handle_sequence(sequence, capabilities, dispatcher);
             }
 
             // Handle single character commands
@@ -192,7 +200,7 @@ impl KeyboardMiddleware {
 
                 // Go to bottom: G (shift+g)
                 'G' => {
-                    return self.handle_sequence(KeySequence::GoToBottom, context, dispatcher);
+                    return self.handle_sequence(KeySequence::GoToBottom, capabilities, dispatcher);
                 }
 
                 // Record 'g' for potential "gg" sequence
@@ -274,27 +282,37 @@ impl KeyboardMiddleware {
     }
 
     /// Handle a complete key sequence (like "gg")
+    ///
+    /// This is capability-aware: it checks panel capabilities before dispatching semantic actions
     fn handle_sequence(
         &mut self,
         sequence: KeySequence,
-        context: PanelContext,
+        capabilities: crate::capabilities::PanelCapabilities,
         dispatcher: &Dispatcher,
     ) -> bool {
         match sequence {
             KeySequence::GoToTop => {
-                // Note: We don't have "GoToTop" actions yet, so this would need
-                // to be implemented as multiple NavigateToPreviousPr actions
-                // or new dedicated actions. For now, pass through.
-                log::debug!("GoToTop sequence detected in context: {:?}", context);
-                // TODO: Implement GoToTop actions
-                true
+                // Only dispatch ScrollToTop if panel supports vim vertical scrolling
+                if capabilities.supports_vim_vertical_scroll() {
+                    log::debug!("Dispatching ScrollToTop (capabilities support vim vertical scroll)");
+                    dispatcher.dispatch(Action::ScrollToTop);
+                    return false; // Block original key event
+                } else {
+                    log::debug!("Ignoring 'gg' - panel doesn't support vim vertical scrolling");
+                    return true; // Pass through
+                }
             }
 
             KeySequence::GoToBottom => {
-                // Note: Similar to GoToTop, needs dedicated actions
-                log::debug!("GoToBottom sequence detected in context: {:?}", context);
-                // TODO: Implement GoToBottom actions
-                true
+                // Only dispatch ScrollToBottom if panel supports vim vertical scrolling
+                if capabilities.supports_vim_vertical_scroll() {
+                    log::debug!("Dispatching ScrollToBottom (capabilities support vim vertical scroll)");
+                    dispatcher.dispatch(Action::ScrollToBottom);
+                    return false; // Block original key event
+                } else {
+                    log::debug!("Ignoring 'G' - panel doesn't support vim vertical scrolling");
+                    return true; // Pass through
+                }
             }
         }
     }
@@ -317,8 +335,12 @@ impl Middleware for KeyboardMiddleware {
             // Only intercept KeyPressed actions
             if let Action::KeyPressed(key) = action {
                 let context = Self::get_active_context(state);
-                log::debug!("KeyboardMiddleware: key={:?}, context={:?}", key, context);
-                return self.handle_key(*key, context, dispatcher);
+                let capabilities = state.ui.active_panel_capabilities;
+                log::debug!(
+                    "KeyboardMiddleware: key={:?}, context={:?}, capabilities={:?}",
+                    key, context, capabilities
+                );
+                return self.handle_key(*key, context, capabilities, dispatcher);
             }
 
             // All other actions pass through
@@ -368,9 +390,7 @@ mod tests {
         let state = AppState::default();
 
         // Non-KeyPressed actions should pass through
-        let should_continue = middleware
-            .handle(&Action::Quit, &state, &dispatcher)
-            .await;
+        let should_continue = middleware.handle(&Action::Quit, &state, &dispatcher).await;
 
         assert!(should_continue);
     }
@@ -396,7 +416,10 @@ mod tests {
         // Should have dispatched NavigateToNextPr
         let dispatched_action = rx.try_recv();
         assert!(dispatched_action.is_ok());
-        assert!(matches!(dispatched_action.unwrap(), Action::NavigateToNextPr));
+        assert!(matches!(
+            dispatched_action.unwrap(),
+            Action::NavigateToNextPr
+        ));
     }
 
     #[test]

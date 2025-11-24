@@ -1746,7 +1746,7 @@ async fn process_task(task: BackgroundTask) {
 }
 
 /// Enable auto-merge on GitHub using GraphQL API
-async fn enable_github_auto_merge(
+pub async fn enable_github_auto_merge(
     octocrab: &Octocrab,
     repo: &Repo,
     pr_number: usize,
@@ -1790,7 +1790,7 @@ async fn enable_github_auto_merge(
 }
 
 /// Get PR CI status by checking commit status
-async fn get_pr_ci_status(
+pub async fn get_pr_ci_status(
     octocrab: &Octocrab,
     repo: &Repo,
     head_sha: &str,

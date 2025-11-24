@@ -44,6 +44,9 @@ pub struct PendingKeyPress {
 /// UI-specific state (shortcuts panel, spinner, quit flag)
 #[derive(Debug, Clone)]
 pub struct UiState {
+    /// Capabilities of the currently active panel (updated when focus changes or panel state changes)
+    pub active_panel_capabilities: crate::capabilities::PanelCapabilities,
+
     pub show_shortcuts: bool,
     pub shortcuts_scroll: usize,
     pub shortcuts_max_scroll: usize,
@@ -378,7 +381,14 @@ impl Default for TableColors {
 
 impl Default for UiState {
     fn default() -> Self {
+        use crate::capabilities::PanelCapabilities;
+
         Self {
+            // Default to PR table capabilities: vim navigation and item navigation
+            active_panel_capabilities: PanelCapabilities::VIM_NAVIGATION_BINDINGS
+                | PanelCapabilities::ITEM_NAVIGATION
+                | PanelCapabilities::ITEM_SELECTION,
+
             show_shortcuts: false,
             shortcuts_scroll: 0,
             shortcuts_max_scroll: 0,
