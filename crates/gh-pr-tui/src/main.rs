@@ -30,6 +30,7 @@ mod actions;
 mod capabilities;
 mod command_palette_integration;
 mod config;
+mod panel_capabilities;
 // Effect module removed - all side effects now in middleware
 mod gh;
 mod infra;
