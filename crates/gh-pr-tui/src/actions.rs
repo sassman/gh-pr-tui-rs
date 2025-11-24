@@ -57,6 +57,14 @@ pub enum Action {
     ScrollShortcutsUp,
     ScrollShortcutsDown,
 
+    // Semantic navigation actions (capability-based, panel-agnostic)
+    // These are dispatched by KeyboardMiddleware based on capabilities
+    // Each panel's reducer interprets them in its own context
+    NavigateNext,       // vim: j, arrow down - next item/line in active panel
+    NavigatePrevious,   // vim: k, arrow up - previous item/line in active panel
+    NavigateLeft,       // vim: h, arrow left - left/collapse in active panel
+    NavigateRight,      // vim: l, arrow right - right/expand in active panel
+
     // Semantic scroll actions (vim-style, capability-based)
     ScrollToTop,        // vim: gg - scroll to top of current panel
     ScrollToBottom,     // vim: G - scroll to bottom of current panel
@@ -64,6 +72,10 @@ pub enum Action {
     ScrollPageDown,     // Page down in current panel
     ScrollHalfPageUp,   // Half page up (vim: Ctrl+u)
     ScrollHalfPageDown, // Half page down (vim: Ctrl+d)
+    ScrollLineUp,       // Scroll up one line
+    ScrollLineDown,     // Scroll down one line
+    ScrollLeft,         // Scroll left (horizontal)
+    ScrollRight,        // Scroll right (horizontal)
 
     // Add repository popup
     ShowAddRepoPopup,

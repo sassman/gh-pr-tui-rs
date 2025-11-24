@@ -122,21 +122,33 @@ impl KeyboardMiddleware {
         PanelContext::PrTable
     }
 
-    /// Handle a key event in the current context
+    /// Handle a key event based on panel capabilities
     ///
-    /// Takes both context (for backwards compat) and capabilities (for new semantic actions)
+    /// This is capability-based: it maps keys to semantic actions based on what the
+    /// panel declares it supports, without knowing anything about specific panels.
     fn handle_key(
         &mut self,
         key: KeyEvent,
-        context: PanelContext,
         capabilities: crate::capabilities::PanelCapabilities,
         dispatcher: &Dispatcher,
     ) -> bool {
+        use crate::capabilities::PanelCapabilities;
+
         // Handle character keys (vim-style)
         if let KeyCode::Char(c) = key.code {
-            // Ignore keys with Ctrl modifier (let them pass through)
+            // Handle Ctrl+key combinations
             if key.modifiers.contains(KeyModifiers::CONTROL) {
-                return true;
+                match c {
+                    'd' if capabilities.contains(PanelCapabilities::VIM_SCROLL_BINDINGS) => {
+                        dispatcher.dispatch(Action::ScrollHalfPageDown);
+                        return false;
+                    }
+                    'u' if capabilities.contains(PanelCapabilities::VIM_SCROLL_BINDINGS) => {
+                        dispatcher.dispatch(Action::ScrollHalfPageUp);
+                        return false;
+                    }
+                    _ => return true, // Pass through other Ctrl combinations
+                }
             }
 
             // Check for multi-key sequences first
@@ -144,57 +156,27 @@ impl KeyboardMiddleware {
                 return self.handle_sequence(sequence, capabilities, dispatcher);
             }
 
-            // Handle single character commands
+            // Handle single character commands based on capabilities
             match c {
                 // Vim navigation: j (down) / k (up)
-                'j' => {
-                    let action = match context {
-                        PanelContext::PrTable => Action::NavigateToNextPr,
-                        PanelContext::LogPanelJobList => Action::SelectNextJob,
-                        PanelContext::LogPanelLogViewer => Action::ScrollLogPanelDown,
-                        PanelContext::ShortcutsPanel => Action::ScrollShortcutsDown,
-                        PanelContext::DebugConsole => Action::ScrollDebugConsoleDown,
-                        PanelContext::CommandPalette => Action::CommandPaletteSelectNext,
-                        // Popups don't support vim navigation
-                        _ => return true,
-                    };
-                    dispatcher.dispatch(action);
+                'j' if capabilities.supports_vim_navigation() => {
+                    dispatcher.dispatch(Action::NavigateNext);
                     return false; // Block original KeyPressed action
                 }
 
-                'k' => {
-                    let action = match context {
-                        PanelContext::PrTable => Action::NavigateToPreviousPr,
-                        PanelContext::LogPanelJobList => Action::SelectPrevJob,
-                        PanelContext::LogPanelLogViewer => Action::ScrollLogPanelUp,
-                        PanelContext::ShortcutsPanel => Action::ScrollShortcutsUp,
-                        PanelContext::DebugConsole => Action::ScrollDebugConsoleUp,
-                        PanelContext::CommandPalette => Action::CommandPaletteSelectPrev,
-                        // Popups don't support vim navigation
-                        _ => return true,
-                    };
-                    dispatcher.dispatch(action);
+                'k' if capabilities.supports_vim_navigation() => {
+                    dispatcher.dispatch(Action::NavigatePrevious);
                     return false;
                 }
 
-                // Horizontal scrolling: h (left) / l (right)
-                'h' => {
-                    let action = match context {
-                        PanelContext::LogPanelLogViewer => Action::ScrollLogPanelLeft,
-                        // Only log panel supports horizontal scroll
-                        _ => return true,
-                    };
-                    dispatcher.dispatch(action);
+                // Vim navigation: h (left) / l (right)
+                'h' if capabilities.supports_vim_navigation() => {
+                    dispatcher.dispatch(Action::NavigateLeft);
                     return false;
                 }
 
-                'l' => {
-                    let action = match context {
-                        PanelContext::LogPanelLogViewer => Action::ScrollLogPanelRight,
-                        // Only log panel supports horizontal scroll
-                        _ => return true,
-                    };
-                    dispatcher.dispatch(action);
+                'l' if capabilities.supports_vim_navigation() => {
+                    dispatcher.dispatch(Action::NavigateRight);
                     return false;
                 }
 
@@ -209,16 +191,6 @@ impl KeyboardMiddleware {
                     return false; // Wait for second 'g' or timeout
                 }
 
-                // Section navigation: n (next section) - log panel only
-                'n' => {
-                    if matches!(context, PanelContext::LogPanelLogViewer) {
-                        dispatcher.dispatch(Action::NextLogSection);
-                        return false;
-                    }
-                    // Let other contexts pass through
-                    return true;
-                }
-
                 // Any other character clears sequence and passes through
                 _ => {
                     self.clear_sequence();
@@ -227,50 +199,36 @@ impl KeyboardMiddleware {
             }
         }
 
-        // Handle arrow keys
+        // Handle arrow keys based on capabilities
         match key.code {
-            KeyCode::Down => {
-                let action = match context {
-                    PanelContext::PrTable => Action::NavigateToNextPr,
-                    PanelContext::LogPanelJobList => Action::SelectNextJob,
-                    PanelContext::LogPanelLogViewer => Action::ScrollLogPanelDown,
-                    PanelContext::ShortcutsPanel => Action::ScrollShortcutsDown,
-                    PanelContext::DebugConsole => Action::ScrollDebugConsoleDown,
-                    PanelContext::CommandPalette => Action::CommandPaletteSelectNext,
-                    _ => return true,
-                };
-                dispatcher.dispatch(action);
+            KeyCode::Down if capabilities.supports_vim_navigation() => {
+                dispatcher.dispatch(Action::NavigateNext);
                 return false;
             }
 
-            KeyCode::Up => {
-                let action = match context {
-                    PanelContext::PrTable => Action::NavigateToPreviousPr,
-                    PanelContext::LogPanelJobList => Action::SelectPrevJob,
-                    PanelContext::LogPanelLogViewer => Action::ScrollLogPanelUp,
-                    PanelContext::ShortcutsPanel => Action::ScrollShortcutsUp,
-                    PanelContext::DebugConsole => Action::ScrollDebugConsoleUp,
-                    PanelContext::CommandPalette => Action::CommandPaletteSelectPrev,
-                    _ => return true,
-                };
-                dispatcher.dispatch(action);
+            KeyCode::Up if capabilities.supports_vim_navigation() => {
+                dispatcher.dispatch(Action::NavigatePrevious);
                 return false;
             }
 
-            KeyCode::Left => {
-                if matches!(context, PanelContext::LogPanelLogViewer) {
-                    dispatcher.dispatch(Action::ScrollLogPanelLeft);
-                    return false;
-                }
-                return true;
+            KeyCode::Left if capabilities.supports_vim_navigation() => {
+                dispatcher.dispatch(Action::NavigateLeft);
+                return false;
             }
 
-            KeyCode::Right => {
-                if matches!(context, PanelContext::LogPanelLogViewer) {
-                    dispatcher.dispatch(Action::ScrollLogPanelRight);
-                    return false;
-                }
-                return true;
+            KeyCode::Right if capabilities.supports_vim_navigation() => {
+                dispatcher.dispatch(Action::NavigateRight);
+                return false;
+            }
+
+            KeyCode::PageDown if capabilities.contains(PanelCapabilities::SCROLL_VERTICAL) => {
+                dispatcher.dispatch(Action::ScrollPageDown);
+                return false;
+            }
+
+            KeyCode::PageUp if capabilities.contains(PanelCapabilities::SCROLL_VERTICAL) => {
+                dispatcher.dispatch(Action::ScrollPageUp);
+                return false;
             }
 
             // All other keys pass through
@@ -334,13 +292,12 @@ impl Middleware for KeyboardMiddleware {
         Box::pin(async move {
             // Only intercept KeyPressed actions
             if let Action::KeyPressed(key) = action {
-                let context = Self::get_active_context(state);
                 let capabilities = state.ui.active_panel_capabilities;
                 log::debug!(
-                    "KeyboardMiddleware: key={:?}, context={:?}, capabilities={:?}",
-                    key, context, capabilities
+                    "KeyboardMiddleware: key={:?}, capabilities={:?}",
+                    key, capabilities
                 );
-                return self.handle_key(*key, context, capabilities, dispatcher);
+                return self.handle_key(*key, capabilities, dispatcher);
             }
 
             // All other actions pass through
@@ -405,7 +362,8 @@ mod tests {
         // Create a 'j' key event
         let key_event = KeyEvent::from(KeyCode::Char('j'));
 
-        // Should intercept and dispatch NavigateToNextPr
+        // Should intercept and dispatch NavigateNext (semantic action)
+        // Default state has VIM_NAVIGATION_BINDINGS capability
         let should_continue = middleware
             .handle(&Action::KeyPressed(key_event), &state, &dispatcher)
             .await;
@@ -413,12 +371,12 @@ mod tests {
         // Should block the original KeyPressed action
         assert!(!should_continue);
 
-        // Should have dispatched NavigateToNextPr
+        // Should have dispatched NavigateNext (semantic action, not panel-specific)
         let dispatched_action = rx.try_recv();
         assert!(dispatched_action.is_ok());
         assert!(matches!(
             dispatched_action.unwrap(),
-            Action::NavigateToNextPr
+            Action::NavigateNext
         ));
     }
 
@@ -435,5 +393,63 @@ mod tests {
 
         // State should be cleared
         assert!(middleware.last_key.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_capability_based_keybindings() {
+        use crate::capabilities::PanelCapabilities;
+
+        let mut middleware = KeyboardMiddleware::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let dispatcher = Dispatcher::new(tx);
+
+        // Create state with NO vim navigation capabilities
+        let mut state = AppState::default();
+        state.ui.active_panel_capabilities = PanelCapabilities::empty();
+
+        let key_event = KeyEvent::from(KeyCode::Char('j'));
+
+        // Should pass through (not intercept) because no capabilities
+        let should_continue = middleware
+            .handle(&Action::KeyPressed(key_event), &state, &dispatcher)
+            .await;
+
+        // Should pass through
+        assert!(should_continue);
+
+        // Should NOT have dispatched any action
+        let dispatched_action = rx.try_recv();
+        assert!(dispatched_action.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_vim_scroll_capabilities() {
+        use crate::capabilities::PanelCapabilities;
+
+        let mut middleware = KeyboardMiddleware::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let dispatcher = Dispatcher::new(tx);
+
+        // Create state with vim scroll capabilities
+        let mut state = AppState::default();
+        state.ui.active_panel_capabilities =
+            PanelCapabilities::SCROLL_VERTICAL | PanelCapabilities::VIM_SCROLL_BINDINGS;
+
+        // Test 'G' (go to bottom)
+        let key_event = KeyEvent::from(KeyCode::Char('G'));
+        let should_continue = middleware
+            .handle(&Action::KeyPressed(key_event), &state, &dispatcher)
+            .await;
+
+        // Should block the original KeyPressed action
+        assert!(!should_continue);
+
+        // Should have dispatched ScrollToBottom
+        let dispatched_action = rx.try_recv();
+        assert!(dispatched_action.is_ok());
+        assert!(matches!(
+            dispatched_action.unwrap(),
+            Action::ScrollToBottom
+        ));
     }
 }
