@@ -103,7 +103,7 @@ pub trait Middleware: Send + Sync {
 ///
 /// Actions dispatched through the Dispatcher will be processed
 /// in the next event loop iteration, preventing recursion.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Dispatcher {
     tx: mpsc::UnboundedSender<Action>,
 }
@@ -345,6 +345,7 @@ impl Middleware for TaskMiddleware {
                                 octocrab,
                                 cache: self.cache.clone(),
                                 bypass_cache: true, // Refresh always bypasses cache
+                                dispatcher: dispatcher.clone(),
                             });
                         }
                     }
@@ -368,6 +369,7 @@ impl Middleware for TaskMiddleware {
                                 octocrab,
                                 cache: self.cache.clone(),
                                 bypass_cache: false, // Normal reload uses cache
+                                dispatcher: dispatcher.clone(),
                             });
                         }
                     }
@@ -482,6 +484,7 @@ impl Middleware for TaskMiddleware {
                                 pr_number,
                                 ide_command: config.ide_command,
                                 temp_dir: config.temp_dir,
+                                dispatcher: dispatcher.clone(),
                             });
                         }
                     }
@@ -676,7 +679,8 @@ impl Middleware for TaskMiddleware {
                                         prs: prs_to_merge,
                                         selected_indices,
                                         octocrab,
-                                    });
+                                dispatcher: dispatcher.clone(),
+                            });
                                 }
                             }
 
@@ -688,7 +692,8 @@ impl Middleware for TaskMiddleware {
                                         repo: repo.clone(),
                                         pr_number: pr.number,
                                         octocrab,
-                                    });
+                                dispatcher: dispatcher.clone(),
+                            });
                                 }
                             }
                         }
@@ -756,7 +761,8 @@ impl Middleware for TaskMiddleware {
                                     prs: prs_to_rebase,
                                     selected_indices,
                                     octocrab,
-                                });
+                                dispatcher: dispatcher.clone(),
+                            });
                             }
                         }
                     }
@@ -819,7 +825,8 @@ impl Middleware for TaskMiddleware {
                                     pr_numbers,
                                     approval_message: config.approval_message,
                                     octocrab,
-                                });
+                                dispatcher: dispatcher.clone(),
+                            });
                             }
                         }
                     }
@@ -888,7 +895,8 @@ impl Middleware for TaskMiddleware {
                                         prs,
                                         comment,
                                         octocrab,
-                                    });
+                                dispatcher: dispatcher.clone(),
+                            });
                                 }
                             }
                         }
@@ -911,6 +919,7 @@ impl Middleware for TaskMiddleware {
                                 pr_number: *pr_number,
                                 operation: *operation,
                                 octocrab,
+                                dispatcher: dispatcher.clone(),
                             });
                         }
                     }
@@ -964,7 +973,8 @@ impl Middleware for TaskMiddleware {
                                     repo,
                                     pr_numbers,
                                     octocrab,
-                                });
+                                dispatcher: dispatcher.clone(),
+                            });
                             }
                         }
                     }
@@ -997,6 +1007,7 @@ impl Middleware for TaskMiddleware {
                                             head_sha: "HEAD".to_string(), // Placeholder - will fetch in background task
                                             octocrab,
                                             pr_context,
+                                            dispatcher: dispatcher.clone(),
                                         });
                                     }
                                 }
@@ -1049,6 +1060,7 @@ impl Middleware for TaskMiddleware {
                     let _ = self.task_tx.send(BackgroundTask::RecurringTask {
                         action: Action::RecurringUpdateTriggered,
                         interval_ms: *interval_ms,
+                        dispatcher: dispatcher.clone(),
                     });
                 }
 

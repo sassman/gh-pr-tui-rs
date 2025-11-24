@@ -24,7 +24,7 @@ use crate::config::Config;
 use crate::pr::Pr;
 use crate::state::*;
 use crate::store::Store;
-use crate::task::{BackgroundTask, TaskResult, start_task_worker};
+use crate::task::{BackgroundTask, start_task_worker};
 use crate::theme::Theme;
 
 mod actions;
@@ -203,52 +203,12 @@ fn start_event_handler(
     (handle, debug_console_open_shared)
 }
 
-/// Convert TaskResult to Action - the single place where task results become actions
-fn result_to_action(result: TaskResult) -> Action {
-    match result {
-        TaskResult::RepoLoadingStarted(idx) => Action::RepoLoadingStarted(idx),
-        TaskResult::RepoDataLoaded(idx, data) => Action::RepoDataLoaded(idx, data),
-        TaskResult::MergeStatusUpdated(idx, pr_num, status) => {
-            Action::MergeStatusUpdated(idx, pr_num, status)
-        }
-        TaskResult::RebaseStatusUpdated(idx, pr_num, needs_rebase) => {
-            Action::RebaseStatusUpdated(idx, pr_num, needs_rebase)
-        }
-        TaskResult::CommentCountUpdated(idx, pr_num, count) => {
-            Action::CommentCountUpdated(idx, pr_num, count)
-        }
-        TaskResult::RebaseComplete(res) => Action::RebaseComplete(res),
-        TaskResult::MergeComplete(res) => Action::MergeComplete(res),
-        TaskResult::RerunJobsComplete(res) => Action::RerunJobsComplete(res),
-        TaskResult::ApprovalComplete(res) => Action::ApprovalComplete(res),
-        TaskResult::ClosePrComplete(res) => Action::ClosePrComplete(res),
-        TaskResult::BuildLogsLoaded(sections, ctx) => Action::BuildLogsLoaded(sections, ctx),
-        TaskResult::IDEOpenComplete(res) => Action::IDEOpenComplete(res),
-        TaskResult::PRMergedConfirmed(idx, pr_num, merged) => {
-            Action::PRMergedConfirmed(idx, pr_num, merged)
-        }
-        TaskResult::TaskStatusUpdate(status) => Action::SetTaskStatus(status),
-        TaskResult::AutoMergeStatusCheck(idx, pr_num) => Action::AutoMergeStatusCheck(idx, pr_num),
-        TaskResult::RemoveFromAutoMergeQueue(idx, pr_num) => {
-            Action::RemoveFromAutoMergeQueue(idx, pr_num)
-        }
-        TaskResult::OperationMonitorCheck(idx, pr_num) => {
-            Action::OperationMonitorCheck(idx, pr_num)
-        }
-        TaskResult::RemoveFromOperationMonitor(idx, pr_num) => {
-            Action::RemoveFromOperationMonitor(idx, pr_num)
-        }
-        TaskResult::RepoNeedsReload(idx) => Action::ReloadRepo(idx),
-        TaskResult::DispatchAction(action) => action,
-    }
-}
 
 async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
     let mut t = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel();
     let (task_tx, task_rx) = mpsc::unbounded_channel();
-    let (result_tx, mut result_rx) = mpsc::unbounded_channel(); // New result channel
 
     let mut app = App::new(action_tx.clone(), task_tx, log_buffer);
 
@@ -262,7 +222,7 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
         show_close_pr_shared.clone(),
         show_command_palette_shared.clone(),
     );
-    let worker_task = start_task_worker(task_rx, result_tx);
+    let worker_task = start_task_worker(task_rx);
 
     app.action_tx
         .send(Action::Bootstrap)
@@ -300,18 +260,9 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
             ui(f, &mut app);
         })?;
 
-        // Use tokio::select! to handle both actions and task results
-        // Prioritize results over actions to show incremental progress
+        // Wait for actions from the action channel
         let maybe_action = tokio::time::timeout(std::time::Duration::from_millis(100), async {
-            tokio::select! {
-                biased;  // Check in order: results first, then actions
-                Some(result) = result_rx.recv() => {
-                    // Convert task result to action (prioritized for smooth progress updates)
-                    Some(result_to_action(result))
-                }
-                Some(action) = action_rx.recv() => Some(action),
-                else => None
-            }
+            action_rx.recv().await
         })
         .await;
 
