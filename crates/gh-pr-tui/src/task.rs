@@ -1,10 +1,12 @@
 /// Background task system for handling heavy operations without blocking UI
 use crate::{
     PrFilter,
+    actions::Action,
     gh::{comment, merge},
     log::PrContext,
-    pr::{MergeableStatus, Pr},
-    state::{Repo, TaskStatus},
+    pr::Pr,
+    state::Repo,
+    middleware::Dispatcher,
 };
 use gh_api_cache::ApiCache;
 use log::{debug, error};
@@ -12,75 +14,10 @@ use octocrab::Octocrab;
 use std::path::PathBuf;
 use tokio::sync::mpsc;
 
-/// Results from background task execution
-/// These are sent back to the main loop and converted to Actions
-#[derive(Debug)]
-pub enum TaskResult {
-    /// Repository loading started (repo_index) - sent before fetch begins
-    RepoLoadingStarted(usize),
-
-    /// Repository data loaded (repo_index, result)
-    RepoDataLoaded(usize, Result<Vec<Pr>, String>),
-
-    /// Merge status updated for a PR
-    MergeStatusUpdated(usize, usize, MergeableStatus), // repo_index, pr_number, status
-
-    /// Rebase status updated for a PR
-    RebaseStatusUpdated(usize, usize, bool), // repo_index, pr_number, needs_rebase
-
-    /// Comment count updated for a PR
-    CommentCountUpdated(usize, usize, usize), // repo_index, pr_number, comment_count
-
-    /// Rebase operation completed
-    RebaseComplete(Result<(), String>),
-
-    /// Merge operation completed
-    MergeComplete(Result<(), String>),
-
-    /// Rerun failed jobs operation completed
-    RerunJobsComplete(Result<(), String>),
-
-    /// PR approval operation completed
-    ApprovalComplete(Result<(), String>),
-
-    /// Close PR operation completed
-    ClosePrComplete(Result<(), String>),
-
-    /// Build logs loaded - Vec of (metadata, logs) pairs
-    BuildLogsLoaded(
-        Vec<(crate::log::JobMetadata, gh_actions_log_parser::JobLog)>,
-        crate::log::PrContext,
-    ),
-
-    /// IDE open operation completed
-    IDEOpenComplete(Result<(), String>),
-
-    /// PR merge status confirmed (for merge bot polling)
-    PRMergedConfirmed(usize, usize, bool), // repo_index, pr_number, is_merged
-
-    /// Task status update
-    TaskStatusUpdate(Option<TaskStatus>),
-
-    /// Auto-merge status check needed
-    AutoMergeStatusCheck(usize, usize), // repo_index, pr_number
-
-    /// Remove PR from auto-merge queue
-    RemoveFromAutoMergeQueue(usize, usize), // repo_index, pr_number
-
-    /// Operation monitor check needed (rebase/merge progress)
-    OperationMonitorCheck(usize, usize), // repo_index, pr_number
-
-    /// Remove PR from operation monitor queue
-    RemoveFromOperationMonitor(usize, usize), // repo_index, pr_number
-
-    /// Repo needs reload (e.g., after PR merged)
-    RepoNeedsReload(usize), // repo_index
-
-    /// Dispatch an action (for recurring tasks or other background-triggered actions)
-    DispatchAction(crate::actions::Action),
-}
-
 /// Background tasks that can be executed asynchronously
+///
+/// All tasks now include a Dispatcher to dispatch actions directly,
+/// eliminating the TaskResult conversion layer.
 #[derive(Debug)]
 pub enum BackgroundTask {
     LoadAllRepos {
@@ -88,6 +25,7 @@ pub enum BackgroundTask {
         filter: PrFilter,
         octocrab: Octocrab,
         cache: std::sync::Arc<std::sync::Mutex<ApiCache>>,
+        dispatcher: Dispatcher,
     },
     LoadSingleRepo {
         repo_index: usize,
@@ -96,41 +34,48 @@ pub enum BackgroundTask {
         octocrab: Octocrab,
         cache: std::sync::Arc<std::sync::Mutex<ApiCache>>,
         bypass_cache: bool, // True for user-triggered refresh, false for lazy loading
+        dispatcher: Dispatcher,
     },
     CheckMergeStatus {
         repo_index: usize,
         repo: Repo,
         pr_numbers: Vec<usize>,
         octocrab: Octocrab,
+        dispatcher: Dispatcher,
     },
     CheckCommentCounts {
         repo_index: usize,
         repo: Repo,
         pr_numbers: Vec<usize>,
         octocrab: Octocrab,
+        dispatcher: Dispatcher,
     },
     Rebase {
         repo: Repo,
         prs: Vec<Pr>,
         selected_indices: Vec<usize>,
         octocrab: Octocrab,
+        dispatcher: Dispatcher,
     },
     Merge {
         repo: Repo,
         prs: Vec<Pr>,
         selected_indices: Vec<usize>,
         octocrab: Octocrab,
+        dispatcher: Dispatcher,
     },
     RerunFailedJobs {
         repo: Repo,
         pr_numbers: Vec<usize>,
         octocrab: Octocrab,
+        dispatcher: Dispatcher,
     },
     ApprovePrs {
         repo: Repo,
         pr_numbers: Vec<usize>,
         approval_message: String,
         octocrab: Octocrab,
+        dispatcher: Dispatcher,
     },
     ClosePrs {
         repo: Repo,
@@ -138,6 +83,7 @@ pub enum BackgroundTask {
         prs: Vec<Pr>, // Need full PR objects to check author
         comment: String,
         octocrab: Octocrab,
+        dispatcher: Dispatcher,
     },
     FetchBuildLogs {
         repo: Repo,
@@ -145,12 +91,14 @@ pub enum BackgroundTask {
         head_sha: String,
         octocrab: Octocrab,
         pr_context: PrContext,
+        dispatcher: Dispatcher,
     },
     OpenPRInIDE {
         repo: Repo,
         pr_number: usize,
         ide_command: String,
         temp_dir: String,
+        dispatcher: Dispatcher,
     },
     /// Poll a PR to check if it's actually merged (for merge bot)
     PollPRMergeStatus {
@@ -159,6 +107,7 @@ pub enum BackgroundTask {
         pr_number: usize,
         octocrab: Octocrab,
         is_checking_ci: bool, // If true, use longer sleep (15s) for CI checks
+        dispatcher: Dispatcher,
     },
     /// Enable auto-merge on GitHub and monitor PR until ready
     EnableAutoMerge {
@@ -166,6 +115,7 @@ pub enum BackgroundTask {
         repo: Repo,
         pr_number: usize,
         octocrab: Octocrab,
+        dispatcher: Dispatcher,
     },
     MonitorOperation {
         repo_index: usize,
@@ -173,6 +123,7 @@ pub enum BackgroundTask {
         pr_number: usize,
         operation: crate::state::OperationType,
         octocrab: Octocrab,
+        dispatcher: Dispatcher,
     },
     /// Generic delayed task wrapper - delays execution of any task
     DelayedTask {
@@ -183,34 +134,42 @@ pub enum BackgroundTask {
     RecurringTask {
         action: crate::actions::Action,
         interval_ms: u64,
+        dispatcher: Dispatcher,
     },
 }
 
 /// Background task worker that processes heavy operations without blocking UI
+///
+/// Tasks now dispatch actions directly through their embedded Dispatcher,
+/// eliminating the need for a result channel.
 pub fn start_task_worker(
     mut task_rx: mpsc::UnboundedReceiver<BackgroundTask>,
-    mut result_tx: mpsc::UnboundedSender<TaskResult>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(task) = task_rx.recv().await {
-            process_task(task, &mut result_tx).await;
+            process_task(task).await;
         }
     })
 }
 
-async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSender<TaskResult>) {
+/// Process a background task
+///
+/// Tasks dispatch actions directly via their embedded Dispatcher.
+/// No return value needed - all results communicated through Redux actions.
+async fn process_task(task: BackgroundTask) {
     match task {
         BackgroundTask::LoadAllRepos {
             repos,
             filter,
             octocrab,
             cache,
+            dispatcher,
         } => {
             // Spawn parallel tasks for each repo
             let mut tasks = Vec::new();
             for (repo_index, repo) in repos.iter() {
                 // Signal that we're starting to load this repo (shows half progress)
-                let _ = result_tx.send(TaskResult::RepoLoadingStarted(*repo_index));
+                dispatcher.dispatch(Action::RepoLoadingStarted(*repo_index));
 
                 let octocrab = octocrab.clone();
                 let repo = repo.clone();
@@ -244,7 +203,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                             debug!("Failed to load repo #{}: {}", index, err);
                         }
                     }
-                    let _ = result_tx.send(TaskResult::RepoDataLoaded(index, result));
+                    dispatcher.dispatch(Action::RepoDataLoaded(index, result));
                     // Small delay to allow UI to redraw and show progress
                     tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
                 }
@@ -257,6 +216,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             octocrab,
             cache,
             bypass_cache,
+            dispatcher,
         } => {
             debug!(
                 "Loading repo {}/{} (index: {}, bypass_cache: {})...",
@@ -282,20 +242,21 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 }
             }
 
-            let _ = result_tx.send(TaskResult::RepoDataLoaded(repo_index, result));
+            dispatcher.dispatch(Action::RepoDataLoaded(repo_index, result));
         }
         BackgroundTask::CheckMergeStatus {
             repo_index,
             repo,
             pr_numbers,
             octocrab,
+            dispatcher,
         } => {
             // Check merge status for each PR in parallel
             let mut tasks = Vec::new();
             for pr_number in pr_numbers {
                 let octocrab = octocrab.clone();
                 let repo = repo.clone();
-                let result_tx = result_tx.clone();
+                let dispatcher = dispatcher.clone();
 
                 let task = tokio::spawn(async move {
                     use crate::pr::MergeableStatus;
@@ -426,10 +387,10 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                                 }
                             };
 
-                            let _ = result_tx.send(TaskResult::MergeStatusUpdated(
+                            dispatcher.dispatch(Action::MergeStatusUpdated(
                                 repo_index, pr_number, status,
                             ));
-                            let _ = result_tx.send(TaskResult::RebaseStatusUpdated(
+                            dispatcher.dispatch(Action::RebaseStatusUpdated(
                                 repo_index,
                                 pr_number,
                                 needs_rebase,
@@ -453,13 +414,14 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             repo,
             pr_numbers,
             octocrab,
+            dispatcher,
         } => {
             // Check comment counts for each PR in parallel
             let mut tasks = Vec::new();
             for pr_number in pr_numbers {
                 let octocrab = octocrab.clone();
                 let repo = repo.clone();
-                let result_tx = result_tx.clone();
+                let dispatcher = dispatcher.clone();
 
                 let task = tokio::spawn(async move {
                     // Fetch detailed PR info to get accurate comment count
@@ -472,7 +434,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                             // Get total comment count (includes review comments + issue comments)
                             let comment_count = pr_detail.comments.unwrap_or(0) as usize;
 
-                            let _ = result_tx.send(TaskResult::CommentCountUpdated(
+                            dispatcher.dispatch(Action::CommentCountUpdated(
                                 repo_index,
                                 pr_number,
                                 comment_count,
@@ -496,6 +458,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             prs,
             selected_indices,
             octocrab,
+            dispatcher,
         } => {
             use crate::pr::MergeableStatus;
 
@@ -563,13 +526,14 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             } else {
                 Err("Some rebases failed".to_string())
             };
-            let _ = result_tx.send(TaskResult::RebaseComplete(result));
+            dispatcher.dispatch(Action::RebaseComplete(result));
         }
         BackgroundTask::Merge {
             repo,
             prs,
             selected_indices,
             octocrab,
+            dispatcher,
         } => {
             let mut success = true;
             for &idx in &selected_indices {
@@ -584,12 +548,13 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             } else {
                 Err("Some merges failed".to_string())
             };
-            let _ = result_tx.send(TaskResult::MergeComplete(result));
+            dispatcher.dispatch(Action::MergeComplete(result));
         }
         BackgroundTask::RerunFailedJobs {
             repo,
             pr_numbers,
             octocrab,
+            dispatcher,
         } => {
             let mut all_success = true;
             let mut rerun_count = 0;
@@ -665,13 +630,14 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             } else {
                 Err("Some jobs failed to rerun".to_string())
             };
-            let _ = result_tx.send(TaskResult::RerunJobsComplete(result));
+            dispatcher.dispatch(Action::RerunJobsComplete(result));
         }
         BackgroundTask::ApprovePrs {
             repo,
             pr_numbers,
             approval_message,
             octocrab,
+            dispatcher,
         } => {
             // Approve PRs using GitHub's review API
             let mut all_success = true;
@@ -720,7 +686,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                     pr_numbers.len()
                 ))
             };
-            let _ = result_tx.send(TaskResult::ApprovalComplete(result));
+            dispatcher.dispatch(Action::ApprovalComplete(result));
         }
         BackgroundTask::ClosePrs {
             repo,
@@ -728,6 +694,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             prs,
             comment,
             octocrab,
+            dispatcher,
         } => {
             // Close PRs with comment (use @dependabot close for dependabot PRs)
             let mut all_success = true;
@@ -796,7 +763,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             } else {
                 Err(format!("Closed {}/{} PRs", close_count, pr_numbers.len()))
             };
-            let _ = result_tx.send(TaskResult::ClosePrComplete(result));
+            dispatcher.dispatch(Action::ClosePrComplete(result));
         }
         BackgroundTask::FetchBuildLogs {
             repo,
@@ -804,6 +771,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             head_sha: _,
             octocrab,
             pr_context,
+            dispatcher,
         } => {
             // First, get the PR details to get the actual head SHA
             let pr_details = match octocrab
@@ -813,7 +781,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             {
                 Ok(pr) => pr,
                 Err(_) => {
-                    let _ = result_tx.send(TaskResult::BuildLogsLoaded(vec![], pr_context));
+                    dispatcher.dispatch(Action::BuildLogsLoaded(vec![], pr_context));
                     return;
                 }
             };
@@ -834,7 +802,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             let workflow_runs: WorkflowRunsResponse = match octocrab.get(&url, None::<&()>).await {
                 Ok(runs) => runs,
                 Err(_) => {
-                    let _ = result_tx.send(TaskResult::BuildLogsLoaded(vec![], pr_context));
+                    dispatcher.dispatch(Action::BuildLogsLoaded(vec![], pr_context));
                     return;
                 }
             };
@@ -1017,19 +985,20 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 crate::log::JobStatus::Success => 5,
             });
 
-            let _ = result_tx.send(TaskResult::BuildLogsLoaded(log_sections, pr_context));
+            dispatcher.dispatch(Action::BuildLogsLoaded(log_sections, pr_context));
         }
         BackgroundTask::OpenPRInIDE {
             repo,
             pr_number,
             ide_command,
             temp_dir,
+            dispatcher,
         } => {
             use std::process::Command;
 
             // Create temp directory if it doesn't exist
             if let Err(err) = std::fs::create_dir_all(&temp_dir) {
-                let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                     "Failed to create temp directory: {}",
                     err
                 ))));
@@ -1048,7 +1017,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             if pr_dir.exists()
                 && let Err(err) = std::fs::remove_dir_all(&pr_dir)
             {
-                let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                     "Failed to remove existing directory: {}",
                     err
                 ))));
@@ -1066,7 +1035,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 .output();
 
             if let Err(err) = clone_output {
-                let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                     "Failed to run gh repo clone: {}",
                     err
                 ))));
@@ -1076,7 +1045,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             let clone_output = clone_output.unwrap();
             if !clone_output.status.success() {
                 let stderr = String::from_utf8_lossy(&clone_output.stderr);
-                let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                     "gh repo clone failed: {}",
                     stderr
                 ))));
@@ -1092,7 +1061,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                     .output();
 
                 if let Err(err) = checkout_output {
-                    let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                    dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                         "Failed to run git checkout main: {}",
                         err
                     ))));
@@ -1102,7 +1071,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 let checkout_output = checkout_output.unwrap();
                 if !checkout_output.status.success() {
                     let stderr = String::from_utf8_lossy(&checkout_output.stderr);
-                    let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                    dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                         "git checkout main failed: {}",
                         stderr
                     ))));
@@ -1116,7 +1085,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                     .output();
 
                 if let Err(err) = pull_output {
-                    let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                    dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                         "Failed to run git pull: {}",
                         err
                     ))));
@@ -1126,7 +1095,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 let pull_output = pull_output.unwrap();
                 if !pull_output.status.success() {
                     let stderr = String::from_utf8_lossy(&pull_output.stderr);
-                    let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                    dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                         "git pull failed: {}",
                         stderr
                     ))));
@@ -1140,7 +1109,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                     .output();
 
                 if let Err(err) = checkout_output {
-                    let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                    dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                         "Failed to run gh pr checkout: {}",
                         err
                     ))));
@@ -1150,7 +1119,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 let checkout_output = checkout_output.unwrap();
                 if !checkout_output.status.success() {
                     let stderr = String::from_utf8_lossy(&checkout_output.stderr);
-                    let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                    dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                         "gh pr checkout failed: {}",
                         stderr
                     ))));
@@ -1166,7 +1135,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 .output();
 
             if let Err(err) = set_url_output {
-                let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                     "Failed to set SSH origin URL: {}",
                     err
                 ))));
@@ -1176,7 +1145,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             let set_url_output = set_url_output.unwrap();
             if !set_url_output.status.success() {
                 let stderr = String::from_utf8_lossy(&set_url_output.stderr);
-                let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                     "Failed to set SSH origin URL: {}",
                     stderr
                 ))));
@@ -1188,10 +1157,10 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
 
             match ide_output {
                 Ok(_) => {
-                    let _ = result_tx.send(TaskResult::IDEOpenComplete(Ok(())));
+                    dispatcher.dispatch(Action::IDEOpenComplete(Ok(())));
                 }
                 Err(err) => {
-                    let _ = result_tx.send(TaskResult::IDEOpenComplete(Err(format!(
+                    dispatcher.dispatch(Action::IDEOpenComplete(Err(format!(
                         "Failed to open IDE '{}': {}",
                         ide_command, err
                     ))));
@@ -1204,6 +1173,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             pr_number,
             octocrab,
             is_checking_ci,
+            dispatcher,
         } => {
             // Poll the PR to check status
             // Wait before polling to give GitHub time to process
@@ -1328,13 +1298,13 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                             }
                         };
 
-                        let _ = result_tx.send(TaskResult::MergeStatusUpdated(
+                        dispatcher.dispatch(Action::MergeStatusUpdated(
                             repo_index, pr_number, status,
                         ));
                     } else {
                         // When checking merge confirmation, just check if PR is merged
                         let is_merged = pr_detail.merged_at.is_some();
-                        let _ = result_tx.send(TaskResult::PRMergedConfirmed(
+                        dispatcher.dispatch(Action::PRMergedConfirmed(
                             repo_index, pr_number, is_merged,
                         ));
                     }
@@ -1342,15 +1312,14 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 Err(_) => {
                     if is_checking_ci {
                         // Can't fetch PR, send unknown status
-                        let _ = result_tx.send(TaskResult::MergeStatusUpdated(
+                        dispatcher.dispatch(Action::MergeStatusUpdated(
                             repo_index,
                             pr_number,
                             crate::pr::MergeableStatus::Unknown,
                         ));
                     } else {
                         // Can't fetch PR, assume not merged yet
-                        let _ = result_tx
-                            .send(TaskResult::PRMergedConfirmed(repo_index, pr_number, false));
+                        dispatcher.dispatch(Action::PRMergedConfirmed(repo_index, pr_number, false));
                     }
                 }
             }
@@ -1360,6 +1329,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             repo,
             pr_number,
             octocrab,
+            dispatcher,
         } => {
             // Enable auto-merge on GitHub using GraphQL API
             let result = enable_github_auto_merge(&octocrab, &repo, pr_number).await;
@@ -1367,7 +1337,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             match result {
                 Ok(_) => {
                     // Success - schedule periodic status checks
-                    let _ = result_tx.send(TaskResult::TaskStatusUpdate(Some(
+                    dispatcher.dispatch(Action::SetTaskStatus(Some(
                         crate::state::TaskStatus {
                             message: format!(
                                 "Auto-merge enabled for PR #{}, monitoring...",
@@ -1378,7 +1348,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                     )));
 
                     // Spawn a task to periodically check PR status
-                    let result_tx_clone = result_tx.clone();
+                    let dispatcher_clone = dispatcher.clone();
                     let repo_clone = repo.clone();
                     let octocrab_clone = octocrab.clone();
                     tokio::spawn(async move {
@@ -1387,8 +1357,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
                             // Send status check result
-                            let _ = result_tx_clone
-                                .send(TaskResult::AutoMergeStatusCheck(repo_index, pr_number));
+                            dispatcher_clone.dispatch(Action::AutoMergeStatusCheck(repo_index, pr_number));
 
                             // Check merge status to update PR state
                             if let Ok(pr_detail) = octocrab_clone
@@ -1401,10 +1370,10 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                                 // Determine mergeable status
                                 let mergeable_status = if pr_detail.merged_at.is_some() {
                                     // PR has been merged - stop monitoring
-                                    let _ = result_tx_clone.send(
-                                        TaskResult::RemoveFromAutoMergeQueue(repo_index, pr_number),
+                                    let _ = dispatcher_clone.dispatch(
+                                        Action::RemoveFromAutoMergeQueue(repo_index, pr_number),
                                     );
-                                    let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(
+                                    let _ = dispatcher_clone.dispatch(Action::SetTaskStatus(
                                         Some(crate::state::TaskStatus {
                                             message: format!(
                                                 "PR #{} successfully merged!",
@@ -1436,7 +1405,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                                 };
 
                                 // Update PR status
-                                let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
+                                let _ = dispatcher_clone.dispatch(Action::MergeStatusUpdated(
                                     repo_index,
                                     pr_number,
                                     mergeable_status,
@@ -1448,8 +1417,8 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                 Err(e) => {
                     // Failed to enable auto-merge
                     let _ =
-                        result_tx.send(TaskResult::RemoveFromAutoMergeQueue(repo_index, pr_number));
-                    let _ = result_tx.send(TaskResult::TaskStatusUpdate(Some(
+                        dispatcher.dispatch(Action::RemoveFromAutoMergeQueue(repo_index, pr_number));
+                    dispatcher.dispatch(Action::SetTaskStatus(Some(
                         crate::state::TaskStatus {
                             message: format!(
                                 "Failed to enable auto-merge for PR #{}: {}",
@@ -1467,9 +1436,10 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             pr_number,
             operation,
             octocrab,
+            dispatcher,
         } => {
             // Spawn a task to periodically monitor the operation
-            let result_tx_clone = result_tx.clone();
+            let dispatcher_clone = dispatcher.clone();
             let repo_clone = repo.clone();
             let octocrab_clone = octocrab.clone();
 
@@ -1509,8 +1479,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                     );
 
                     // Send periodic check action
-                    let _ = result_tx_clone
-                        .send(TaskResult::OperationMonitorCheck(repo_index, pr_number));
+                    dispatcher_clone.dispatch(Action::OperationMonitorCheck(repo_index, pr_number));
 
                     // Fetch current PR state
                     let pr_detail = match octocrab_clone
@@ -1534,10 +1503,10 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                                     "Too many consecutive failures for PR #{}, stopping monitor",
                                     pr_number
                                 );
-                                let _ = result_tx_clone.send(
-                                    TaskResult::RemoveFromOperationMonitor(repo_index, pr_number),
+                                let _ = dispatcher_clone.dispatch(
+                                    Action::RemoveFromOperationMonitor(repo_index, pr_number),
                                 );
-                                let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
+                                let _ = dispatcher_clone.dispatch(Action::SetTaskStatus(Some(
                                     crate::state::TaskStatus {
                                         message: format!(
                                             "Monitoring stopped for PR #{} due to API errors",
@@ -1619,7 +1588,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
 
                                         // Update status
                                         let _ =
-                                            result_tx_clone.send(TaskResult::MergeStatusUpdated(
+                                            dispatcher_clone.dispatch(Action::MergeStatusUpdated(
                                                 repo_index, pr_number, new_status,
                                             ));
 
@@ -1632,8 +1601,8 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                                                 "PR #{} monitoring complete with status {:?}",
                                                 pr_number, new_status
                                             );
-                                            let _ = result_tx_clone.send(
-                                                TaskResult::RemoveFromOperationMonitor(
+                                            let _ = dispatcher_clone.dispatch(
+                                                Action::RemoveFromOperationMonitor(
                                                     repo_index, pr_number,
                                                 ),
                                             );
@@ -1655,13 +1624,13 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                                                 "Too many CI status failures for PR #{}, stopping monitor",
                                                 pr_number
                                             );
-                                            let _ = result_tx_clone.send(
-                                                TaskResult::RemoveFromOperationMonitor(
+                                            let _ = dispatcher_clone.dispatch(
+                                                Action::RemoveFromOperationMonitor(
                                                     repo_index, pr_number,
                                                 ),
                                             );
-                                            let _ = result_tx_clone.send(
-                                                TaskResult::MergeStatusUpdated(
+                                            let _ = dispatcher_clone.dispatch(
+                                                Action::MergeStatusUpdated(
                                                     repo_index,
                                                     pr_number,
                                                     MergeableStatus::Unknown,
@@ -1672,7 +1641,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
 
                                         // Set to building while we retry
                                         let _ =
-                                            result_tx_clone.send(TaskResult::MergeStatusUpdated(
+                                            dispatcher_clone.dispatch(Action::MergeStatusUpdated(
                                                 repo_index,
                                                 pr_number,
                                                 MergeableStatus::BuildInProgress,
@@ -1686,10 +1655,10 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                             if pr_detail.merged_at.is_some() {
                                 // Merge successful!
                                 debug!("PR #{} successfully merged!", pr_number);
-                                let _ = result_tx_clone.send(
-                                    TaskResult::RemoveFromOperationMonitor(repo_index, pr_number),
+                                let _ = dispatcher_clone.dispatch(
+                                    Action::RemoveFromOperationMonitor(repo_index, pr_number),
                                 );
-                                let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
+                                let _ = dispatcher_clone.dispatch(Action::SetTaskStatus(Some(
                                     crate::state::TaskStatus {
                                         message: format!("PR #{} successfully merged!", pr_number),
                                         status_type: crate::state::TaskStatusType::Success,
@@ -1697,7 +1666,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                                 )));
                                 // Trigger repo reload to remove merged PR from list
                                 let _ =
-                                    result_tx_clone.send(TaskResult::RepoNeedsReload(repo_index));
+                                    dispatcher_clone.dispatch(Action::ReloadRepo(repo_index));
                                 break;
                             } else if matches!(
                                 pr_detail.state,
@@ -1705,10 +1674,10 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                             ) {
                                 // PR was closed without merging
                                 debug!("PR #{} was closed without merging", pr_number);
-                                let _ = result_tx_clone.send(
-                                    TaskResult::RemoveFromOperationMonitor(repo_index, pr_number),
+                                let _ = dispatcher_clone.dispatch(
+                                    Action::RemoveFromOperationMonitor(repo_index, pr_number),
                                 );
-                                let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
+                                let _ = dispatcher_clone.dispatch(Action::SetTaskStatus(Some(
                                     crate::state::TaskStatus {
                                         message: format!(
                                             "PR #{} was closed without merging",
@@ -1722,7 +1691,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
 
                             // Update status to show we're still merging
                             debug!("PR #{} still merging (check #{})", pr_number, check_num + 1);
-                            let _ = result_tx_clone.send(TaskResult::MergeStatusUpdated(
+                            let _ = dispatcher_clone.dispatch(Action::MergeStatusUpdated(
                                 repo_index,
                                 pr_number,
                                 MergeableStatus::Merging,
@@ -1736,10 +1705,10 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                     "Operation monitor timed out for PR #{} after 1 hour",
                     pr_number
                 );
-                let _ = result_tx_clone.send(TaskResult::RemoveFromOperationMonitor(
+                let _ = dispatcher_clone.dispatch(Action::RemoveFromOperationMonitor(
                     repo_index, pr_number,
                 ));
-                let _ = result_tx_clone.send(TaskResult::TaskStatusUpdate(Some(
+                let _ = dispatcher_clone.dispatch(Action::SetTaskStatus(Some(
                     crate::state::TaskStatus {
                         message: format!("Monitoring timed out for PR #{} after 1 hour", pr_number),
                         status_type: crate::state::TaskStatusType::Warning,
@@ -1751,14 +1720,15 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
             // Sleep for the specified delay, then execute the wrapped task
             tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
             debug!("Delayed task triggered after {}ms", delay_ms);
-            Box::pin(process_task(*task, result_tx)).await;
+            Box::pin(process_task(*task)).await;
         }
         BackgroundTask::RecurringTask {
             action,
             interval_ms,
+            dispatcher,
         } => {
             // Spawn a background task that dispatches the action repeatedly
-            let result_tx_clone = result_tx.clone();
+            let dispatcher_clone = dispatcher.clone();
             let action = action.clone();
 
             tokio::spawn(async move {
@@ -1777,7 +1747,7 @@ async fn process_task(task: BackgroundTask, result_tx: &mut mpsc::UnboundedSende
                     );
 
                     // Dispatch the configured action
-                    let _ = result_tx_clone.send(TaskResult::DispatchAction(action.clone()));
+                    let _ = dispatcher_clone.dispatch(action.clone());
                 }
             });
         }
