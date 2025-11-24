@@ -61,6 +61,39 @@ pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
         _ => {}
     }
 
+    // Update active panel capabilities when focus or panel state changes
+    // This ensures KeyboardMiddleware always has up-to-date capabilities
+    match action {
+        // Bootstrap: Initialize capabilities
+        Action::Bootstrap
+        // Panel visibility changes
+        | Action::ToggleShortcuts
+        | Action::ShowAddRepoPopup
+        | Action::HideAddRepoPopup
+        | Action::ShowClosePrPopup
+        | Action::HideClosePrPopup
+        | Action::ClosePrFormSubmit
+        | Action::ShowCommandPalette
+        | Action::HideCommandPalette
+        | Action::CommandPaletteExecute
+        | Action::BuildLogsLoaded(_, _)
+        | Action::CloseLogPanel
+        | Action::ToggleDebugConsole
+        // Shortcuts panel scroll state changes (affects SCROLL_VERTICAL capability)
+        | Action::ScrollShortcutsUp
+        | Action::ScrollShortcutsDown
+        | Action::UpdateShortcutsMaxScroll(_) => {
+            state.ui.active_panel_capabilities =
+                crate::panel_capabilities::get_active_panel_capabilities(
+                    &state.repos,
+                    &state.log_panel,
+                    &state.ui,
+                    &state.debug_console,
+                );
+        }
+        _ => {}
+    }
+
     // MIGRATION COMPLETE: All side effects now handled by middleware
     (state, vec![])
 }
@@ -249,6 +282,78 @@ fn ui_reducer(
         }
         Action::UpdateShortcutsMaxScroll(max_scroll) => {
             state.shortcuts_max_scroll = *max_scroll;
+        }
+
+        // Semantic navigation actions - context-aware handling
+        Action::NavigateNext => {
+            // Command palette has priority
+            if state.command_palette.is_some() {
+                return ui_reducer(state, &Action::CommandPaletteSelectNext, theme);
+            }
+            // Shortcuts panel scrolling
+            if state.show_shortcuts {
+                return ui_reducer(state, &Action::ScrollShortcutsDown, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::NavigatePrevious => {
+            // Command palette has priority
+            if state.command_palette.is_some() {
+                return ui_reducer(state, &Action::CommandPaletteSelectPrev, theme);
+            }
+            // Shortcuts panel scrolling
+            if state.show_shortcuts {
+                return ui_reducer(state, &Action::ScrollShortcutsUp, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollToTop => {
+            // Shortcuts panel - scroll to top
+            if state.show_shortcuts {
+                state.shortcuts_scroll = 0;
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollToBottom => {
+            // Shortcuts panel - scroll to bottom
+            if state.show_shortcuts {
+                state.shortcuts_scroll = state.shortcuts_max_scroll;
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollPageDown => {
+            // Shortcuts panel - page down (10 lines)
+            if state.show_shortcuts {
+                state.shortcuts_scroll = (state.shortcuts_scroll + 10).min(state.shortcuts_max_scroll);
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollPageUp => {
+            // Shortcuts panel - page up (10 lines)
+            if state.show_shortcuts {
+                state.shortcuts_scroll = state.shortcuts_scroll.saturating_sub(10);
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollHalfPageDown => {
+            // Shortcuts panel - half page down (5 lines)
+            if state.show_shortcuts {
+                state.shortcuts_scroll = (state.shortcuts_scroll + 5).min(state.shortcuts_max_scroll);
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollHalfPageUp => {
+            // Shortcuts panel - half page up (5 lines)
+            if state.show_shortcuts {
+                state.shortcuts_scroll = state.shortcuts_scroll.saturating_sub(5);
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
         }
 
         Action::CommandPaletteSelectNext => {
@@ -834,6 +939,23 @@ fn repos_reducer(
 
             // Note: View model will be recomputed when RepoDataLoaded action fires
         }
+
+        // Semantic navigation actions - translate to PR table actions
+        Action::NavigateNext => {
+            return repos_reducer(state, &Action::NavigateToNextPr, config, theme, infrastructure);
+        }
+        Action::NavigatePrevious => {
+            return repos_reducer(state, &Action::NavigateToPreviousPr, config, theme, infrastructure);
+        }
+        Action::NavigateLeft => {
+            // Left arrow - navigate to previous repo tab
+            return repos_reducer(state, &Action::SelectPreviousRepo, config, theme, infrastructure);
+        }
+        Action::NavigateRight => {
+            // Right arrow - navigate to next repo tab
+            return repos_reducer(state, &Action::SelectNextRepo, config, theme, infrastructure);
+        }
+
         Action::NavigateToNextPr => {
             let i = match state.state.selected() {
                 Some(i) => {
@@ -1354,6 +1476,57 @@ fn log_panel_reducer(
             state.panel = None;
             state.view_model = None;
         }
+
+        // Semantic navigation actions - translate to log panel actions
+        Action::NavigateNext => {
+            return log_panel_reducer(state, &Action::ScrollLogPanelDown, theme);
+        }
+        Action::NavigatePrevious => {
+            return log_panel_reducer(state, &Action::ScrollLogPanelUp, theme);
+        }
+        Action::NavigateLeft => {
+            return log_panel_reducer(state, &Action::ScrollLogPanelLeft, theme);
+        }
+        Action::NavigateRight => {
+            return log_panel_reducer(state, &Action::ScrollLogPanelRight, theme);
+        }
+        Action::ScrollToTop => {
+            if let Some(ref mut panel) = state.panel {
+                panel.scroll_offset = 0;
+                recompute_view_model(&mut state, theme);
+            }
+        }
+        Action::ScrollToBottom => {
+            if let Some(ref mut panel) = state.panel {
+                // Scroll to maximum offset
+                // We need to calculate the max based on content length and viewport
+                // For now, use a large number - view model will clamp it
+                panel.scroll_offset = usize::MAX;
+                recompute_view_model(&mut state, theme);
+            }
+        }
+        Action::ScrollPageUp => {
+            if let Some(ref mut panel) = state.panel {
+                let page_size = panel.viewport_height.saturating_sub(1).max(1);
+                panel.scroll_offset = panel.scroll_offset.saturating_sub(page_size);
+                recompute_view_model(&mut state, theme);
+            }
+        }
+        Action::ScrollHalfPageUp => {
+            if let Some(ref mut panel) = state.panel {
+                let half_page = (panel.viewport_height / 2).max(1);
+                panel.scroll_offset = panel.scroll_offset.saturating_sub(half_page);
+                recompute_view_model(&mut state, theme);
+            }
+        }
+        Action::ScrollHalfPageDown => {
+            if let Some(ref mut panel) = state.panel {
+                let half_page = (panel.viewport_height / 2).max(1);
+                panel.scroll_offset = panel.scroll_offset.saturating_add(half_page);
+                recompute_view_model(&mut state, theme);
+            }
+        }
+
         Action::ScrollLogPanelUp => {
             if let Some(ref mut panel) = state.panel {
                 panel.scroll_offset = panel.scroll_offset.saturating_sub(1);
@@ -1699,6 +1872,40 @@ fn debug_console_reducer(
                 recompute_debug_console_view_model(&mut state, theme);
             }
         }
+
+        // Semantic navigation actions - translate to debug console actions
+        Action::NavigateNext => {
+            return debug_console_reducer(state, &Action::ScrollDebugConsoleDown, theme);
+        }
+        Action::NavigatePrevious => {
+            return debug_console_reducer(state, &Action::ScrollDebugConsoleUp, theme);
+        }
+        Action::ScrollToTop => {
+            state.scroll_offset = 0;
+            state.auto_scroll = false;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+        Action::ScrollToBottom => {
+            // Jump to end (auto-scroll will handle this)
+            state.auto_scroll = true;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+        Action::ScrollPageUp => {
+            state.scroll_offset = state.scroll_offset.saturating_sub(10);
+            state.auto_scroll = false;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+        Action::ScrollHalfPageUp => {
+            state.scroll_offset = state.scroll_offset.saturating_sub(5);
+            state.auto_scroll = false;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+        Action::ScrollHalfPageDown => {
+            state.scroll_offset = state.scroll_offset.saturating_add(5);
+            state.auto_scroll = false;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+
         Action::ScrollDebugConsoleUp => {
             // Immediate viewport scrolling - scroll up by 1 line
             state.scroll_offset = state.scroll_offset.saturating_sub(1);
