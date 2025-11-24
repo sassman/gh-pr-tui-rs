@@ -594,6 +594,519 @@ impl Middleware for TaskMiddleware {
                     }
                 }
 
+                //
+                // PR OPERATIONS
+                //
+
+                Action::MergeSelectedPrs => {
+                    log::debug!("TaskMiddleware: Handling MergeSelectedPrs");
+
+                    let repo_index = state.repos.selected_repo;
+                    if let Some(repo) = state.repos.recent_repos.get(repo_index).cloned() {
+                        // Check if there are selected PRs
+                        let has_selection = if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                            !repo_data.selected_pr_numbers.is_empty()
+                        } else {
+                            false
+                        };
+
+                        // Get PRs to merge
+                        let selected_prs: Vec<_> = if !has_selection {
+                            // No selection - use current cursor PR
+                            if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                                if let Some(selected_idx) = repo_data.table_state.selected() {
+                                    repo_data.prs.get(selected_idx).cloned().map(|pr| vec![pr]).unwrap_or_default()
+                                } else {
+                                    vec![]
+                                }
+                            } else {
+                                vec![]
+                            }
+                        } else if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                            repo_data
+                                .prs
+                                .iter()
+                                .filter(|pr| {
+                                    repo_data.selected_pr_numbers.contains(&crate::state::PrNumber::from_pr(pr))
+                                })
+                                .cloned()
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+
+                        if !selected_prs.is_empty() {
+                            // Separate PRs by status: ready to merge vs building
+                            let mut prs_to_merge = Vec::new();
+                            let mut prs_to_auto_merge = Vec::new();
+
+                            for pr in selected_prs {
+                                match pr.mergeable {
+                                    crate::pr::MergeableStatus::BuildInProgress => {
+                                        prs_to_auto_merge.push(pr);
+                                    }
+                                    _ => {
+                                        prs_to_merge.push(pr);
+                                    }
+                                }
+                            }
+
+                            // Merge ready PRs directly
+                            if !prs_to_merge.is_empty() {
+                                // Start monitoring for each PR being merged
+                                for pr in &prs_to_merge {
+                                    dispatcher.dispatch(Action::StartOperationMonitor(
+                                        repo_index,
+                                        pr.number,
+                                        crate::state::OperationType::Merge,
+                                    ));
+                                }
+
+                                // Set task status
+                                dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                                    message: format!("Merging {} PR(s)...", prs_to_merge.len()),
+                                    status_type: TaskStatusType::Running,
+                                })));
+
+                                // Send background task
+                                let selected_indices: Vec<usize> = (0..prs_to_merge.len()).collect();
+                                if let Ok(octocrab) = self.octocrab() {
+                                    let _ = self.task_tx.send(BackgroundTask::Merge {
+                                        repo: repo.clone(),
+                                        prs: prs_to_merge,
+                                        selected_indices,
+                                        octocrab,
+                                    });
+                                }
+                            }
+
+                            // Enable auto-merge for building PRs (still using legacy system)
+                            for pr in prs_to_auto_merge {
+                                if let Ok(octocrab) = self.octocrab() {
+                                    let _ = self.task_tx.send(BackgroundTask::EnableAutoMerge {
+                                        repo_index,
+                                        repo: repo.clone(),
+                                        pr_number: pr.number,
+                                        octocrab,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Action::Rebase => {
+                    log::debug!("TaskMiddleware: Handling Rebase");
+
+                    let repo_index = state.repos.selected_repo;
+                    if let Some(repo) = state.repos.recent_repos.get(repo_index).cloned() {
+                        // Check if there are selected PRs
+                        let has_selection = if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                            !repo_data.selected_pr_numbers.is_empty()
+                        } else {
+                            false
+                        };
+
+                        // Get PRs to rebase
+                        let prs_to_rebase: Vec<_> = if !has_selection {
+                            // No selection - use current cursor PR
+                            if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                                if let Some(selected_idx) = repo_data.table_state.selected() {
+                                    repo_data.prs.get(selected_idx).cloned().map(|pr| vec![pr]).unwrap_or_default()
+                                } else {
+                                    vec![]
+                                }
+                            } else {
+                                vec![]
+                            }
+                        } else if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                            repo_data
+                                .prs
+                                .iter()
+                                .filter(|pr| {
+                                    repo_data.selected_pr_numbers.contains(&crate::state::PrNumber::from_pr(pr))
+                                })
+                                .cloned()
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+
+                        if !prs_to_rebase.is_empty() {
+                            // Start monitoring for each PR being rebased
+                            for pr in &prs_to_rebase {
+                                dispatcher.dispatch(Action::StartOperationMonitor(
+                                    repo_index,
+                                    pr.number,
+                                    crate::state::OperationType::Rebase,
+                                ));
+                            }
+
+                            // Set task status
+                            dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                                message: format!("Rebasing {} PR(s)...", prs_to_rebase.len()),
+                                status_type: TaskStatusType::Running,
+                            })));
+
+                            // Send background task
+                            let selected_indices: Vec<usize> = (0..prs_to_rebase.len()).collect();
+                            if let Ok(octocrab) = self.octocrab() {
+                                let _ = self.task_tx.send(BackgroundTask::Rebase {
+                                    repo,
+                                    prs: prs_to_rebase,
+                                    selected_indices,
+                                    octocrab,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                Action::ApprovePrs => {
+                    log::debug!("TaskMiddleware: Handling ApprovePrs");
+
+                    let repo_index = state.repos.selected_repo;
+                    if let Some(repo) = state.repos.recent_repos.get(repo_index).cloned() {
+                        let config = state.config.clone();
+
+                        // Check if there are selected PRs
+                        let has_selection = if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                            !repo_data.selected_pr_numbers.is_empty()
+                        } else {
+                            false
+                        };
+
+                        // Get PR numbers to approve
+                        let pr_numbers: Vec<usize> = if !has_selection {
+                            // No selection - use current cursor PR
+                            if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                                if let Some(selected_idx) = repo_data.table_state.selected() {
+                                    repo_data
+                                        .prs
+                                        .get(selected_idx)
+                                        .map(|pr| vec![pr.number])
+                                        .unwrap_or_default()
+                                } else {
+                                    vec![]
+                                }
+                            } else {
+                                vec![]
+                            }
+                        } else if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                            repo_data
+                                .prs
+                                .iter()
+                                .filter(|pr| {
+                                    repo_data.selected_pr_numbers.contains(&crate::state::PrNumber::from_pr(pr))
+                                })
+                                .map(|pr| pr.number)
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+
+                        if !pr_numbers.is_empty() {
+                            // Set task status
+                            dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                                message: format!("Approving {} PR(s)...", pr_numbers.len()),
+                                status_type: TaskStatusType::Running,
+                            })));
+
+                            // Send background task
+                            if let Ok(octocrab) = self.octocrab() {
+                                let _ = self.task_tx.send(BackgroundTask::ApprovePrs {
+                                    repo,
+                                    pr_numbers,
+                                    approval_message: config.approval_message,
+                                    octocrab,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                Action::ClosePrFormSubmit => {
+                    log::debug!("TaskMiddleware: Handling ClosePrFormSubmit");
+
+                    let repo_index = state.repos.selected_repo;
+                    if let Some(repo) = state.repos.recent_repos.get(repo_index).cloned() {
+                        // Get comment from close_pr_state
+                        if let Some(close_pr) = &state.ui.close_pr_state {
+                            let comment = close_pr.comment.clone();
+
+                            // Check if there are selected PRs
+                            let has_selection = if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                                !repo_data.selected_pr_numbers.is_empty()
+                            } else {
+                                false
+                            };
+
+                            // Get PR numbers and PRs to close
+                            let (pr_numbers, prs): (Vec<usize>, Vec<crate::pr::Pr>) = if !has_selection {
+                                // No selection - use current cursor PR
+                                if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                                    if let Some(selected_idx) = repo_data.table_state.selected() {
+                                        repo_data
+                                            .prs
+                                            .get(selected_idx)
+                                            .cloned()
+                                            .map(|pr| (vec![pr.number], vec![pr]))
+                                            .unwrap_or((vec![], vec![]))
+                                    } else {
+                                        (vec![], vec![])
+                                    }
+                                } else {
+                                    (vec![], vec![])
+                                }
+                            } else if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                                let selected_prs: Vec<_> = repo_data
+                                    .prs
+                                    .iter()
+                                    .filter(|pr| {
+                                        repo_data.selected_pr_numbers.contains(&crate::state::PrNumber::from_pr(pr))
+                                    })
+                                    .cloned()
+                                    .collect();
+                                let pr_nums: Vec<usize> = selected_prs.iter().map(|pr| pr.number).collect();
+                                (pr_nums, selected_prs)
+                            } else {
+                                (vec![], vec![])
+                            };
+
+                            if !pr_numbers.is_empty() {
+                                // Set task status
+                                dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                                    message: format!("Closing {} PR(s)...", pr_numbers.len()),
+                                    status_type: TaskStatusType::Running,
+                                })));
+
+                                // Send background task
+                                if let Ok(octocrab) = self.octocrab() {
+                                    let _ = self.task_tx.send(BackgroundTask::ClosePrs {
+                                        repo,
+                                        pr_numbers: pr_numbers.clone(),
+                                        prs,
+                                        comment,
+                                        octocrab,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+
+                //
+                // BACKGROUND CHECKS & MONITORING
+                //
+
+                Action::StartOperationMonitor(repo_index, pr_number, operation) => {
+                    log::debug!("TaskMiddleware: Handling StartOperationMonitor for PR #{}", pr_number);
+
+                    if let Some(repo) = state.repos.recent_repos.get(*repo_index).cloned() {
+                        // Send background task for operation monitoring
+                        if let Ok(octocrab) = self.octocrab() {
+                            let _ = self.task_tx.send(BackgroundTask::MonitorOperation {
+                                repo_index: *repo_index,
+                                repo,
+                                pr_number: *pr_number,
+                                operation: *operation,
+                                octocrab,
+                            });
+                        }
+                    }
+                }
+
+                Action::RerunFailedJobs => {
+                    log::debug!("TaskMiddleware: Handling RerunFailedJobs");
+
+                    let repo_index = state.repos.selected_repo;
+                    if let Some(repo) = state.repos.recent_repos.get(repo_index).cloned() {
+                        // Check if there are selected PRs
+                        let has_selection = if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                            !repo_data.selected_pr_numbers.is_empty()
+                        } else {
+                            false
+                        };
+
+                        // Get PR numbers to rerun
+                        let pr_numbers: Vec<usize> = if !has_selection {
+                            // No selection - use current cursor PR
+                            if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                                if let Some(selected_idx) = repo_data.table_state.selected() {
+                                    repo_data
+                                        .prs
+                                        .get(selected_idx)
+                                        .map(|pr| vec![pr.number])
+                                        .unwrap_or_default()
+                                } else {
+                                    vec![]
+                                }
+                            } else {
+                                vec![]
+                            }
+                        } else if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                            repo_data
+                                .prs
+                                .iter()
+                                .filter(|pr| {
+                                    repo_data.selected_pr_numbers.contains(&crate::state::PrNumber::from_pr(pr))
+                                })
+                                .map(|pr| pr.number)
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+
+                        if !pr_numbers.is_empty() {
+                            // Send background task
+                            if let Ok(octocrab) = self.octocrab() {
+                                let _ = self.task_tx.send(BackgroundTask::RerunFailedJobs {
+                                    repo,
+                                    pr_numbers,
+                                    octocrab,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                Action::OpenBuildLogs => {
+                    log::debug!("TaskMiddleware: Handling OpenBuildLogs");
+
+                    let repo_index = state.repos.selected_repo;
+                    if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                        if let Some(selected_idx) = repo_data.table_state.selected() {
+                            if let Some(pr) = repo_data.prs.get(selected_idx).cloned() {
+                                if let Some(repo) = state.repos.recent_repos.get(repo_index).cloned() {
+                                    // Set status
+                                    dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                                        message: "Loading build logs...".to_string(),
+                                        status_type: TaskStatusType::Running,
+                                    })));
+
+                                    // Send background task to fetch build logs
+                                    if let Ok(octocrab) = self.octocrab() {
+                                        let pr_context = crate::log::PrContext {
+                                            number: pr.number,
+                                            title: pr.title.clone(),
+                                            author: pr.author.clone(),
+                                        };
+                                        let _ = self.task_tx.send(BackgroundTask::FetchBuildLogs {
+                                            repo,
+                                            pr_number: pr.number,
+                                            head_sha: "HEAD".to_string(), // Placeholder - will fetch in background task
+                                            octocrab,
+                                            pr_context,
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                Action::StartMergeBot => {
+                    log::debug!("TaskMiddleware: Handling StartMergeBot");
+
+                    let repo_index = state.repos.selected_repo;
+                    if let Some(_repo) = state.repos.recent_repos.get(repo_index).cloned() {
+                        // Get selected PRs
+                        let prs_to_process: Vec<_> = if let Some(repo_data) = state.repos.repo_data.get(&repo_index) {
+                            repo_data
+                                .prs
+                                .iter()
+                                .filter(|pr| {
+                                    repo_data.selected_pr_numbers.contains(&crate::state::PrNumber::from_pr(pr))
+                                })
+                                .cloned()
+                                .collect()
+                        } else {
+                            vec![]
+                        };
+
+                        if !prs_to_process.is_empty() {
+                            // Build PR data for merge bot initialization
+                            let pr_data: Vec<(usize, usize)> = prs_to_process
+                                .iter()
+                                .enumerate()
+                                .map(|(idx, pr)| (pr.number, idx))
+                                .collect();
+
+                            // Dispatch action to initialize bot
+                            dispatcher.dispatch(Action::StartMergeBotWithPrData(pr_data));
+                            dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                                message: format!("Merge bot started with {} PR(s)", prs_to_process.len()),
+                                status_type: TaskStatusType::Success,
+                            })));
+                        }
+                    }
+                }
+
+                Action::StartRecurringUpdates(interval_ms) => {
+                    log::debug!("TaskMiddleware: Handling StartRecurringUpdates");
+
+                    // Send background task to start recurring updates
+                    let _ = self.task_tx.send(BackgroundTask::RecurringTask {
+                        action: Action::RecurringUpdateTriggered,
+                        interval_ms: *interval_ms,
+                    });
+                }
+
+                //
+                // CACHE MANAGEMENT
+                //
+
+                Action::ClearCache => {
+                    log::debug!("TaskMiddleware: Handling ClearCache");
+
+                    // Clear the cache
+                    if let Ok(mut cache) = self.cache.lock() {
+                        if cache.clear().is_ok() {
+                            dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                                message: "Cache cleared".to_string(),
+                                status_type: TaskStatusType::Success,
+                            })));
+                        } else {
+                            dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                                message: "Failed to clear cache".to_string(),
+                                status_type: TaskStatusType::Error,
+                            })));
+                        }
+                    }
+                }
+
+                Action::ShowCacheStats => {
+                    log::debug!("TaskMiddleware: Handling ShowCacheStats");
+
+                    // Show cache statistics
+                    if let Ok(cache) = self.cache.lock() {
+                        let stats = cache.stats();
+                        dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                            message: format!(
+                                "Cache: {} total, {} fresh, {} stale (TTL: {}s)",
+                                stats.total_entries, stats.fresh_entries, stats.stale_entries, stats.ttl_seconds
+                            ),
+                            status_type: TaskStatusType::Success,
+                        })));
+                    }
+                }
+
+                Action::InvalidateRepoCache(repo_index) => {
+                    log::debug!("TaskMiddleware: Handling InvalidateRepoCache for repo {}", repo_index);
+
+                    // Invalidate cache for specific repo using pattern matching
+                    if let Some(repo) = state.repos.recent_repos.get(*repo_index) {
+                        if let Ok(mut cache) = self.cache.lock() {
+                            let pattern = format!("{}/{}", repo.org, repo.repo);
+                            cache.invalidate_pattern(&pattern);
+                            dispatcher.dispatch(Action::SetTaskStatus(Some(TaskStatus {
+                                message: format!("Cache invalidated for {}/{}", repo.org, repo.repo),
+                                status_type: TaskStatusType::Success,
+                            })));
+                        }
+                    }
+                }
+
                 // All other actions pass through unchanged
                 _ => {}
             }

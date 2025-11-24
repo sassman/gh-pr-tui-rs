@@ -183,10 +183,14 @@ fn ui_reducer(
             }
         }
         Action::ClosePrFormSubmit => {
-            // Close popup and trigger effect to close PRs
-            if let Some(close_pr) = state.close_pr_state.take() {
-                let comment = close_pr.comment;
-                return (state, vec![Effect::ClosePrs { comment }]);
+            // MIGRATION NOTE: ClosePrs now handled by TaskMiddleware
+            // Middleware will:
+            // - Get selected PRs from state
+            // - Dispatch SetTaskStatus
+            // - Send BackgroundTask::ClosePrs
+            // Just keep the state change here
+            if let Some(_close_pr) = state.close_pr_state.take() {
+                // close_pr_state is cleared, middleware handles the rest
             }
         }
 
@@ -1158,66 +1162,23 @@ fn repos_reducer(
             }
         }
         Action::Rebase => {
-            // Effect: Perform rebase on selected PRs, or current PR if none selected
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                // Use PR numbers for stable selection
-                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    !data.selected_pr_numbers.is_empty()
-                } else {
-                    false
-                };
+            // MIGRATION NOTE: PerformRebase and StartOperationMonitoring now handled by TaskMiddleware
+            // Middleware will:
+            // - Get selected PRs from state
+            // - Dispatch StartOperationMonitor for each PR
+            // - Dispatch SetTaskStatus
+            // - Send BackgroundTask::Rebase
+            // Just clear selection here
+            let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                !data.selected_pr_numbers.is_empty()
+            } else {
+                false
+            };
 
-                let prs_to_rebase: Vec<_> = if !has_selection {
-                    // No selection - use current cursor PR
-                    state
-                        .state
-                        .selected()
-                        .and_then(|idx| state.prs.get(idx).cloned())
-                        .map(|pr| vec![pr])
-                        .unwrap_or_default()
-                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    // Rebase selected PRs using PR numbers (stable across filtering)
-                    state
-                        .prs
-                        .iter()
-                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
-                        .cloned()
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                if !prs_to_rebase.is_empty() {
-                    // Start monitoring for each PR being rebased
-                    let repo_index = state.selected_repo;
-                    for pr in &prs_to_rebase {
-                        // First dispatch action to update state immediately
-                        effects.push(Effect::DispatchAction(Action::StartOperationMonitor(
-                            repo_index,
-                            pr.number,
-                            crate::state::OperationType::Rebase,
-                        )));
-                        // Then start background monitoring
-                        effects.push(Effect::StartOperationMonitoring {
-                            repo_index,
-                            repo: repo.clone(),
-                            pr_number: pr.number,
-                            operation: crate::state::OperationType::Rebase,
-                        });
-                    }
-
-                    effects.push(Effect::PerformRebase {
-                        repo,
-                        prs: prs_to_rebase,
-                    });
-
-                    // Clear selection after starting rebase (if there was a selection)
-                    if has_selection
-                        && let Some(data) = state.repo_data.get_mut(&state.selected_repo)
-                    {
-                        data.selected_pr_numbers.clear();
-                    }
-                }
+            if has_selection
+                && let Some(data) = state.repo_data.get_mut(&state.selected_repo)
+            {
+                data.selected_pr_numbers.clear();
             }
         }
         Action::RerunFailedJobs => {
@@ -1256,130 +1217,33 @@ fn repos_reducer(
             }
         }
         Action::ApprovePrs => {
-            // Effect: Approve selected PRs or current PR with configured message
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                // Use PR numbers for stable selection
-                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    !data.selected_pr_numbers.is_empty()
-                } else {
-                    false
-                };
-
-                let pr_numbers: Vec<usize> = if !has_selection {
-                    // No selection - use current cursor PR
-                    state
-                        .state
-                        .selected()
-                        .and_then(|idx| state.prs.get(idx))
-                        .map(|pr| vec![pr.number])
-                        .unwrap_or_default()
-                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    state
-                        .prs
-                        .iter()
-                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
-                        .map(|pr| pr.number)
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                if !pr_numbers.is_empty() {
-                    effects.push(Effect::ApprovePrs {
-                        repo,
-                        pr_numbers,
-                        approval_message: config.approval_message.clone(),
-                    });
-                }
-            }
+            // MIGRATION NOTE: ApprovePrs now handled by TaskMiddleware
+            // Middleware will:
+            // - Get selected PRs from state
+            // - Dispatch SetTaskStatus
+            // - Send BackgroundTask::ApprovePrs
+            // No effects needed
         }
         Action::MergeSelectedPrs => {
-            // Effect: Merge selected PRs or current PR, or enable auto-merge if building
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                // Use PR numbers for stable selection
-                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    !data.selected_pr_numbers.is_empty()
-                } else {
-                    false
-                };
+            // MIGRATION NOTE: PerformMerge, StartOperationMonitoring, and EnableAutoMerge now handled by TaskMiddleware
+            // Middleware will:
+            // - Get selected PRs from state
+            // - Separate PRs by status (ready vs building)
+            // - Dispatch StartOperationMonitor for each PR being merged
+            // - Dispatch SetTaskStatus
+            // - Send BackgroundTask::Merge for ready PRs
+            // - Send BackgroundTask::EnableAutoMerge for building PRs
+            // Just clear selection here
+            let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                !data.selected_pr_numbers.is_empty()
+            } else {
+                false
+            };
 
-                let selected_prs: Vec<_> = if !has_selection {
-                    // No selection - use current cursor PR
-                    state
-                        .state
-                        .selected()
-                        .and_then(|idx| state.prs.get(idx).cloned())
-                        .map(|pr| vec![pr])
-                        .unwrap_or_default()
-                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    state
-                        .prs
-                        .iter()
-                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
-                        .cloned()
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                if !selected_prs.is_empty() {
-                    // Separate PRs by status: ready to merge vs building
-                    let mut prs_to_merge = Vec::new();
-                    let mut prs_to_auto_merge = Vec::new();
-
-                    for pr in selected_prs {
-                        match pr.mergeable {
-                            crate::pr::MergeableStatus::BuildInProgress => {
-                                prs_to_auto_merge.push(pr);
-                            }
-                            _ => {
-                                prs_to_merge.push(pr);
-                            }
-                        }
-                    }
-
-                    // Merge ready PRs directly
-                    if !prs_to_merge.is_empty() {
-                        // Start monitoring for each PR being merged
-                        let repo_index = state.selected_repo;
-                        for pr in &prs_to_merge {
-                            // First dispatch action to update state immediately
-                            effects.push(Effect::DispatchAction(Action::StartOperationMonitor(
-                                repo_index,
-                                pr.number,
-                                crate::state::OperationType::Merge,
-                            )));
-                            // Then start background monitoring
-                            effects.push(Effect::StartOperationMonitoring {
-                                repo_index,
-                                repo: repo.clone(),
-                                pr_number: pr.number,
-                                operation: crate::state::OperationType::Merge,
-                            });
-                        }
-
-                        effects.push(Effect::PerformMerge {
-                            repo: repo.clone(),
-                            prs: prs_to_merge,
-                        });
-                    }
-
-                    // Enable auto-merge for building PRs
-                    for pr in prs_to_auto_merge {
-                        effects.push(Effect::EnableAutoMerge {
-                            repo_index: state.selected_repo,
-                            repo: repo.clone(),
-                            pr_number: pr.number,
-                        });
-                    }
-
-                    // Clear selection after starting merge operations (if there was a selection)
-                    if has_selection
-                        && let Some(data) = state.repo_data.get_mut(&state.selected_repo)
-                    {
-                        data.selected_pr_numbers.clear();
-                    }
-                }
+            if has_selection
+                && let Some(data) = state.repo_data.get_mut(&state.selected_repo)
+            {
+                data.selected_pr_numbers.clear();
             }
         }
         Action::StartMergeBot => {
