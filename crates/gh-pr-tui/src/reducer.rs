@@ -1982,3 +1982,431 @@ fn recompute_debug_console_view_model(state: &mut DebugConsoleState, theme: &cra
         ),
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capabilities::PanelCapabilities;
+
+    /// Helper to create a minimal app state for testing
+    fn minimal_app_state() -> AppState {
+        AppState::default()
+    }
+
+    #[test]
+    fn test_bootstrap_initializes_capabilities() {
+        let state = minimal_app_state();
+        let (new_state, _effects) = reduce(state, &Action::Bootstrap);
+
+        // After bootstrap, capabilities should be initialized to PR table (default panel)
+        assert!(new_state.ui.active_panel_capabilities.supports_vim_navigation());
+        assert!(new_state
+            .ui
+            .active_panel_capabilities
+            .contains(PanelCapabilities::ITEM_NAVIGATION));
+    }
+
+    #[test]
+    fn test_toggle_shortcuts_updates_capabilities() {
+        let state = minimal_app_state();
+
+        // Toggle shortcuts on
+        let (new_state, _effects) = reduce(state, &Action::ToggleShortcuts);
+
+        // Should now have shortcuts panel capabilities
+        assert!(new_state.ui.show_shortcuts);
+        assert!(new_state.ui.active_panel_capabilities.supports_vim_navigation());
+        assert!(new_state
+            .ui
+            .active_panel_capabilities
+            .contains(PanelCapabilities::VIM_SCROLL_BINDINGS));
+    }
+
+    #[test]
+    fn test_show_command_palette_updates_capabilities() {
+        let state = minimal_app_state();
+
+        // Show command palette
+        let (new_state, _effects) = reduce(state, &Action::ShowCommandPalette);
+
+        // Should have command palette capabilities
+        assert!(new_state.ui.command_palette.is_some());
+        assert!(new_state.ui.active_panel_capabilities.supports_vim_navigation());
+        // Command palette doesn't have scroll capabilities
+        assert!(!new_state.ui.active_panel_capabilities.supports_vim_vertical_scroll());
+    }
+
+    #[test]
+    fn test_toggle_debug_console_updates_capabilities() {
+        let state = minimal_app_state();
+
+        // Toggle debug console on
+        let (new_state, _effects) = reduce(state, &Action::ToggleDebugConsole);
+
+        // Should have debug console capabilities
+        assert!(new_state.debug_console.is_open);
+        assert!(new_state.ui.active_panel_capabilities.supports_vim_navigation());
+        assert!(new_state.ui.active_panel_capabilities.supports_vim_vertical_scroll());
+        assert!(new_state
+            .ui
+            .active_panel_capabilities
+            .contains(PanelCapabilities::SCROLL_VERTICAL));
+    }
+
+    #[test]
+    fn test_close_log_panel_reverts_to_pr_table_capabilities() {
+        let mut state = minimal_app_state();
+        // Manually set log panel as open
+        state.log_panel.panel = Some(crate::log::LogPanel {
+            workflows: vec![],
+            job_metadata: std::collections::HashMap::new(),
+            expanded_nodes: std::collections::HashSet::new(),
+            cursor_path: vec![],
+            scroll_offset: 0,
+            horizontal_scroll: 0,
+            show_timestamps: false,
+            viewport_height: 20,
+            pr_context: crate::log::PrContext {
+                number: 1,
+                title: "Test PR".to_string(),
+                author: "test".to_string(),
+            },
+        });
+        state.ui.active_panel_capabilities = PanelCapabilities::VIM_NAVIGATION_BINDINGS
+            | PanelCapabilities::VIM_SCROLL_BINDINGS
+            | PanelCapabilities::SCROLL_VERTICAL;
+
+        // Close log panel
+        let (new_state, _effects) = reduce(state, &Action::CloseLogPanel);
+
+        // Should revert to PR table capabilities
+        assert!(new_state.log_panel.panel.is_none());
+        assert!(new_state.ui.active_panel_capabilities.supports_vim_navigation());
+        assert!(new_state
+            .ui
+            .active_panel_capabilities
+            .contains(PanelCapabilities::ITEM_NAVIGATION));
+        // PR table doesn't have scroll capabilities
+        assert!(!new_state.ui.active_panel_capabilities.supports_vim_vertical_scroll());
+    }
+
+    // Semantic Action Tests - UI Reducer
+
+    #[test]
+    fn test_navigate_next_delegates_to_command_palette() {
+        let mut state = minimal_app_state();
+        state.ui.command_palette = Some(CommandPaletteState {
+            input: String::new(),
+            filtered_commands: vec![
+                (
+                    gh_pr_tui_command_palette::CommandItem {
+                        title: "Command 1".to_string(),
+                        description: "First command".to_string(),
+                        category: "General".to_string(),
+                        shortcut_hint: None,
+                        context: None,
+                        action: Action::Quit,
+                    },
+                    100,
+                ),
+                (
+                    gh_pr_tui_command_palette::CommandItem {
+                        title: "Command 2".to_string(),
+                        description: "Second command".to_string(),
+                        category: "General".to_string(),
+                        shortcut_hint: None,
+                        context: None,
+                        action: Action::Quit,
+                    },
+                    100,
+                ),
+            ],
+            selected_index: 0,
+            view_model: None,
+        });
+
+        // NavigateNext should select next command
+        let (ui_state, _effects) = ui_reducer(state.ui, &Action::NavigateNext, &state.theme);
+
+        assert_eq!(ui_state.command_palette.unwrap().selected_index, 1);
+    }
+
+    #[test]
+    fn test_navigate_next_scrolls_shortcuts_panel() {
+        let mut state = minimal_app_state();
+        state.ui.show_shortcuts = true;
+        state.ui.shortcuts_scroll = 0;
+        state.ui.shortcuts_max_scroll = 10;
+
+        // NavigateNext should scroll down
+        let (ui_state, _effects) = ui_reducer(state.ui, &Action::NavigateNext, &state.theme);
+
+        assert_eq!(ui_state.shortcuts_scroll, 1);
+    }
+
+    #[test]
+    fn test_scroll_to_top_shortcuts_panel() {
+        let mut state = minimal_app_state();
+        state.ui.show_shortcuts = true;
+        state.ui.shortcuts_scroll = 5;
+        state.ui.shortcuts_max_scroll = 10;
+
+        // ScrollToTop should jump to beginning
+        let (ui_state, _effects) = ui_reducer(state.ui, &Action::ScrollToTop, &state.theme);
+
+        assert_eq!(ui_state.shortcuts_scroll, 0);
+    }
+
+    #[test]
+    fn test_scroll_to_bottom_shortcuts_panel() {
+        let mut state = minimal_app_state();
+        state.ui.show_shortcuts = true;
+        state.ui.shortcuts_scroll = 0;
+        state.ui.shortcuts_max_scroll = 10;
+
+        // ScrollToBottom should jump to end
+        let (ui_state, _effects) = ui_reducer(state.ui, &Action::ScrollToBottom, &state.theme);
+
+        assert_eq!(ui_state.shortcuts_scroll, 10);
+    }
+
+    // Semantic Action Tests - Repos Reducer
+
+    #[test]
+    fn test_navigate_next_selects_next_pr() {
+        let mut state = minimal_app_state();
+        // Setup: Add some PRs and select first one
+        state.repos.prs = vec![
+            crate::pr::Pr {
+                number: 1,
+                title: "Test PR 1".to_string(),
+                body: String::new(),
+                author: "test_author".to_string(),
+                no_comments: 0,
+                merge_state: "clean".to_string(),
+                mergeable: crate::pr::MergeableStatus::Unknown,
+                needs_rebase: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+            crate::pr::Pr {
+                number: 2,
+                title: "Test PR 2".to_string(),
+                body: String::new(),
+                author: "test_author".to_string(),
+                no_comments: 0,
+                merge_state: "clean".to_string(),
+                mergeable: crate::pr::MergeableStatus::Unknown,
+                needs_rebase: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+        ];
+        state.repos.state.select(Some(0));
+
+        let (repos_state, _effects) = repos_reducer(
+            state.repos,
+            &Action::NavigateNext,
+            &state.config,
+            &state.theme,
+            &state.infra,
+        );
+
+        // Should select second PR
+        assert_eq!(repos_state.state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_navigate_left_selects_previous_repo() {
+        let mut state = minimal_app_state();
+        // Setup: Add multiple repos and select second one
+        state.repos.recent_repos = vec![
+            Repo {
+                org: "org1".to_string(),
+                repo: "repo1".to_string(),
+                branch: "main".to_string(),
+            },
+            Repo {
+                org: "org2".to_string(),
+                repo: "repo2".to_string(),
+                branch: "main".to_string(),
+            },
+        ];
+        state.repos.selected_repo = 1;
+
+        let (repos_state, _effects) = repos_reducer(
+            state.repos,
+            &Action::NavigateLeft,
+            &state.config,
+            &state.theme,
+            &state.infra,
+        );
+
+        // Should select first repo
+        assert_eq!(repos_state.selected_repo, 0);
+    }
+
+    #[test]
+    fn test_navigate_right_selects_next_repo() {
+        let mut state = minimal_app_state();
+        // Setup: Add multiple repos and select first one
+        state.repos.recent_repos = vec![
+            Repo {
+                org: "org1".to_string(),
+                repo: "repo1".to_string(),
+                branch: "main".to_string(),
+            },
+            Repo {
+                org: "org2".to_string(),
+                repo: "repo2".to_string(),
+                branch: "main".to_string(),
+            },
+        ];
+        state.repos.selected_repo = 0;
+
+        let (repos_state, _effects) = repos_reducer(
+            state.repos,
+            &Action::NavigateRight,
+            &state.config,
+            &state.theme,
+            &state.infra,
+        );
+
+        // Should select second repo
+        assert_eq!(repos_state.selected_repo, 1);
+    }
+
+    // Semantic Action Tests - Log Panel Reducer
+
+    #[test]
+    fn test_log_panel_scroll_to_top() {
+        let mut state = LogPanelState::default();
+        state.panel = Some(crate::log::LogPanel {
+            workflows: vec![],
+            job_metadata: std::collections::HashMap::new(),
+            expanded_nodes: std::collections::HashSet::new(),
+            cursor_path: vec![],
+            scroll_offset: 10,
+            horizontal_scroll: 0,
+            show_timestamps: false,
+            viewport_height: 20,
+            pr_context: crate::log::PrContext {
+                number: 1,
+                title: "Test PR".to_string(),
+                author: "test".to_string(),
+            },
+        });
+
+        let (log_state, _effects) = log_panel_reducer(state, &Action::ScrollToTop, &crate::theme::Theme::default());
+
+        assert_eq!(log_state.panel.unwrap().scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_log_panel_navigate_next_scrolls_down() {
+        let mut state = LogPanelState::default();
+        state.panel = Some(crate::log::LogPanel {
+            workflows: vec![],
+            job_metadata: std::collections::HashMap::new(),
+            expanded_nodes: std::collections::HashSet::new(),
+            cursor_path: vec![],
+            scroll_offset: 0,
+            horizontal_scroll: 0,
+            show_timestamps: false,
+            viewport_height: 20,
+            pr_context: crate::log::PrContext {
+                number: 1,
+                title: "Test PR".to_string(),
+                author: "test".to_string(),
+            },
+        });
+
+        let (log_state, _effects) =
+            log_panel_reducer(state, &Action::NavigateNext, &crate::theme::Theme::default());
+
+        // NavigateNext should delegate to ScrollLogPanelDown
+        // Since the panel is empty, scroll_offset might not change, but the delegation happened
+        // Just verify panel still exists and no panic
+        assert!(log_state.panel.is_some());
+    }
+
+    // Semantic Action Tests - Debug Console Reducer
+
+    #[test]
+    fn test_debug_console_scroll_to_top() {
+        let mut state = DebugConsoleState::default();
+        state.is_open = true;
+        state.scroll_offset = 10;
+
+        let (console_state, _effects) =
+            debug_console_reducer(state, &Action::ScrollToTop, &crate::theme::Theme::default());
+
+        assert_eq!(console_state.scroll_offset, 0);
+        assert!(!console_state.auto_scroll); // Should disable auto-scroll
+    }
+
+    #[test]
+    fn test_debug_console_scroll_to_bottom_enables_autoscroll() {
+        let mut state = DebugConsoleState::default();
+        state.is_open = true;
+        state.scroll_offset = 0;
+        state.auto_scroll = false;
+
+        let (console_state, _effects) =
+            debug_console_reducer(state, &Action::ScrollToBottom, &crate::theme::Theme::default());
+
+        assert!(console_state.auto_scroll); // Should enable auto-scroll
+    }
+
+    #[test]
+    fn test_debug_console_navigate_next_scrolls_down() {
+        let mut state = DebugConsoleState::default();
+        state.is_open = true;
+        state.scroll_offset = 0;
+
+        let (console_state, _effects) =
+            debug_console_reducer(state, &Action::NavigateNext, &crate::theme::Theme::default());
+
+        // Should have tried to scroll down (delegates to ScrollDebugConsoleDown)
+        // Offset might be clamped by view model, but auto_scroll should be disabled
+        assert!(!console_state.auto_scroll);
+    }
+
+    #[test]
+    fn test_shortcuts_scroll_changes_update_capabilities() {
+        let mut state = minimal_app_state();
+        state.ui.show_shortcuts = true;
+        state.ui.shortcuts_scroll = 0;
+        state.ui.shortcuts_max_scroll = 10;
+
+        // Initially has SCROLL_VERTICAL capability
+        let (state_after_scroll, _) = reduce(state, &Action::ScrollShortcutsDown);
+
+        // Should still have scroll capability
+        assert!(state_after_scroll
+            .ui
+            .active_panel_capabilities
+            .contains(PanelCapabilities::SCROLL_VERTICAL));
+    }
+
+    #[test]
+    fn test_panel_priority_command_palette_highest() {
+        let mut state = minimal_app_state();
+        // Open multiple panels
+        state.ui.show_shortcuts = true;
+        state.debug_console.is_open = true;
+        state.ui.command_palette = Some(CommandPaletteState {
+            input: String::new(),
+            filtered_commands: vec![],
+            selected_index: 0,
+            view_model: None,
+        });
+
+        // Update capabilities
+        let (new_state, _) = reduce(state, &Action::ShowCommandPalette);
+
+        // Command palette should have priority (no scroll capabilities)
+        assert!(new_state.ui.active_panel_capabilities.supports_vim_navigation());
+        assert!(!new_state.ui.active_panel_capabilities.supports_vim_vertical_scroll());
+    }
+}

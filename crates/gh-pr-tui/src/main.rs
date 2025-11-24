@@ -218,9 +218,7 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
         show_command_palette_shared.clone(),
     );
 
-    app.action_tx
-        .send(Action::Bootstrap)
-        .expect("Failed to send bootstrap action");
+    app.store.dispatch(Action::Bootstrap);
 
     loop {
         // Sync the shared popup states for event handler
@@ -413,10 +411,7 @@ async fn main() -> Result<()> {
 }
 
 impl App {
-    fn new(
-        action_tx: mpsc::UnboundedSender<Action>,
-        log_buffer: log_capture::LogBuffer,
-    ) -> App {
+    fn new(action_tx: mpsc::UnboundedSender<Action>, log_buffer: log_capture::LogBuffer) -> App {
         // Initialize Redux store with default state
         let theme = Theme::default();
 
@@ -467,18 +462,6 @@ impl App {
             .get(&self.store.state().repos.selected_repo)
             .cloned()
             .unwrap_or_default()
-    }
-
-    fn octocrab(&self) -> Result<Octocrab> {
-        // Return octocrab instance from Redux state (initialized during bootstrap)
-        self.store
-            .state()
-            .infra
-            .octocrab
-            .clone()
-            .ok_or_else(|| {
-                anyhow::anyhow!("Octocrab not initialized. This is a bug - octocrab should be initialized during bootstrap.")
-            })
     }
 
     fn repo(&self) -> Option<&Repo> {

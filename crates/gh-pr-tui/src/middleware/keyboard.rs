@@ -381,4 +381,234 @@ mod tests {
             Action::ScrollToBottom
         ));
     }
+
+    // End-to-End Integration Tests
+
+    #[tokio::test]
+    async fn test_e2e_pr_table_navigation() {
+        use crate::reducer::reduce;
+
+        let mut middleware = KeyboardMiddleware::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let dispatcher = Dispatcher::new(tx);
+
+        // Setup: State with PR table (default panel), 2 PRs
+        let mut state = AppState::default();
+        state.repos.prs = vec![
+            crate::pr::Pr {
+                number: 1,
+                title: "PR 1".to_string(),
+                body: String::new(),
+                author: "author".to_string(),
+                no_comments: 0,
+                merge_state: "clean".to_string(),
+                mergeable: crate::pr::MergeableStatus::Unknown,
+                needs_rebase: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+            crate::pr::Pr {
+                number: 2,
+                title: "PR 2".to_string(),
+                body: String::new(),
+                author: "author".to_string(),
+                no_comments: 0,
+                merge_state: "clean".to_string(),
+                mergeable: crate::pr::MergeableStatus::Unknown,
+                needs_rebase: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+        ];
+        state.repos.state.select(Some(0)); // Select first PR
+
+        // Simulate pressing 'j' key
+        let key_event = KeyEvent::from(KeyCode::Char('j'));
+        let _should_continue = middleware
+            .handle(&Action::KeyPressed(key_event), &state, &dispatcher)
+            .await;
+
+        // Middleware should dispatch NavigateNext
+        let action = rx.try_recv().unwrap();
+        assert!(matches!(action, Action::NavigateNext));
+
+        // Reducer should translate NavigateNext → NavigateToNextPr and move selection
+        let (new_state, _effects) = reduce(state, &action);
+        assert_eq!(new_state.repos.state.selected(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn test_e2e_shortcuts_panel_scroll_to_top() {
+        use crate::reducer::reduce;
+
+        let mut middleware = KeyboardMiddleware::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let dispatcher = Dispatcher::new(tx);
+
+        // Setup: State with shortcuts panel open, scrolled down
+        let mut state = AppState::default();
+        state.ui.show_shortcuts = true;
+        state.ui.shortcuts_scroll = 5;
+        state.ui.shortcuts_max_scroll = 10;
+
+        // Update capabilities to match shortcuts panel
+        let (state, _) = reduce(state, &Action::ToggleShortcuts);
+        let (mut state, _) = reduce(state, &Action::ToggleShortcuts); // Toggle twice to be on
+        state.ui.shortcuts_scroll = 5; // Manually set scroll position
+
+        // Simulate pressing 'g' twice for "gg" (go to top)
+        let g_key = KeyEvent::from(KeyCode::Char('g'));
+
+        // First 'g' - should be recorded but not dispatch
+        let should_continue = middleware
+            .handle(&Action::KeyPressed(g_key), &state, &dispatcher)
+            .await;
+        assert!(!should_continue); // Blocks waiting for second 'g'
+
+        // Second 'g' - should dispatch ScrollToTop
+        let should_continue = middleware
+            .handle(&Action::KeyPressed(g_key), &state, &dispatcher)
+            .await;
+        assert!(!should_continue);
+
+        // Middleware should dispatch ScrollToTop
+        let action = rx.try_recv().unwrap();
+        assert!(matches!(action, Action::ScrollToTop));
+
+        // Reducer should scroll to top
+        let (new_state, _effects) = reduce(state, &action);
+        assert_eq!(new_state.ui.shortcuts_scroll, 0);
+    }
+
+    #[tokio::test]
+    async fn test_e2e_capability_blocking() {
+        let mut middleware = KeyboardMiddleware::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let dispatcher = Dispatcher::new(tx);
+
+        // Setup: State with NO vim scroll capabilities (PR table doesn't scroll)
+        let state = AppState::default(); // PR table is default panel
+
+        // Simulate pressing 'G' (go to bottom) - should be ignored
+        let key_event = KeyEvent::from(KeyCode::Char('G'));
+        let should_continue = middleware
+            .handle(&Action::KeyPressed(key_event), &state, &dispatcher)
+            .await;
+
+        // Should pass through because PR table doesn't support vim vertical scroll
+        assert!(should_continue);
+
+        // Should NOT have dispatched any action
+        let result = rx.try_recv();
+        assert!(result.is_err()); // No action dispatched
+    }
+
+    #[tokio::test]
+    async fn test_e2e_context_switching() {
+        use crate::reducer::reduce;
+
+        let mut middleware = KeyboardMiddleware::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let dispatcher = Dispatcher::new(tx);
+
+        // Setup: Start with PR table
+        let mut state = AppState::default();
+        state.repos.prs = vec![
+            crate::pr::Pr {
+                number: 1,
+                title: "PR 1".to_string(),
+                body: String::new(),
+                author: "author".to_string(),
+                no_comments: 0,
+                merge_state: "clean".to_string(),
+                mergeable: crate::pr::MergeableStatus::Unknown,
+                needs_rebase: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+        ];
+        state.repos.state.select(Some(0));
+
+        // Press 'j' in PR table - should navigate PRs
+        let j_key = KeyEvent::from(KeyCode::Char('j'));
+        let _should_continue = middleware
+            .handle(&Action::KeyPressed(j_key), &state, &dispatcher)
+            .await;
+
+        let action = rx.try_recv().unwrap();
+        assert!(matches!(action, Action::NavigateNext));
+
+        // Now toggle shortcuts panel
+        let (state, _) = reduce(state, &Action::ToggleShortcuts);
+
+        // Press 'j' again - now should scroll shortcuts panel
+        let _should_continue = middleware
+            .handle(&Action::KeyPressed(j_key), &state, &dispatcher)
+            .await;
+
+        let action = rx.try_recv().unwrap();
+        assert!(matches!(action, Action::NavigateNext));
+
+        // Reducer should scroll shortcuts (not navigate PRs)
+        let (new_state, _effects) = reduce(state, &action);
+        assert_eq!(new_state.ui.shortcuts_scroll, 1); // Scrolled down in shortcuts
+    }
+
+    #[tokio::test]
+    async fn test_e2e_command_palette_priority() {
+        use crate::reducer::reduce;
+
+        let mut middleware = KeyboardMiddleware::new();
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let dispatcher = Dispatcher::new(tx);
+
+        // Setup: PR table with command palette open
+        let mut state = AppState::default();
+        let (state, _) = reduce(state, &Action::ShowCommandPalette);
+
+        // Add some commands to palette
+        let mut state = state;
+        if let Some(ref mut palette) = state.ui.command_palette {
+            palette.filtered_commands = vec![
+                (
+                    gh_pr_tui_command_palette::CommandItem {
+                        title: "Cmd 1".to_string(),
+                        description: "First".to_string(),
+                        category: "Test".to_string(),
+                        shortcut_hint: None,
+                        context: None,
+                        action: Action::Quit,
+                    },
+                    100,
+                ),
+                (
+                    gh_pr_tui_command_palette::CommandItem {
+                        title: "Cmd 2".to_string(),
+                        description: "Second".to_string(),
+                        category: "Test".to_string(),
+                        shortcut_hint: None,
+                        context: None,
+                        action: Action::Quit,
+                    },
+                    100,
+                ),
+            ];
+        }
+
+        // Press 'j' - should navigate command palette, NOT PR table
+        let j_key = KeyEvent::from(KeyCode::Char('j'));
+        let _should_continue = middleware
+            .handle(&Action::KeyPressed(j_key), &state, &dispatcher)
+            .await;
+
+        let action = rx.try_recv().unwrap();
+        assert!(matches!(action, Action::NavigateNext));
+
+        // Reducer should move command palette selection
+        let (new_state, _effects) = reduce(state, &action);
+        assert_eq!(
+            new_state.ui.command_palette.unwrap().selected_index,
+            1
+        ); // Moved to second command
+    }
 }
