@@ -21,22 +21,23 @@ use ::log::debug;
 
 use crate::actions::Action;
 use crate::config::Config;
-use crate::effect::execute_effect;
 use crate::pr::Pr;
 use crate::state::*;
 use crate::store::Store;
-use crate::task::{BackgroundTask, TaskResult, start_task_worker};
 use crate::theme::Theme;
 
 mod actions;
+mod capabilities;
 mod command_palette_integration;
 mod config;
-mod effect;
+mod panel_capabilities;
+// Effect module removed - all side effects now in middleware
 mod gh;
 mod infra;
 mod log;
 mod log_capture;
 mod merge_bot;
+mod middleware;
 mod pr;
 mod reducer;
 mod shortcuts;
@@ -52,10 +53,6 @@ pub struct App {
     pub store: Store,
     // Communication channels
     pub action_tx: mpsc::UnboundedSender<Action>,
-    pub task_tx: mpsc::UnboundedSender<BackgroundTask>,
-    // API response cache for development workflow (Arc<Mutex> for sharing across tasks)
-    pub cache: Arc<Mutex<ApiCache>>,
-    // Splash screen state
 }
 
 #[derive(Debug, Serialize, Deserialize, Eq, Clone, PartialEq)]
@@ -131,27 +128,18 @@ async fn update(app: &mut App, msg: Action) -> Result<Action> {
         msg
     };
 
-    // Pure Redux/Elm architecture: Dispatch action to reducers, get effects back
-    let effects = app.store.dispatch(msg);
+    // NEW: Middleware-based dispatch (Phase 1)
+    // Create dispatcher from action channel
+    let dispatcher = crate::middleware::Dispatcher::new(app.action_tx.clone());
 
-    // Execute effects returned by reducers and dispatch follow-up actions
-    for effect in effects {
-        let follow_up_actions = execute_effect(app, effect).await?;
+    // Dispatch through middleware chain, then reducer
+    // Middleware can handle async operations and dispatch follow-up actions
+    let _effects = app.store.dispatch_async(msg, &dispatcher).await;
 
-        // Dispatch all follow-up actions returned from the effect
-        for action in follow_up_actions {
-            // Recursively process each follow-up action
-            // This creates a chain: Action → Effects → Follow-up Actions → More Effects...
-            let nested_effects = app.store.dispatch(action);
-            for nested_effect in nested_effects {
-                let nested_actions = execute_effect(app, nested_effect).await?;
-                // Continue dispatching nested actions
-                for nested_action in nested_actions {
-                    let _ = app.action_tx.send(nested_action);
-                }
-            }
-        }
-    }
+    // MIGRATION COMPLETE: Effect system removed!
+    // All side effects are now handled by TaskMiddleware
+    // The effects vector above is always empty - kept for backward compatibility
+    // Future: Change dispatch_async() to return () instead of Vec<Effect>
 
     Ok(Action::None)
 }
@@ -212,54 +200,12 @@ fn start_event_handler(
     (handle, debug_console_open_shared)
 }
 
-/// Convert TaskResult to Action - the single place where task results become actions
-fn result_to_action(result: TaskResult) -> Action {
-    match result {
-        TaskResult::RepoLoadingStarted(idx) => Action::RepoLoadingStarted(idx),
-        TaskResult::RepoDataLoaded(idx, data) => Action::RepoDataLoaded(idx, data),
-        TaskResult::MergeStatusUpdated(idx, pr_num, status) => {
-            Action::MergeStatusUpdated(idx, pr_num, status)
-        }
-        TaskResult::RebaseStatusUpdated(idx, pr_num, needs_rebase) => {
-            Action::RebaseStatusUpdated(idx, pr_num, needs_rebase)
-        }
-        TaskResult::CommentCountUpdated(idx, pr_num, count) => {
-            Action::CommentCountUpdated(idx, pr_num, count)
-        }
-        TaskResult::RebaseComplete(res) => Action::RebaseComplete(res),
-        TaskResult::MergeComplete(res) => Action::MergeComplete(res),
-        TaskResult::RerunJobsComplete(res) => Action::RerunJobsComplete(res),
-        TaskResult::ApprovalComplete(res) => Action::ApprovalComplete(res),
-        TaskResult::ClosePrComplete(res) => Action::ClosePrComplete(res),
-        TaskResult::BuildLogsLoaded(sections, ctx) => Action::BuildLogsLoaded(sections, ctx),
-        TaskResult::IDEOpenComplete(res) => Action::IDEOpenComplete(res),
-        TaskResult::PRMergedConfirmed(idx, pr_num, merged) => {
-            Action::PRMergedConfirmed(idx, pr_num, merged)
-        }
-        TaskResult::TaskStatusUpdate(status) => Action::SetTaskStatus(status),
-        TaskResult::AutoMergeStatusCheck(idx, pr_num) => Action::AutoMergeStatusCheck(idx, pr_num),
-        TaskResult::RemoveFromAutoMergeQueue(idx, pr_num) => {
-            Action::RemoveFromAutoMergeQueue(idx, pr_num)
-        }
-        TaskResult::OperationMonitorCheck(idx, pr_num) => {
-            Action::OperationMonitorCheck(idx, pr_num)
-        }
-        TaskResult::RemoveFromOperationMonitor(idx, pr_num) => {
-            Action::RemoveFromOperationMonitor(idx, pr_num)
-        }
-        TaskResult::RepoNeedsReload(idx) => Action::ReloadRepo(idx),
-        TaskResult::DispatchAction(action) => action,
-    }
-}
-
 async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
     let mut t = Terminal::new(CrosstermBackend::new(std::io::stderr()))?;
 
     let (action_tx, mut action_rx) = mpsc::unbounded_channel();
-    let (task_tx, task_rx) = mpsc::unbounded_channel();
-    let (result_tx, mut result_rx) = mpsc::unbounded_channel(); // New result channel
 
-    let mut app = App::new(action_tx.clone(), task_tx, log_buffer);
+    let mut app = App::new(action_tx.clone(), log_buffer);
 
     // Create shared state for close PR popup (synced in main loop)
     let show_close_pr_shared = Arc::new(Mutex::new(false));
@@ -271,7 +217,6 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
         show_close_pr_shared.clone(),
         show_command_palette_shared.clone(),
     );
-    let worker_task = start_task_worker(task_rx, result_tx);
 
     app.action_tx
         .send(Action::Bootstrap)
@@ -301,37 +246,26 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
         // Handle force redraw flag - clear terminal if requested
         if app.store.state().ui.force_redraw {
             t.clear()?;
-            // Reset the flag after clearing
-            let state = app.store.state_mut();
-            state.ui.force_redraw = false;
+            // Reset the flag after clearing (Redux action)
+            let _ = app.action_tx.send(Action::ResetForceRedraw);
         }
 
         t.draw(|f| {
             ui(f, &mut app);
         })?;
 
-        // Use tokio::select! to handle both actions and task results
-        // Prioritize results over actions to show incremental progress
+        // Wait for actions from the action channel
         let maybe_action = tokio::time::timeout(std::time::Duration::from_millis(100), async {
-            tokio::select! {
-                biased;  // Check in order: results first, then actions
-                Some(result) = result_rx.recv() => {
-                    // Convert task result to action (prioritized for smooth progress updates)
-                    Some(result_to_action(result))
-                }
-                Some(action) = action_rx.recv() => Some(action),
-                else => None
-            }
+            action_rx.recv().await
         })
         .await;
 
         match maybe_action {
             Ok(Some(action)) => {
                 if let Err(err) = update(&mut app, action).await {
-                    app.store.state_mut().repos.loading_state =
-                        LoadingState::Error(err.to_string());
-                    app.store.state_mut().ui.should_quit = true;
-                    debug!("Error updating app: {}", err);
+                    debug!("Fatal error updating app: {}", err);
+                    // Dispatch fatal error action (Redux)
+                    let _ = app.action_tx.send(Action::FatalError(err.to_string()));
                 }
             }
             Ok(None) => break, // Channel closed
@@ -358,7 +292,6 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
     }
 
     event_task.abort();
-    worker_task.abort();
 
     Ok(())
 }
@@ -366,7 +299,7 @@ async fn run_with_log_buffer(log_buffer: log_capture::LogBuffer) -> Result<()> {
 fn ui(f: &mut Frame, app: &mut App) {
     // Show bootstrap/splash screen until UI is ready (first repo loaded)
     let ui_ready = matches!(
-        app.store.state().infrastructure.bootstrap_state,
+        app.store.state().infra.bootstrap_state,
         BootstrapState::UIReady | BootstrapState::LoadingRemainingRepos | BootstrapState::Completed
     );
 
@@ -430,7 +363,10 @@ fn ui(f: &mut Frame, app: &mut App) {
     // Render shortcuts panel on top of everything if visible
     if app.store.state().ui.show_shortcuts {
         let max_scroll = crate::views::help::render_shortcuts_panel(f, chunks[1], app);
-        app.store.state_mut().ui.shortcuts_max_scroll = max_scroll;
+        // Update max scroll via Redux action
+        let _ = app
+            .action_tx
+            .send(Action::UpdateShortcutsMaxScroll(max_scroll));
     }
 
     // Render add repo popup on top of everything if visible
@@ -460,10 +396,7 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     // Render debug console (Quake-style drop-down) if visible
     if app.store.state().debug_console.is_open {
-        let viewport_height = crate::views::debug_console::render_debug_console(f, f.area(), app);
-        // Update viewport height for page down scrolling
-        app.store
-            .dispatch(Action::UpdateDebugConsoleViewport(viewport_height));
+        crate::views::debug_console::render_debug_console(f, f.area(), app);
     }
 }
 
@@ -480,15 +413,11 @@ async fn main() -> Result<()> {
 }
 
 impl App {
-    fn new(
-        action_tx: mpsc::UnboundedSender<Action>,
-        task_tx: mpsc::UnboundedSender<BackgroundTask>,
-        log_buffer: log_capture::LogBuffer,
-    ) -> App {
+    fn new(action_tx: mpsc::UnboundedSender<Action>, log_buffer: log_capture::LogBuffer) -> App {
         // Initialize Redux store with default state
         let theme = Theme::default();
 
-        let initial_state = AppState {
+        let mut initial_state = AppState {
             ui: UiState::default(),
             repos: ReposState {
                 colors: TableColors::from_theme(&theme),
@@ -502,19 +431,41 @@ impl App {
                 ..DebugConsoleState::default()
             },
             config: Config::load(),
-            theme,
-            infrastructure: InfrastructureState::default(),
+            theme: theme.clone(),
+            infra: InfrastructureState::default(),
         };
+
+        // Initialize splash screen view model for first render
+        const BAR_WIDTH: usize = 36;
+        initial_state.infra.splash_screen_view_model = Some(
+            crate::view_models::splash_screen::SplashScreenViewModel::from_state(
+                &initial_state.infra.bootstrap_state,
+                &initial_state.repos.recent_repos,
+                initial_state.repos.selected_repo,
+                initial_state.ui.spinner_frame,
+                BAR_WIDTH,
+                &theme,
+            ),
+        );
 
         let cache_file = crate::infra::files::get_cache_file_path()
             .unwrap_or_else(|_| std::env::temp_dir().join("gh-api-cache.json"));
 
-        App {
-            store: Store::new(initial_state),
-            action_tx,
-            task_tx,
-            cache: Arc::new(Mutex::new(ApiCache::new(cache_file).unwrap_or_default())),
-        }
+        // Create cache and store
+        let cache = Arc::new(Mutex::new(ApiCache::new(cache_file).unwrap_or_default()));
+        let mut store = Store::new(initial_state);
+
+        // Add middleware in order (first added = first called)
+        // 1. Logging middleware - logs all actions for debugging
+        store.add_middleware(crate::middleware::LoggingMiddleware::new());
+
+        // 2. Keyboard middleware - translates key events to semantic actions based on capabilities
+        store.add_middleware(crate::middleware::KeyboardMiddleware::new());
+
+        // 3. Task middleware - handles async operations (replaces Effect system)
+        store.add_middleware(crate::middleware::TaskMiddleware::new(cache));
+
+        App { store, action_tx }
     }
 
     /// Get the current repo data (read-only)
@@ -528,35 +479,25 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Get the current repo data (mutable)
-    fn get_current_repo_data_mut(&mut self) -> &mut RepoData {
-        let selected_repo = self.store.state().repos.selected_repo;
-        self.store
-            .state_mut()
-            .repos
-            .repo_data
-            .entry(selected_repo)
-            .or_default()
-    }
-
-    fn octocrab(&self) -> Result<Octocrab> {
-        // Return octocrab instance from Redux state (initialized during bootstrap)
-        self.store
-            .state()
-            .infrastructure
-            .octocrab
-            .clone()
-            .ok_or_else(|| {
-                anyhow::anyhow!("Octocrab not initialized. This is a bug - octocrab should be initialized during bootstrap.")
-            })
-    }
-
     fn repo(&self) -> Option<&Repo> {
         self.store
             .state()
             .repos
             .recent_repos
             .get(self.store.state().repos.selected_repo)
+    }
+
+    /// Get mutable table state for ratatui rendering
+    ///
+    /// IMPORTANT: This is ONLY for ratatui's StatefulWidget API requirement.
+    /// Do NOT use this for business logic - use actions/reducers instead.
+    ///
+    /// Ratatui's render_stateful_widget requires &mut TableState to update
+    /// internal scroll offsets during rendering. This is a necessary evil
+    /// when interfacing with ratatui's API.
+    fn table_state_for_rendering(&mut self) -> &mut ratatui::widgets::TableState {
+        let selected_repo = self.store.state().repos.selected_repo;
+        self.store.table_state_for_rendering(selected_repo)
     }
 }
 

@@ -11,7 +11,7 @@ use crate::App;
 /// Pure presentation - uses pre-computed view model
 pub fn render_splash_screen(f: &mut Frame, app: &App) {
     // Get view model - if not ready yet, return early
-    let Some(ref vm) = app.store.state().infrastructure.splash_screen_view_model else {
+    let Some(ref vm) = app.store.state().infra.splash_screen_view_model else {
         return;
     };
 

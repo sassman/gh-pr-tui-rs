@@ -3,9 +3,8 @@ use ratatui::{prelude::*, widgets::*};
 use crate::App;
 
 /// Render the debug console as a Quake-style drop-down panel
-/// Pure presentation - uses pre-computed view model
-/// Returns the visible viewport height for page down scrolling
-pub fn render_debug_console(f: &mut Frame, area: Rect, app: &App) -> usize {
+/// Pure presentation - uses pre-computed view model with viewport scrolling
+pub fn render_debug_console(f: &mut Frame, area: Rect, app: &App) {
     use ratatui::widgets::{Clear, List, ListItem};
 
     let console_state = &app.store.state().debug_console;
@@ -13,7 +12,7 @@ pub fn render_debug_console(f: &mut Frame, area: Rect, app: &App) -> usize {
 
     // Get view model - if not ready yet, return early
     let Some(ref vm) = console_state.view_model else {
-        return 0;
+        return;
     };
 
     // Calculate console height based on percentage
@@ -28,7 +27,7 @@ pub fn render_debug_console(f: &mut Frame, area: Rect, app: &App) -> usize {
     // Clear the area
     f.render_widget(Clear, console_area);
 
-    // Build list items - simple iteration over pre-computed view models!
+    // Build list items from visible logs (view model already applied scroll offset)
     let log_items: Vec<ListItem> = vm
         .visible_logs
         .iter()
@@ -47,9 +46,6 @@ pub fn render_debug_console(f: &mut Frame, area: Rect, app: &App) -> usize {
             .style(Style::default().bg(theme.bg_secondary)),
     );
 
+    // Render without state - viewport scrolling handled by view model
     f.render_widget(logs_list, console_area);
-
-    // Return the total console height (including borders) for viewport calculations
-    // The view model will subtract borders internally
-    console_area.height as usize
 }

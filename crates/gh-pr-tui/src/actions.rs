@@ -1,9 +1,13 @@
 use anyhow::Result;
+use ratatui::crossterm::event::KeyEvent;
 
 /// Action enum - represents all possible actions in the application
 /// Actions are dispatched to the reducer to update state
 #[derive(Debug, Clone)]
 pub enum Action {
+    // Raw keyboard input (processed by KeyboardMiddleware)
+    KeyPressed(KeyEvent),
+
     // User-initiated actions
     Bootstrap,
     Rebase,
@@ -52,6 +56,26 @@ pub enum Action {
     ToggleShortcuts,
     ScrollShortcutsUp,
     ScrollShortcutsDown,
+
+    // Semantic navigation actions (capability-based, panel-agnostic)
+    // These are dispatched by KeyboardMiddleware based on capabilities
+    // Each panel's reducer interprets them in its own context
+    NavigateNext,       // vim: j, arrow down - next item/line in active panel
+    NavigatePrevious,   // vim: k, arrow up - previous item/line in active panel
+    NavigateLeft,       // vim: h, arrow left - left/collapse in active panel
+    NavigateRight,      // vim: l, arrow right - right/expand in active panel
+
+    // Semantic scroll actions (vim-style, capability-based)
+    ScrollToTop,        // vim: gg - scroll to top of current panel
+    ScrollToBottom,     // vim: G - scroll to bottom of current panel
+    ScrollPageUp,       // Page up in current panel
+    ScrollPageDown,     // Page down in current panel
+    ScrollHalfPageUp,   // Half page up (vim: Ctrl+u)
+    ScrollHalfPageDown, // Half page down (vim: Ctrl+d)
+    ScrollLineUp,       // Scroll up one line
+    ScrollLineDown,     // Scroll down one line
+    ScrollLeft,         // Scroll left (horizontal)
+    ScrollRight,        // Scroll right (horizontal)
 
     // Add repository popup
     ShowAddRepoPopup,
@@ -131,7 +155,10 @@ pub enum Action {
     InvalidateRepoCache(usize), // Invalidate cache for specific repo index
 
     // UI management
-    ForceRedraw, // Force a full terminal redraw (fixes broken UI from error logs)
+    ForceRedraw,        // Force a full terminal redraw (fixes broken UI from error logs)
+    ResetForceRedraw,   // Reset force_redraw flag after render (internal)
+    FatalError(String), // Fatal error - set error state and quit
+    UpdateShortcutsMaxScroll(usize), // Update shortcuts panel max scroll
 
     // Viewport height updates (for page down scrolling)
     UpdateLogPanelViewport(usize),
