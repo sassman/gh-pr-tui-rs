@@ -9,7 +9,10 @@ pub enum Action {
     GlobalKeyPressed(KeyEvent),
     GlobalClose,
     GlobalQuit,
-    GlobalActivateView(Box<dyn View>),
+
+    // View stack management
+    PushView(Box<dyn View>),    // Push a new view onto the stack (for modals/popups)
+    ReplaceView(Box<dyn View>), // Replace entire view stack with new view (for navigation)
 
     // Local actions (dispatched to active view for handling)
     LocalKeyPressed(char), // Key pressed in active view context
@@ -49,7 +52,8 @@ impl Clone for Action {
             Self::GlobalKeyPressed(key) => Self::GlobalKeyPressed(*key),
             Self::GlobalClose => Self::GlobalClose,
             Self::GlobalQuit => Self::GlobalQuit,
-            Self::GlobalActivateView(view) => Self::GlobalActivateView(view.clone()),
+            Self::PushView(view) => Self::PushView(view.clone()),
+            Self::ReplaceView(view) => Self::ReplaceView(view.clone()),
             Self::LocalKeyPressed(c) => Self::LocalKeyPressed(*c),
             Self::NavigateNext => Self::NavigateNext,
             Self::NavigatePrevious => Self::NavigatePrevious,
@@ -77,7 +81,8 @@ impl std::fmt::Debug for Action {
             Self::GlobalKeyPressed(key) => f.debug_tuple("GlobalKeyPressed").field(key).finish(),
             Self::GlobalClose => write!(f, "GlobalClose"),
             Self::GlobalQuit => write!(f, "GlobalQuit"),
-            Self::GlobalActivateView(view) => f.debug_tuple("GlobalActivateView").field(view).finish(),
+            Self::PushView(view) => f.debug_tuple("PushView").field(view).finish(),
+            Self::ReplaceView(view) => f.debug_tuple("ReplaceView").field(view).finish(),
             Self::LocalKeyPressed(c) => f.debug_tuple("LocalKeyPressed").field(c).finish(),
             Self::NavigateNext => write!(f, "NavigateNext"),
             Self::NavigatePrevious => write!(f, "NavigatePrevious"),

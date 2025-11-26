@@ -41,12 +41,6 @@ pub trait View: std::fmt::Debug + Send {
     /// Get the capabilities of this view (for keyboard handling)
     fn capabilities(&self, state: &AppState) -> PanelCapabilities;
 
-    /// Check if this view is a floating view (renders on top of other views)
-    /// Default implementation returns false (non-floating)
-    fn is_floating(&self) -> bool {
-        false
-    }
-
     /// Clone this view into a Box
     /// This is needed because Clone requires Sized, so we provide a manual clone method
     fn clone_box(&self) -> Box<dyn View>;
@@ -61,30 +55,13 @@ impl Clone for Box<dyn View> {
 
 /// Render the entire application UI
 ///
-/// Optimized rendering strategy:
-/// - If the top view is non-floating, only render that view (it covers everything)
-/// - If the top view is floating, render the base view below it, then the floating view on top
-///   (floating views use `Clear` widget to preserve unrendered areas)
+/// Simple rendering strategy:
+/// - Always render only the top-most view
+/// - Views that want to show content beneath them (like popups/modals) should use
+///   the `Clear` widget for only their partial area, allowing the previous frame
+///   buffer to show through
 pub fn render(state: &AppState, area: Rect, f: &mut Frame) {
-    let stack_len = state.view_stack.len();
-
-    if stack_len == 0 {
-        return; // Should never happen, but guard against it
-    }
-
-    // Get the top-most view
-    let top_view = &state.view_stack[stack_len - 1];
-
-    if top_view.is_floating() {
-        // Floating view on top - render the view below it first (if any)
-        if stack_len > 1 {
-            let base_view = &state.view_stack[stack_len - 2];
-            base_view.render(state, area, f);
-        }
-        // Then render the floating view on top
-        top_view.render(state, area, f);
-    } else {
-        // Non-floating view - only render the top view (it covers everything)
+    if let Some(top_view) = state.view_stack.last() {
         top_view.render(state, area, f);
     }
 }

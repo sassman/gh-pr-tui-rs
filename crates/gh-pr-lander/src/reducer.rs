@@ -13,37 +13,27 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
             state.running = false;
             return state;
         }
-        Action::GlobalActivateView(new_view) => {
-            // View stack logic:
-            // - If the new view is floating:
-            //   - Check if same view is already on top of stack (prevent duplicates)
-            //   - If not duplicate, push it onto the stack
-            // - If the new view is not floating, clear the stack and replace with the new view
-            if new_view.is_floating() {
-                // Check if this floating view is already the top-most view
-                let is_duplicate = state
-                    .view_stack
-                    .last()
-                    .map(|top| top.view_id() == new_view.view_id())
-                    .unwrap_or(false);
+        Action::PushView(new_view) => {
+            // Push a new view onto the stack (for modals/popups)
+            // Check if this view is already the top-most view (prevent duplicates)
+            let is_duplicate = state
+                .view_stack
+                .last()
+                .map(|top| top.view_id() == new_view.view_id())
+                .unwrap_or(false);
 
-                if is_duplicate {
-                    log::debug!(
-                        "Ignoring duplicate floating view: {:?}",
-                        new_view.view_id()
-                    );
-                } else {
-                    log::debug!("Pushing floating view onto stack: {:?}", new_view.view_id());
-                    state.view_stack.push(new_view.clone());
-                }
+            if is_duplicate {
+                log::debug!("Ignoring duplicate view on stack: {:?}", new_view.view_id());
             } else {
-                log::debug!(
-                    "Replacing view stack with non-floating view: {:?}",
-                    new_view.view_id()
-                );
-                state.view_stack.clear();
+                log::debug!("Pushing view onto stack: {:?}", new_view.view_id());
                 state.view_stack.push(new_view.clone());
             }
+        }
+        Action::ReplaceView(new_view) => {
+            // Replace entire view stack with new view (for navigation)
+            log::debug!("Replacing view stack with: {:?}", new_view.view_id());
+            state.view_stack.clear();
+            state.view_stack.push(new_view.clone());
         }
         Action::GlobalClose => {
             // Close the top-most view

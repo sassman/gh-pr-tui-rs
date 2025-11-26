@@ -7,10 +7,10 @@ use crate::views::ViewId;
 pub fn reduce(mut state: DebugConsoleState, action: &Action) -> DebugConsoleState {
     let is_active = state.visible;
     match action {
-        Action::GlobalActivateView(view) if view.view_id() == ViewId::DebugConsole => {
+        Action::PushView(view) if view.view_id() == ViewId::DebugConsole => {
             state.visible = true;
         }
-        Action::GlobalActivateView(_) => {
+        Action::ReplaceView(_) | Action::GlobalClose => {
             state.visible = false;
             // Reset scroll when leaving
             state.scroll_offset = 0;

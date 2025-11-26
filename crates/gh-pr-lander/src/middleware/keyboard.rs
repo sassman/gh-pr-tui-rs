@@ -157,11 +157,9 @@ impl KeyboardMiddleware {
                 // Backtick toggles debug console
                 '`' => {
                     if state.active_view().view_id() != ViewId::DebugConsole {
-                        // Push debug console as floating view
+                        // Push debug console onto stack
                         // Note: Reducer handles duplicate prevention
-                        dispatcher.dispatch(Action::GlobalActivateView(Box::new(
-                            DebugConsoleView::new(),
-                        )));
+                        dispatcher.dispatch(Action::PushView(Box::new(DebugConsoleView::new())));
                     } else {
                         // Close debug console (pop from stack)
                         dispatcher.dispatch(Action::GlobalClose);

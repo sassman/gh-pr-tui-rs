@@ -35,11 +35,6 @@ impl View for DebugConsoleView {
         state.debug_console.capabilities()
     }
 
-    fn is_floating(&self) -> bool {
-        // Debug console is a floating view that renders on top of other views
-        true
-    }
-
     fn clone_box(&self) -> Box<dyn View> {
         Box::new(self.clone())
     }
