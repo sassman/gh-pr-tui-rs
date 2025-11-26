@@ -233,14 +233,15 @@ impl KeyboardMiddleware {
             }
         }
 
-        // Handle arrow keys based on capabilities
+        // Handle arrow keys
+        // Arrow keys work for CommandPalette (to allow text input) and vim-enabled views
         match key.code {
-            KeyCode::Down if capabilities.supports_vim_navigation() => {
+            KeyCode::Down if active_view_id == ViewId::CommandPalette || capabilities.supports_vim_navigation() => {
                 dispatcher.dispatch(Action::NavigateNext);
                 return false;
             }
 
-            KeyCode::Up if capabilities.supports_vim_navigation() => {
+            KeyCode::Up if active_view_id == ViewId::CommandPalette || capabilities.supports_vim_navigation() => {
                 dispatcher.dispatch(Action::NavigatePrevious);
                 return false;
             }

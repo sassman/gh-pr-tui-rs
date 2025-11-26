@@ -30,8 +30,9 @@ impl View for CommandPaletteView {
     }
 
     fn capabilities(&self, _state: &AppState) -> PanelCapabilities {
-        // Command palette supports vim navigation
-        PanelCapabilities::VIM_NAVIGATION_BINDINGS
+        // Command palette only supports arrow key navigation (not vim keys)
+        // This allows j/k/h/l to be typed into the search field
+        PanelCapabilities::empty()
     }
 
     fn clone_box(&self) -> Box<dyn View> {
@@ -174,7 +175,7 @@ fn render(state: &AppState, area: Rect, f: &mut Frame) {
         };
 
         let hints = Line::from(vec![
-            Span::styled("j/k", theme.key_hint()),
+            Span::styled("↑/↓", theme.key_hint()),
             Span::styled(" navigate  ", theme.key_description()),
             Span::styled("Enter", theme.key_hint()),
             Span::styled(" execute  ", theme.key_description()),
