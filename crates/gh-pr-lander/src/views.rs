@@ -2,10 +2,6 @@ use crate::capabilities::PanelCapabilities;
 use crate::state::AppState;
 use ratatui::{layout::Rect, Frame};
 
-// Legacy view modules (for existing rendering functions)
-pub mod debug_console_view;
-pub mod main_view;
-
 // New view modules (concrete view types)
 pub mod debug_console;
 pub mod main;
@@ -45,6 +41,12 @@ pub trait View: std::fmt::Debug + Send {
     /// Get the capabilities of this view (for keyboard handling)
     fn capabilities(&self, state: &AppState) -> PanelCapabilities;
 
+    /// Check if this view is a floating view (renders on top of other views)
+    /// Default implementation returns false (non-floating)
+    fn is_floating(&self) -> bool {
+        false
+    }
+
     /// Clone this view into a Box
     /// This is needed because Clone requires Sized, so we provide a manual clone method
     fn clone_box(&self) -> Box<dyn View>;
@@ -59,7 +61,11 @@ impl Clone for Box<dyn View> {
 
 /// Render the entire application UI
 ///
-/// This is now just a simple delegation to the active view's render method.
+/// Renders all views in the stack bottom-up, so floating views appear on top.
 pub fn render(state: &AppState, area: Rect, f: &mut Frame) {
-    state.active_view.render(state, area, f);
+    // Render each view in the stack, bottom to top
+    // This allows floating views to render on top of base views
+    for view in &state.view_stack {
+        view.render(state, area, f);
+    }
 }

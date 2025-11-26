@@ -213,6 +213,11 @@ impl Theme {
         Style::default().fg(self.text_primary)
     }
 
+    /// Style for secondary colored text
+    pub fn text_secondary(&self) -> ratatui::style::Style {
+        ratatui::style::Style::default().fg(self.text_secondary)
+    }
+
     /// Style for log line numbers/timestamps
     pub fn log_metadata(&self) -> Style {
         Style::default().fg(self.text_muted).bg(self.bg_panel)

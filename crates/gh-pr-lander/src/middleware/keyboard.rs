@@ -6,11 +6,11 @@
 //! - Multi-key sequences (e.g., "gg" for go-to-top)
 //! - Vim-style navigation patterns
 
+use crate::actions::Action;
 use crate::dispatcher::Dispatcher;
 use crate::middleware::Middleware;
 use crate::state::AppState;
-use crate::actions::Action;
-use crate::views::{DebugConsoleView, MainView, ViewId};
+use crate::views::{DebugConsoleView, ViewId};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::{Duration, Instant};
 
@@ -156,10 +156,14 @@ impl KeyboardMiddleware {
 
                 // Backtick toggles debug console
                 '`' => {
-                    if state.active_view.view_id() != ViewId::DebugConsole {
-                        dispatcher.dispatch(Action::GlobalActivateView(Box::new(DebugConsoleView::new())));
+                    if state.active_view().view_id() != ViewId::DebugConsole {
+                        // Push debug console as floating view
+                        dispatcher.dispatch(Action::GlobalActivateView(Box::new(
+                            DebugConsoleView::new(),
+                        )));
                     } else {
-                        dispatcher.dispatch(Action::GlobalActivateView(Box::new(MainView::new())));
+                        // Close debug console (pop from stack)
+                        dispatcher.dispatch(Action::GlobalClose);
                     }
                     return false;
                 }
@@ -270,8 +274,8 @@ impl Middleware for KeyboardMiddleware {
     fn handle(&mut self, action: &Action, state: &AppState, dispatcher: &Dispatcher) -> bool {
         // Only intercept GlobalKeyPressed actions
         if let Action::GlobalKeyPressed(key) = action {
-            // Get capabilities from the active view via the View trait
-            let capabilities = state.active_view.capabilities(state);
+            // Get capabilities from the active (top-most) view via the View trait
+            let capabilities = state.active_view().capabilities(state);
             log::debug!(
                 "KeyboardMiddleware: key={:?}, capabilities={:?}",
                 key,
