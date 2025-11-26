@@ -35,6 +35,18 @@ impl Default for SplashState {
     }
 }
 
+/// Main view state
+#[derive(Debug, Clone)]
+pub struct MainViewState {
+    pub selected_tab: usize, // Currently selected tab index
+}
+
+impl Default for MainViewState {
+    fn default() -> Self {
+        Self { selected_tab: 0 }
+    }
+}
+
 /// Application state
 pub struct AppState {
     pub running: bool,
@@ -42,6 +54,7 @@ pub struct AppState {
     /// Views are rendered bottom-up, so the last view in the stack renders on top
     pub view_stack: Vec<Box<dyn View>>,
     pub splash: SplashState,
+    pub main_view: MainViewState,
     pub debug_console: DebugConsoleState,
     pub theme: crate::theme::Theme,
 }
@@ -49,7 +62,9 @@ pub struct AppState {
 impl AppState {
     /// Get the top-most (active) view from the stack
     pub fn active_view(&self) -> &Box<dyn View> {
-        self.view_stack.last().expect("View stack should never be empty")
+        self.view_stack
+            .last()
+            .expect("View stack should never be empty")
     }
 }
 
@@ -59,6 +74,7 @@ impl std::fmt::Debug for AppState {
             .field("running", &self.running)
             .field("view_stack", &format!("{} views", self.view_stack.len()))
             .field("splash", &self.splash)
+            .field("main_view", &self.main_view)
             .field("debug_console", &self.debug_console)
             .field("theme", &"<theme>")
             .finish()
@@ -71,6 +87,7 @@ impl Clone for AppState {
             running: self.running,
             view_stack: self.view_stack.clone(),
             splash: self.splash.clone(),
+            main_view: self.main_view.clone(),
             debug_console: self.debug_console.clone(),
             theme: self.theme.clone(),
         }
@@ -83,6 +100,7 @@ impl Default for AppState {
             running: true,
             view_stack: vec![Box::new(SplashView::new())],
             splash: SplashState::default(),
+            main_view: MainViewState::default(),
             debug_console: DebugConsoleState::default(),
             theme: crate::theme::Theme::default(),
         }

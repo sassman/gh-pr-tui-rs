@@ -40,12 +40,7 @@ impl View for SplashView {
 }
 
 /// Render the splash screen with snake loading animation
-fn render_splash(
-    state: &crate::state::SplashState,
-    theme: &Theme,
-    area: Rect,
-    f: &mut Frame,
-) {
+fn render_splash(state: &crate::state::SplashState, theme: &Theme, area: Rect, f: &mut Frame) {
     // Full screen background
     let background_block = Block::default().style(theme.panel_background());
     f.render_widget(background_block, area);

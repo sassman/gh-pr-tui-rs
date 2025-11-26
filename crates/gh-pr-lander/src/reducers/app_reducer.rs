@@ -56,6 +56,22 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
             state.view_stack.clear();
             state.view_stack.push(Box::new(MainView::new()));
         }
+        Action::TabNext => {
+            // Move to next tab (with wrapping)
+            let num_tabs = 2; // TODO: Make this dynamic
+            state.main_view.selected_tab = (state.main_view.selected_tab + 1) % num_tabs;
+            log::debug!("Switched to tab {}", state.main_view.selected_tab);
+        }
+        Action::TabPrevious => {
+            // Move to previous tab (with wrapping)
+            let num_tabs = 2; // TODO: Make this dynamic
+            state.main_view.selected_tab = if state.main_view.selected_tab == 0 {
+                num_tabs - 1
+            } else {
+                state.main_view.selected_tab - 1
+            };
+            log::debug!("Switched to tab {}", state.main_view.selected_tab);
+        }
         _ => {}
     }
 

@@ -26,6 +26,10 @@ pub enum Action {
     NavigateLeft,     // h, left arrow
     NavigateRight,    // l, right arrow
 
+    /// ## Tab navigation actions
+    TabNext, // Switch to next tab
+    TabPrevious, // Switch to previous tab
+
     /// ## Scroll actions
     ScrollToTop, // gg
     ScrollToBottom,     // G
@@ -62,6 +66,8 @@ impl Clone for Action {
             Self::NavigatePrevious => Self::NavigatePrevious,
             Self::NavigateLeft => Self::NavigateLeft,
             Self::NavigateRight => Self::NavigateRight,
+            Self::TabNext => Self::TabNext,
+            Self::TabPrevious => Self::TabPrevious,
             Self::ScrollToTop => Self::ScrollToTop,
             Self::ScrollToBottom => Self::ScrollToBottom,
             Self::ScrollPageDown => Self::ScrollPageDown,
@@ -91,6 +97,8 @@ impl std::fmt::Debug for Action {
             Self::NavigatePrevious => write!(f, "NavigatePrevious"),
             Self::NavigateLeft => write!(f, "NavigateLeft"),
             Self::NavigateRight => write!(f, "NavigateRight"),
+            Self::TabNext => write!(f, "TabNext"),
+            Self::TabPrevious => write!(f, "TabPrevious"),
             Self::ScrollToTop => write!(f, "ScrollToTop"),
             Self::ScrollToBottom => write!(f, "ScrollToBottom"),
             Self::ScrollPageDown => write!(f, "ScrollPageDown"),

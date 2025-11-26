@@ -10,7 +10,7 @@ use crate::actions::Action;
 use crate::dispatcher::Dispatcher;
 use crate::middleware::Middleware;
 use crate::state::AppState;
-use crate::views::DebugConsoleView;
+use crate::views::{DebugConsoleView, ViewId};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::{Duration, Instant};
 
@@ -81,10 +81,13 @@ impl KeyboardMiddleware {
         &mut self,
         key: KeyEvent,
         capabilities: crate::capabilities::PanelCapabilities,
-        _state: &AppState,
+        state: &AppState,
         dispatcher: &Dispatcher,
     ) -> bool {
         use crate::capabilities::PanelCapabilities;
+
+        // Get the active view ID to determine context
+        let active_view_id = state.active_view().view_id();
 
         // Handle character keys (vim-style)
         if let KeyCode::Char(c) = key.code {
@@ -126,13 +129,22 @@ impl KeyboardMiddleware {
                 }
 
                 // Vim navigation: h (left) / l (right)
+                // In MainView, h/l switch tabs
                 'h' if capabilities.supports_vim_navigation() => {
-                    dispatcher.dispatch(Action::NavigateLeft);
+                    if active_view_id == ViewId::Main {
+                        dispatcher.dispatch(Action::TabPrevious);
+                    } else {
+                        dispatcher.dispatch(Action::NavigateLeft);
+                    }
                     return false;
                 }
 
                 'l' if capabilities.supports_vim_navigation() => {
-                    dispatcher.dispatch(Action::NavigateRight);
+                    if active_view_id == ViewId::Main {
+                        dispatcher.dispatch(Action::TabNext);
+                    } else {
+                        dispatcher.dispatch(Action::NavigateRight);
+                    }
                     return false;
                 }
 
@@ -188,12 +200,20 @@ impl KeyboardMiddleware {
             }
 
             KeyCode::Left if capabilities.supports_vim_navigation() => {
-                dispatcher.dispatch(Action::NavigateLeft);
+                if active_view_id == ViewId::Main {
+                    dispatcher.dispatch(Action::TabPrevious);
+                } else {
+                    dispatcher.dispatch(Action::NavigateLeft);
+                }
                 return false;
             }
 
             KeyCode::Right if capabilities.supports_vim_navigation() => {
-                dispatcher.dispatch(Action::NavigateRight);
+                if active_view_id == ViewId::Main {
+                    dispatcher.dispatch(Action::TabNext);
+                } else {
+                    dispatcher.dispatch(Action::NavigateRight);
+                }
                 return false;
             }
 
