@@ -55,13 +55,12 @@ impl Clone for Box<dyn View> {
 
 /// Render the entire application UI
 ///
-/// Simple rendering strategy:
-/// - Always render only the top-most view
-/// - Views that want to show content beneath them (like popups/modals) should use
-///   the `Clear` widget for only their partial area, allowing the previous frame
-///   buffer to show through
+/// Rendering strategy:
+/// - Render all views in the stack from bottom to top
+/// - Views using `Clear` widget will preserve portions of underlying views
 pub fn render(state: &AppState, area: Rect, f: &mut Frame) {
-    if let Some(top_view) = state.view_stack.last() {
-        top_view.render(state, area, f);
+    // Render each view bottom-up so views on top render last
+    for view in &state.view_stack {
+        view.render(state, area, f);
     }
 }

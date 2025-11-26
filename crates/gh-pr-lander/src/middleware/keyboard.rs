@@ -81,7 +81,7 @@ impl KeyboardMiddleware {
         &mut self,
         key: KeyEvent,
         capabilities: crate::capabilities::PanelCapabilities,
-        state: &AppState,
+        _state: &AppState,
         dispatcher: &Dispatcher,
     ) -> bool {
         use crate::capabilities::PanelCapabilities;
