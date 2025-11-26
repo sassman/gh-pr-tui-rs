@@ -23,7 +23,11 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
                 .unwrap_or(false);
 
             if is_duplicate {
-                log::debug!("Ignoring duplicate view on stack: {:?}", new_view.view_id());
+                log::debug!(
+                    "Poping view from the stack, because this view is on top already: {:?}",
+                    new_view.view_id()
+                );
+                state.view_stack.pop();
             } else {
                 log::debug!("Pushing view onto stack: {:?}", new_view.view_id());
                 state.view_stack.push(new_view.clone());

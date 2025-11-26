@@ -1,7 +1,7 @@
 use crate::actions::Action;
 use crate::dispatcher::Dispatcher;
 use crate::middleware::Middleware;
-use crate::reducer::reduce;
+use crate::reducers::app_reducer::reduce;
 use crate::state::AppState;
 
 /// Store - holds application state and manages the Redux loop

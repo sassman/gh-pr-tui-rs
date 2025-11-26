@@ -14,7 +14,6 @@ mod capabilities;
 mod dispatcher;
 mod logger;
 mod middleware;
-mod reducer;
 mod reducers;
 mod state;
 mod store;

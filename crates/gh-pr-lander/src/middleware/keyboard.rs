@@ -10,7 +10,7 @@ use crate::actions::Action;
 use crate::dispatcher::Dispatcher;
 use crate::middleware::Middleware;
 use crate::state::AppState;
-use crate::views::{DebugConsoleView, ViewId};
+use crate::views::DebugConsoleView;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::time::{Duration, Instant};
 
@@ -156,14 +156,7 @@ impl KeyboardMiddleware {
 
                 // Backtick toggles debug console
                 '`' => {
-                    if state.active_view().view_id() != ViewId::DebugConsole {
-                        // Push debug console onto stack
-                        // Note: Reducer handles duplicate prevention
-                        dispatcher.dispatch(Action::PushView(Box::new(DebugConsoleView::new())));
-                    } else {
-                        // Close debug console (pop from stack)
-                        dispatcher.dispatch(Action::GlobalClose);
-                    }
+                    dispatcher.dispatch(Action::PushView(Box::new(DebugConsoleView::new())));
                     return false;
                 }
 

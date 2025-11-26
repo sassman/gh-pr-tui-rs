@@ -5,44 +5,47 @@ use crate::{logger::OwnedLogRecord, views::View};
 /// Actions represent all possible state changes in the application.
 /// Actions are prefixed by scope to indicate which part of the app they affect.
 pub enum Action {
-    // Global actions (not tied to any specific view)
+    /// Global actions (not tied to any specific view)
     GlobalKeyPressed(KeyEvent),
     GlobalClose,
     GlobalQuit,
 
-    // View stack management
-    PushView(Box<dyn View>),    // Push a new view onto the stack (for modals/popups)
-    ReplaceView(Box<dyn View>), // Replace entire view stack with new view (for navigation)
+    /// ## View stack management
+    /// Push a new view onto the stack (for modals/popups)
+    PushView(Box<dyn View>),
+    /// Replace entire view stack with new view (for navigation)
+    ReplaceView(Box<dyn View>),
 
-    // Local actions (dispatched to active view for handling)
-    LocalKeyPressed(char), // Key pressed in active view context
+    /// ## Local actions (dispatched to active view for handling)
+    /// Key pressed in active view context
+    LocalKeyPressed(char),
 
-    // Navigation actions (semantic, vim-style)
-    NavigateNext,     // j, down arrow
+    /// ## Navigation actions (semantic, vim-style)
+    NavigateNext, // j, down arrow
     NavigatePrevious, // k, up arrow
     NavigateLeft,     // h, left arrow
     NavigateRight,    // l, right arrow
 
-    // Scroll actions
-    ScrollToTop,        // gg
+    /// ## Scroll actions
+    ScrollToTop, // gg
     ScrollToBottom,     // G
     ScrollPageDown,     // Page Down
     ScrollPageUp,       // Page Up
     ScrollHalfPageDown, // Ctrl+d
     ScrollHalfPageUp,   // Ctrl+u
 
-    // Debug console actions
-    DebugConsoleClear,                    // Clear debug console logs
+    /// ## Debug console actions
+    DebugConsoleClear, // Clear debug console logs
     DebugConsoleLogAdded(OwnedLogRecord), // New log record added
 
-    // Bootstrap actions
+    /// ## Bootstrap actions
     BootstrapStart,
     BootstrapEnd,
 
-    // Animation/Timer actions
+    /// ## Animation/Timer actions
     Tick, // Periodic tick for animations (500ms interval)
 
-    // No-op action
+    ///No-op action
     None,
 }
 
@@ -95,7 +98,9 @@ impl std::fmt::Debug for Action {
             Self::ScrollHalfPageDown => write!(f, "ScrollHalfPageDown"),
             Self::ScrollHalfPageUp => write!(f, "ScrollHalfPageUp"),
             Self::DebugConsoleClear => write!(f, "DebugConsoleClear"),
-            Self::DebugConsoleLogAdded(record) => f.debug_tuple("DebugConsoleLogAdded").field(record).finish(),
+            Self::DebugConsoleLogAdded(record) => {
+                f.debug_tuple("DebugConsoleLogAdded").field(record).finish()
+            }
             Self::BootstrapStart => write!(f, "BootstrapStart"),
             Self::BootstrapEnd => write!(f, "BootstrapEnd"),
             Self::Tick => write!(f, "Tick"),
