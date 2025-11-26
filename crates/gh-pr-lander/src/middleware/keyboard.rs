@@ -1,7 +1,7 @@
-use crate::actions::Action;
 use crate::dispatcher::Dispatcher;
 use crate::middleware::Middleware;
 use crate::state::AppState;
+use crate::{actions::Action, state::ActiveView};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// KeyboardMiddleware - converts raw keyboard events to semantic actions
@@ -14,9 +14,9 @@ impl KeyboardMiddleware {
 }
 
 impl Middleware for KeyboardMiddleware {
-    fn handle(&mut self, action: &Action, _state: &AppState, dispatcher: &Dispatcher) -> bool {
+    fn handle(&mut self, action: &Action, state: &AppState, dispatcher: &Dispatcher) -> bool {
         if let Action::GlobalKeyPressed(key) = action {
-            handle_key_event(key, dispatcher);
+            handle_key_event(key, state, dispatcher);
             // Consume the raw key event (don't pass to reducer)
             return false;
         }
@@ -27,17 +27,17 @@ impl Middleware for KeyboardMiddleware {
 }
 
 /// Handle a key event and dispatch semantic actions
-fn handle_key_event(key: &KeyEvent, dispatcher: &Dispatcher) {
+fn handle_key_event(key: &KeyEvent, state: &AppState, dispatcher: &Dispatcher) {
     match key.code {
         // Global close/quit
         KeyCode::Char('q') if key.modifiers == KeyModifiers::NONE => {
-            dispatcher.dispatch(Action::GlobalClose);
-        }
-        KeyCode::Esc => {
-            dispatcher.dispatch(Action::GlobalClose);
+            dispatcher.dispatch(Action::GlobalQuit);
         }
         KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             dispatcher.dispatch(Action::GlobalQuit);
+        }
+        KeyCode::Esc => {
+            dispatcher.dispatch(Action::GlobalClose);
         }
 
         // Vim navigation - down/next
@@ -70,6 +70,26 @@ fn handle_key_event(key: &KeyEvent, dispatcher: &Dispatcher) {
         }
         KeyCode::Right => {
             dispatcher.dispatch(Action::NavRight);
+        }
+
+        // Vim navigation - jump to end
+        KeyCode::Char('G') if key.modifiers == KeyModifiers::SHIFT => {
+            dispatcher.dispatch(Action::NavJumpToEnd);
+        }
+
+        // TODO: ActiveView changing seems to require some state knowledge at least, there must be a better way..
+        KeyCode::Char('`') if key.modifiers == KeyModifiers::NONE => {
+            let same_view = ActiveView::DebugConsole;
+            if state.active_view != same_view {
+                dispatcher.dispatch(Action::GlobalActivateView(same_view));
+            } else {
+                dispatcher.dispatch(Action::GlobalActivateView(ActiveView::Main));
+            }
+        }
+
+        // Any other character key without modifiers - dispatch as LocalKeyPressed
+        KeyCode::Char(c) if key.modifiers == KeyModifiers::NONE => {
+            dispatcher.dispatch(Action::LocalKeyPressed(c));
         }
 
         // Unhandled keys

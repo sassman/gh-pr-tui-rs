@@ -863,7 +863,6 @@ dependencies = [
 name = "gh-pr-lander"
 version = "0.1.0"
 dependencies = [
- "env_logger",
  "log",
  "ratatui",
 ]

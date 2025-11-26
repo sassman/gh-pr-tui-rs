@@ -11,10 +11,13 @@ use std::io;
 
 mod actions;
 mod dispatcher;
+mod logger;
 mod middleware;
 mod reducer;
+mod reducers;
 mod state;
 mod store;
+mod theme;
 mod view_models;
 mod views;
 
@@ -24,10 +27,8 @@ use state::AppState;
 use store::Store;
 
 fn main() -> io::Result<()> {
-    // Initialize logger
-    env_logger::Builder::from_default_env()
-        .filter_level(log::LevelFilter::Debug)
-        .init();
+    // Initialize custom logger
+    let logger = logger::init();
 
     log::info!("Starting gh-pr-lander");
 
@@ -44,6 +45,9 @@ fn main() -> io::Result<()> {
     // Add middleware in order (they execute in this order)
     store.add_middleware(Box::new(LoggingMiddleware::new()));
     store.add_middleware(Box::new(KeyboardMiddleware::new()));
+
+    // Connect logger to dispatcher (so logs can be sent to debug console)
+    logger.set_dispatcher(store.dispatcher().clone());
 
     // Main event loop
     let result = run_app(&mut terminal, &mut store);
@@ -67,9 +71,9 @@ fn run_app(
 ) -> io::Result<()> {
     loop {
         // Render
-        terminal.draw(|frame| {
+        terminal.draw(|mut frame| {
             let area = frame.area();
-            views::render(store.state(), area, frame.buffer_mut());
+            views::render(store.state(), area, &mut frame);
         })?;
 
         // Check if we should quit

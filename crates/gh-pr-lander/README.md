@@ -79,13 +79,20 @@ View                        [Renders new state]
 ### Current Features
 
 - ✅ Clean Redux architecture
+- ✅ Modular reducers (root reducer orchestrates sub-reducers)
 - ✅ Logging middleware
 - ✅ Keyboard middleware with vim navigation (hjkl)
 - ✅ Prefixed action naming convention
+- ✅ Custom logger (logs to debug console, not stdout)
+- ✅ Debug console (Quake-style drop-down)
+- ✅ Local key handling (views handle their own keys)
+- ✅ Active view tracking
 - ✅ Minimal working TUI
 
 ### Controls
 
+- `` ` `` - Toggle debug console (Quake-style)
+- `c` - Clear debug console (when console is active)
 - `j` or `↓` - Navigate down/next
 - `k` or `↑` - Navigate up/previous
 - `h` or `←` - Navigate left
@@ -99,11 +106,15 @@ View                        [Renders new state]
 cargo run -p gh-pr-lander
 ```
 
-With debug logging:
+**Note**: Logs are captured in the debug console (toggle with `` ` ``), not stdout.
+
+With debug logging to stderr (for development):
 
 ```bash
-RUST_LOG=debug cargo run -p gh-pr-lander
+DEBUG=1 cargo run -p gh-pr-lander
 ```
+
+When `DEBUG=1` is set, logs are sent to both stderr and the debug console.
 
 ## Migration Plan
 
