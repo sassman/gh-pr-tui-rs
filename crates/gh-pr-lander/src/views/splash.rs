@@ -2,6 +2,7 @@ use crate::capabilities::PanelCapabilities;
 use crate::state::AppState;
 use crate::theme::Theme;
 use crate::views::View;
+use figlet_rs::FIGfont;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::Stylize,
@@ -45,19 +46,19 @@ fn render_splash(state: &crate::state::SplashState, theme: &Theme, area: Rect, f
     let background_block = Block::default().style(theme.panel_background());
     f.render_widget(background_block, area);
 
+    // Generate FIGlet title
+    let title_lines = generate_figlet_title(theme);
+    let title_height = title_lines.len() as u16;
+
     // Title at the top
     let title_area = Rect {
         x: area.x,
         y: area.y + 2,
         width: area.width,
-        height: 3,
+        height: title_height + 1,
     };
 
-    let title = Paragraph::new(Line::from(Span::styled(
-        "GitHub PR Lander",
-        theme.panel_title().bold(),
-    )))
-    .alignment(Alignment::Center);
+    let title = Paragraph::new(title_lines).alignment(Alignment::Center);
     f.render_widget(title, title_area);
 
     // Center the snake animation
@@ -136,7 +137,7 @@ fn generate_snake_animation(frame: usize, theme: &Theme) -> Vec<Line<'static>> {
         let mut spans = Vec::new();
         for col in 0..5 {
             let pos = row * 5 + col;
-            let symbol = if lit_positions[pos] { "█" } else { "░" };
+            let symbol = if lit_positions[pos] { "■" } else { "□" };
             let style = if lit_positions[pos] {
                 theme.text().cyan().bold()
             } else {
@@ -148,4 +149,48 @@ fn generate_snake_animation(frame: usize, theme: &Theme) -> Vec<Line<'static>> {
     }
 
     lines
+}
+
+/// Embedded small FIGlet font
+const SMALL_FONT: &str = include_str!("../../resources/small.flf");
+
+/// Generate FIGlet title with merge icon
+fn generate_figlet_title(theme: &Theme) -> Vec<Line<'static>> {
+    // Merge icon (5 lines to match the FIGlet small font height)
+    let icon = [
+        "  ◉━━━◉  ",
+        "   ╲ ╱   ",
+        "    ◉    ",
+        "    ┃    ",
+        "    ◉    ",
+    ];
+
+    // Generate FIGlet text using the embedded "small" font
+    let figlet_lines: Vec<String> = if let Ok(font) = FIGfont::from_content(SMALL_FONT) {
+        if let Some(figure) = font.convert("GitHub PR Lander") {
+            figure.to_string().lines().map(String::from).collect()
+        } else {
+            vec!["GitHub PR Lander".to_string()]
+        }
+    } else {
+        vec!["GitHub PR Lander".to_string()]
+    };
+
+    // Combine icon and FIGlet text side by side
+    let max_lines = icon.len().max(figlet_lines.len());
+    let mut result = Vec::new();
+
+    for i in 0..max_lines {
+        let icon_part = icon.get(i).unwrap_or(&"         ");
+        let figlet_part = figlet_lines.get(i).map(|s| s.as_str()).unwrap_or("");
+
+        let line = Line::from(vec![
+            Span::styled(icon_part.to_string(), theme.text().cyan().bold()),
+            Span::styled("   ", theme.text()), // spacing
+            Span::styled(figlet_part.to_string(), theme.panel_title().bold()),
+        ]);
+        result.push(line);
+    }
+
+    result
 }
