@@ -35,6 +35,9 @@ bitflags! {
 
         /// Panel supports selection of items
         const ITEM_SELECTION = 1 << 5;
+
+        /// Panel accepts text input (characters go to input field, not keybindings)
+        const TEXT_INPUT = 1 << 6;
     }
 }
 
@@ -61,6 +64,14 @@ impl PanelCapabilities {
     /// Check if panel supports item navigation
     pub fn supports_item_navigation(self) -> bool {
         self.contains(Self::ITEM_NAVIGATION)
+    }
+
+    /// Check if panel accepts text input
+    ///
+    /// When true, character keys should be sent to the input field
+    /// rather than being processed as keybindings
+    pub fn accepts_text_input(self) -> bool {
+        self.contains(Self::TEXT_INPUT)
     }
 }
 

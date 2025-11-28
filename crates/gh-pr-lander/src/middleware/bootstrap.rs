@@ -37,7 +37,7 @@ impl Middleware for BootstrapMiddleware {
                         let mut last_tick = Instant::now();
 
                         loop {
-                            if *should_continue.lock().unwrap() != true {
+                            if !*should_continue.lock().unwrap() {
                                 log::debug!("Bootstrap: Tick thread terminating");
                                 break;
                             }

@@ -1,349 +1,150 @@
 //! KeyboardMiddleware - translates keyboard events into context-aware actions
 //!
 //! This middleware intercepts `GlobalKeyPressed` actions and translates them into
-//! appropriate navigation/scrolling actions based on:
-//! - Which panel is currently active
-//! - Multi-key sequences (e.g., "gg" for go-to-top)
-//! - Vim-style navigation patterns
+//! appropriate actions based on:
+//! - The keymap (configurable keybindings from AppState)
+//! - The capabilities of the active view
+//! - Two-key sequences with timeout (e.g., "g g" for scroll-to-top)
 
 use crate::actions::Action;
+use crate::capabilities::PanelCapabilities;
 use crate::dispatcher::Dispatcher;
+use crate::keybindings::PendingKey;
 use crate::middleware::Middleware;
-use crate::shortcuts::{self, PendingKeyPress};
 use crate::state::AppState;
-use crate::views::{CommandPaletteView, DebugConsoleView, ViewId};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-/// KeyboardMiddleware handles vim-style keyboard navigation
+/// KeyboardMiddleware handles keyboard input and maps it to actions
 ///
 /// # Features
-/// - Context-aware: Different keys do different things based on panel capabilities
-/// - Multi-key sequences: "gg" → go to top, "G" → go to bottom
-/// - Vim-style: j/k for navigation, h/l for horizontal movement
-///
-/// # Supported Contexts
-/// - **Main View**: j/k navigate items
-/// - **Debug Console**: j/k scroll logs, gg/G jump to first/last
+/// - Keymap-based: All keybindings come from AppState.keymap
+/// - Capability-aware: Actions are filtered based on active view capabilities
+/// - Two-key sequences: Supports sequences like "g g" or "p a" with timeout
 pub struct KeyboardMiddleware {
-    /// Last key pressed for multi-key sequences (vim-style like "gg")
-    last_key: Option<(char, Instant)>,
-    /// Timeout for multi-key sequences (500ms)
-    sequence_timeout: Duration,
-    /// Pending key for two-key shortcut combinations (like "p → a")
-    pending_shortcut_key: Option<PendingKeyPress>,
+    /// Pending key for two-key sequences
+    pending_key: Option<PendingKey>,
 }
 
 impl KeyboardMiddleware {
     pub fn new() -> Self {
-        Self {
-            last_key: None,
-            sequence_timeout: Duration::from_millis(500),
-            pending_shortcut_key: None,
-        }
+        Self { pending_key: None }
     }
 
-    /// Check if we have a pending key that can form a sequence
-    fn check_sequence(&mut self, current_key: char) -> Option<KeySequence> {
-        if let Some((last_char, last_time)) = self.last_key {
-            // Check if timeout expired
-            if last_time.elapsed() > self.sequence_timeout {
-                self.clear_sequence();
-                return None;
-            }
-
-            // Check for "gg" sequence (go to top)
-            match (last_char, current_key) {
-                ('g', 'g') => {
-                    self.clear_sequence();
-                    return Some(KeySequence::GoToTop);
-                }
-                (_, _) => {
-                    // do nothing
-                }
-            }
-        }
-
-        None
-    }
-
-    /// Record a key for potential sequence
-    fn record_key(&mut self, key: char) {
-        self.last_key = Some((key, Instant::now()));
-    }
-
-    /// Clear sequence state
-    fn clear_sequence(&mut self) {
-        self.last_key = None;
-    }
-
-    /// Handle a key event based on panel capabilities
-    ///
-    /// This is capability-based: it maps keys to semantic actions based on what the
-    /// panel declares it supports, without knowing anything about specific panels.
+    /// Handle a key event
     fn handle_key(
         &mut self,
         key: KeyEvent,
-        capabilities: crate::capabilities::PanelCapabilities,
+        capabilities: PanelCapabilities,
         state: &AppState,
         dispatcher: &Dispatcher,
     ) -> bool {
-        use crate::capabilities::PanelCapabilities;
-
-        // Get the active view ID to determine context
-        let active_view_id = state.active_view().view_id();
-
-        // Skip shortcut processing for views that need text input (like command palette)
-        let process_shortcuts = active_view_id != ViewId::CommandPalette;
-
-        // Try to match shortcuts first (for non-text-input views)
-        if process_shortcuts {
-            let (action, clear_pending, new_pending) =
-                shortcuts::find_action_for_key(&key, self.pending_shortcut_key.as_ref());
-
-            // Update pending key state
-            if clear_pending {
-                self.pending_shortcut_key = None;
-            }
-            if let Some(pending_char) = new_pending {
-                self.pending_shortcut_key = Some(PendingKeyPress {
-                    key: pending_char,
-                    timestamp: Instant::now(),
-                });
-                // Don't process further - waiting for second key
-                return false;
-            }
-
-            // If we got a valid action from shortcuts, dispatch it
-            if !matches!(action, Action::None) {
-                log::debug!("Shortcut matched: {:?}", action);
-                dispatcher.dispatch(action);
-                return false;
-            }
+        // Views with TEXT_INPUT capability get special handling
+        if capabilities.accepts_text_input() {
+            return self.handle_text_input_key(key, capabilities, state, dispatcher);
         }
 
-        // Handle character keys (vim-style)
-        if let KeyCode::Char(c) = key.code {
-            // Handle Ctrl+key combinations
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                match c {
-                    'c' => {
-                        dispatcher.dispatch(Action::GlobalQuit);
-                        return false;
-                    }
-                    'p' => {
-                        // Toggle command palette
-                        dispatcher.dispatch(Action::PushView(Box::new(CommandPaletteView::new())));
-                        return false;
-                    }
-                    'd' if capabilities.contains(PanelCapabilities::VIM_SCROLL_BINDINGS) => {
-                        dispatcher.dispatch(Action::ScrollHalfPageDown);
-                        return false;
-                    }
-                    'u' if capabilities.contains(PanelCapabilities::VIM_SCROLL_BINDINGS) => {
-                        dispatcher.dispatch(Action::ScrollHalfPageUp);
-                        return false;
-                    }
-                    _ => return true, // Pass through other Ctrl combinations
-                }
-            }
+        // Try keymap matching (handles both single keys and two-key sequences)
+        let (command_id, clear_pending, new_pending) =
+            state.keymap.match_key(&key, self.pending_key.as_ref());
 
-            // Check for multi-key sequences first
-            if let Some(sequence) = self.check_sequence(c) {
-                return self.handle_sequence(sequence, capabilities, dispatcher);
-            }
-
-            // Handle single character commands based on capabilities
-            match c {
-                // Vim navigation: j (down) / k (up)
-                'j' if capabilities.supports_vim_navigation() => {
-                    dispatcher.dispatch(Action::NavigateNext);
-                    return false; // Block original KeyPressed action
-                }
-
-                'k' if capabilities.supports_vim_navigation() => {
-                    dispatcher.dispatch(Action::NavigatePrevious);
-                    return false;
-                }
-
-                // Vim navigation: h (left) / l (right)
-                'h' if capabilities.supports_vim_navigation() => {
-                    dispatcher.dispatch(Action::NavigateLeft);
-                    return false;
-                }
-
-                'l' if capabilities.supports_vim_navigation() => {
-                    dispatcher.dispatch(Action::NavigateRight);
-                    return false;
-                }
-
-                // Go to bottom: G (shift+g)
-                'G' => {
-                    return self.handle_sequence(KeySequence::GoToBottom, capabilities, dispatcher);
-                }
-
-                // Record 'g' for potential "gg" sequence
-                'g' => {
-                    self.record_key('g');
-                    return false; // Wait for second 'g' or timeout
-                }
-
-                'q' => {
-                    // Dispatch GlobalClose - reducer will handle this contextually
-                    // (close panel if panel is open, quit if on main view)
-                    dispatcher.dispatch(Action::GlobalClose);
-                    return false;
-                }
-
-                // Backtick toggles debug console
-                '`' => {
-                    dispatcher.dispatch(Action::PushView(Box::new(DebugConsoleView::new())));
-                    return false;
-                }
-
-                // Any other character clears sequence and dispatches as LocalKeyPressed
-                _ => {
-                    self.clear_sequence();
-                    // If in command palette, update the query
-                    if active_view_id == ViewId::CommandPalette {
-                        let mut new_query = state.command_palette.query.clone();
-                        new_query.push(c);
-                        dispatcher.dispatch(Action::CommandPaletteUpdateQuery(new_query));
-                    } else {
-                        dispatcher.dispatch(Action::LocalKeyPressed(c));
-                    }
-                    return false;
-                }
-            }
+        // Update pending key state
+        if clear_pending {
+            self.pending_key = None;
+        }
+        if let Some(pending_char) = new_pending {
+            self.pending_key = Some(PendingKey {
+                key: pending_char,
+                timestamp: Instant::now(),
+            });
+            log::debug!(
+                "Waiting for second key in sequence (first: {})",
+                pending_char
+            );
+            return false; // Don't process further - waiting for second key
         }
 
-        // Handle Escape key - universal close action
-        if let KeyCode::Esc = key.code {
-            // If in command palette, clear query first, then close on second Esc
-            if active_view_id == ViewId::CommandPalette && !state.command_palette.query.is_empty() {
-                dispatcher.dispatch(Action::CommandPaletteClear);
-                return false;
-            }
-            dispatcher.dispatch(Action::GlobalClose);
+        // If keymap matched, dispatch the command's action
+        if let Some(cmd_id) = command_id {
+            log::debug!("Keymap matched command: {:?}", cmd_id);
+            dispatcher.dispatch(cmd_id.to_action());
             return false;
         }
 
-        // Handle Enter key
-        if let KeyCode::Enter = key.code {
-            if active_view_id == ViewId::CommandPalette {
-                dispatcher.dispatch(Action::CommandPaletteExecute);
+        // For unmatched character keys, dispatch as LocalKeyPressed
+        if let KeyCode::Char(c) = key.code {
+            if !key.modifiers.contains(KeyModifiers::CONTROL)
+                && !key.modifiers.contains(KeyModifiers::ALT)
+            {
+                dispatcher.dispatch(Action::LocalKeyPressed(c));
                 return false;
             }
         }
 
-        // Handle Backspace key
-        if let KeyCode::Backspace = key.code {
-            if active_view_id == ViewId::CommandPalette && !state.command_palette.query.is_empty() {
-                let mut new_query = state.command_palette.query.clone();
-                new_query.pop();
-                dispatcher.dispatch(Action::CommandPaletteUpdateQuery(new_query));
-                return false;
-            }
-        }
-
-        // Handle Tab/Shift+Tab for repository navigation in MainView
-        if let KeyCode::Tab = key.code {
-            if active_view_id == ViewId::Main {
-                if key.modifiers.contains(KeyModifiers::SHIFT) {
-                    dispatcher.dispatch(Action::RepositoryPrevious);
-                } else {
-                    dispatcher.dispatch(Action::RepositoryNext);
-                }
-                return false;
-            }
-        }
-
-        // Handle Backtab (Shift+Tab on some terminals)
-        if let KeyCode::BackTab = key.code {
-            if active_view_id == ViewId::Main {
-                dispatcher.dispatch(Action::RepositoryPrevious);
-                return false;
-            }
-        }
-
-        // Handle arrow keys
-        // Arrow keys work for CommandPalette (to allow text input) and vim-enabled views
-        match key.code {
-            KeyCode::Down if active_view_id == ViewId::CommandPalette || capabilities.supports_vim_navigation() => {
-                dispatcher.dispatch(Action::NavigateNext);
-                return false;
-            }
-
-            KeyCode::Up if active_view_id == ViewId::CommandPalette || capabilities.supports_vim_navigation() => {
-                dispatcher.dispatch(Action::NavigatePrevious);
-                return false;
-            }
-
-            KeyCode::Left if capabilities.supports_vim_navigation() => {
-                dispatcher.dispatch(Action::NavigateLeft);
-                return false;
-            }
-
-            KeyCode::Right if capabilities.supports_vim_navigation() => {
-                dispatcher.dispatch(Action::NavigateRight);
-                return false;
-            }
-
-            KeyCode::PageDown if capabilities.contains(PanelCapabilities::SCROLL_VERTICAL) => {
-                dispatcher.dispatch(Action::ScrollPageDown);
-                return false;
-            }
-
-            KeyCode::PageUp if capabilities.contains(PanelCapabilities::SCROLL_VERTICAL) => {
-                dispatcher.dispatch(Action::ScrollPageUp);
-                return false;
-            }
-
-            // All other keys pass through
-            _ => {
-                self.clear_sequence();
-                return true;
-            }
-        }
+        // Pass through unhandled keys
+        true
     }
 
-    /// Handle a complete key sequence (like "gg")
+    /// Handle key events for views that accept text input
     ///
-    /// This is capability-aware: it checks panel capabilities before dispatching semantic actions
-    fn handle_sequence(
+    /// In text input mode:
+    /// - Character keys are sent to the input field
+    /// - Special keys (Esc, Enter, Backspace, arrows) have their own handling
+    /// - Ctrl+C still quits
+    fn handle_text_input_key(
         &mut self,
-        sequence: KeySequence,
-        capabilities: crate::capabilities::PanelCapabilities,
+        key: KeyEvent,
+        capabilities: PanelCapabilities,
+        _state: &AppState,
         dispatcher: &Dispatcher,
     ) -> bool {
-        match sequence {
-            KeySequence::GoToTop => {
-                // Only dispatch ScrollToTop if panel supports vim vertical scrolling
-                if capabilities.supports_vim_vertical_scroll() {
-                    log::debug!(
-                        "Dispatching ScrollToTop (capabilities support vim vertical scroll)"
-                    );
-                    dispatcher.dispatch(Action::ScrollToTop);
-                    return false; // Block original key event
-                } else {
-                    log::debug!("Ignoring 'gg' - panel doesn't support vim vertical scrolling");
-                    return true; // Pass through
-                }
+        // Clear any pending sequence when in text input mode
+        self.pending_key = None;
+
+        match key.code {
+            // Escape - context-dependent close behavior
+            KeyCode::Esc => {
+                dispatcher.dispatch(Action::TextInputEscape);
+                false
             }
 
-            KeySequence::GoToBottom => {
-                // Only dispatch ScrollToBottom if panel supports vim vertical scrolling
-                if capabilities.supports_vim_vertical_scroll() {
-                    log::debug!(
-                        "Dispatching ScrollToBottom (capabilities support vim vertical scroll)"
-                    );
-                    dispatcher.dispatch(Action::ScrollToBottom);
-                    return false; // Block original key event
-                } else {
-                    log::debug!("Ignoring 'G' - panel doesn't support vim vertical scrolling");
-                    return true; // Pass through
-                }
+            // Enter - confirm/execute
+            KeyCode::Enter => {
+                dispatcher.dispatch(Action::TextInputConfirm);
+                false
             }
+
+            // Backspace - remove last character
+            KeyCode::Backspace => {
+                dispatcher.dispatch(Action::TextInputBackspace);
+                false
+            }
+
+            // Arrow keys for navigation (if view supports it)
+            KeyCode::Down if capabilities.supports_item_navigation() => {
+                dispatcher.dispatch(Action::NavigateNext);
+                false
+            }
+            KeyCode::Up if capabilities.supports_item_navigation() => {
+                dispatcher.dispatch(Action::NavigatePrevious);
+                false
+            }
+
+            // Character input
+            KeyCode::Char(c) => {
+                // Ctrl+C always quits
+                if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'c' {
+                    dispatcher.dispatch(Action::GlobalQuit);
+                    return false;
+                }
+
+                // Send character to text input
+                dispatcher.dispatch(Action::TextInputChar(c));
+                false
+            }
+
+            // Pass through other keys
+            _ => true,
         }
     }
 }
@@ -358,7 +159,6 @@ impl Middleware for KeyboardMiddleware {
     fn handle(&mut self, action: &Action, state: &AppState, dispatcher: &Dispatcher) -> bool {
         // Only intercept GlobalKeyPressed actions
         if let Action::GlobalKeyPressed(key) = action {
-            // Get capabilities from the active (top-most) view via the View trait
             let capabilities = state.active_view().capabilities(state);
             log::debug!(
                 "KeyboardMiddleware: key={:?}, capabilities={:?}",
@@ -371,11 +171,4 @@ impl Middleware for KeyboardMiddleware {
         // All other actions pass through
         true
     }
-}
-
-/// Multi-key sequences
-#[derive(Debug, Clone, Copy)]
-enum KeySequence {
-    GoToTop,    // "gg"
-    GoToBottom, // "G"
 }

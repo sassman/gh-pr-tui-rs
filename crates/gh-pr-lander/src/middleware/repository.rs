@@ -41,11 +41,11 @@ impl Middleware for RepositoryMiddleware {
                 });
 
                 // Pass through the BootstrapStart action
-                return true;
+                true
             }
             _ => {
                 // All other actions pass through
-                return true;
+                true
             }
         }
     }

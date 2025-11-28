@@ -1,85 +1,89 @@
-//! Command list for command palette
+//! Command registry
 //!
-//! This module defines all available commands that can be executed via the command palette.
-//! Commands are simple structs that map user-facing descriptions to actions.
+//! This module defines commands that can be executed via the command palette
+//! or keyboard shortcuts. Commands wrap CommandIds with display metadata.
 
-use crate::actions::Action;
+use crate::command_id::CommandId;
+use crate::keybindings::Keymap;
 
-/// A single command that can be executed
+/// A command that can be executed via command palette or keybinding
 #[derive(Debug, Clone)]
 pub struct Command {
-    pub title: String,
-    pub description: String,
-    pub category: String,
+    /// The unique identifier for this command
+    pub id: CommandId,
+    /// The keyboard shortcut hint (populated from keybindings)
     pub shortcut_hint: Option<String>,
-    pub action: Action,
 }
 
-/// Get all available commands
-///
-/// Returns a list of all commands that can be executed in the application.
-/// Commands are organized by category for better discoverability.
-pub fn get_all_commands() -> Vec<Command> {
-    vec![
-        // Debug category
-        Command {
-            title: "Toggle debug console".to_string(),
-            description: "Show or hide the debug console".to_string(),
-            category: "Debug".to_string(),
-            shortcut_hint: Some("`".to_string()),
-            action: Action::PushView(Box::new(crate::views::DebugConsoleView::new())),
-        },
-        Command {
-            title: "Clear debug logs".to_string(),
-            description: "Clear all debug console logs".to_string(),
-            category: "Debug".to_string(),
+impl Command {
+    /// Create a new command from a CommandId
+    pub fn new(id: CommandId) -> Self {
+        Self {
+            id,
             shortcut_hint: None,
-            action: Action::DebugConsoleClear,
-        },
-        // Navigation category
-        Command {
-            title: "Next repository".to_string(),
-            description: "Switch to the next repository".to_string(),
-            category: "Navigation".to_string(),
-            shortcut_hint: Some("Tab".to_string()),
-            action: Action::RepositoryNext,
-        },
-        Command {
-            title: "Previous repository".to_string(),
-            description: "Switch to the previous repository".to_string(),
-            category: "Navigation".to_string(),
-            shortcut_hint: Some("Shift+Tab".to_string()),
-            action: Action::RepositoryPrevious,
-        },
-        // General category
-        Command {
-            title: "Quit application".to_string(),
-            description: "Exit the application".to_string(),
-            category: "General".to_string(),
-            shortcut_hint: Some("q / Ctrl+C".to_string()),
-            action: Action::GlobalQuit,
-        },
-        Command {
-            title: "Close current view".to_string(),
-            description: "Close the current view or panel".to_string(),
-            category: "General".to_string(),
-            shortcut_hint: Some("Esc / q".to_string()),
-            action: Action::GlobalClose,
-        },
-        // Repository management
-        Command {
-            title: "Add repository".to_string(),
-            description: "Add a new repository to track".to_string(),
-            category: "Repository".to_string(),
-            shortcut_hint: Some("p → a".to_string()),
-            action: Action::RepositoryAdd,
-        },
+        }
+    }
+
+    /// Create a command with a shortcut hint
+    pub fn with_shortcut(id: CommandId, hint: impl Into<String>) -> Self {
+        Self {
+            id,
+            shortcut_hint: Some(hint.into()),
+        }
+    }
+
+    /// Get the title for display
+    pub fn title(&self) -> &'static str {
+        self.id.title()
+    }
+
+    /// Get the description for display
+    pub fn description(&self) -> &'static str {
+        self.id.description()
+    }
+
+    /// Get the category for grouping
+    pub fn category(&self) -> &'static str {
+        self.id.category()
+    }
+}
+
+/// Get all command IDs that should appear in the command palette
+fn palette_command_ids() -> Vec<CommandId> {
+    use CommandId::*;
+
+    vec![
+        RepositoryAdd,
+        RepositoryNext,
+        RepositoryPrevious,
+        DebugToggleConsole,
+        DebugClearLogs,
+        CommandPaletteOpen,
+        GlobalClose,
+        GlobalQuit,
     ]
+    .into_iter()
+    .filter(|id| id.show_in_palette())
+    .collect()
+}
+
+/// Get all commands with shortcut hints populated from the keymap
+pub fn get_palette_commands_with_hints(keymap: &Keymap) -> Vec<Command> {
+    palette_command_ids()
+        .into_iter()
+        .map(|id| {
+            if let Some(hint) = keymap.hint_for_command(id) {
+                Command::with_shortcut(id, hint)
+            } else {
+                Command::new(id)
+            }
+        })
+        .collect()
 }
 
 /// Filter commands based on a search query
 ///
-/// Performs case-insensitive fuzzy matching on title and description.
+/// Performs case-insensitive fuzzy matching on title, description, and category.
 pub fn filter_commands(commands: &[Command], query: &str) -> Vec<Command> {
     if query.is_empty() {
         return commands.to_vec();
@@ -89,9 +93,9 @@ pub fn filter_commands(commands: &[Command], query: &str) -> Vec<Command> {
     commands
         .iter()
         .filter(|cmd| {
-            cmd.title.to_lowercase().contains(&query_lower)
-                || cmd.description.to_lowercase().contains(&query_lower)
-                || cmd.category.to_lowercase().contains(&query_lower)
+            cmd.title().to_lowercase().contains(&query_lower)
+                || cmd.description().to_lowercase().contains(&query_lower)
+                || cmd.category().to_lowercase().contains(&query_lower)
         })
         .cloned()
         .collect()

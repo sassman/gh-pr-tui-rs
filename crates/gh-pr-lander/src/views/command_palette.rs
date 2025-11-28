@@ -30,9 +30,10 @@ impl View for CommandPaletteView {
     }
 
     fn capabilities(&self, _state: &AppState) -> PanelCapabilities {
-        // Command palette only supports arrow key navigation (not vim keys)
-        // This allows j/k/h/l to be typed into the search field
-        PanelCapabilities::empty()
+        // Command palette accepts text input and supports item navigation
+        // TEXT_INPUT means character keys go to the input field, not keybindings
+        // ITEM_NAVIGATION enables arrow key navigation through results
+        PanelCapabilities::TEXT_INPUT | PanelCapabilities::ITEM_NAVIGATION
     }
 
     fn clone_box(&self) -> Box<dyn View> {
@@ -64,10 +65,7 @@ fn render(state: &AppState, area: Rect, f: &mut Frame) {
     f.render_widget(Clear, popup_area);
 
     // Render background
-    f.render_widget(
-        Block::default().style(theme.panel_background()),
-        popup_area,
-    );
+    f.render_widget(Block::default().style(theme.panel_background()), popup_area);
 
     // Render border and title with command count
     let title = format!(" Command Palette ({} commands) ", vm.total_commands);
@@ -158,8 +156,8 @@ fn render(state: &AppState, area: Rect, f: &mut Frame) {
         let table = Table::new(
             rows,
             vec![
-                Constraint::Length(15),                   // Indicator (2) + Shortcut (13)
-                Constraint::Percentage(70),               // Title
+                Constraint::Length(15),                    // Indicator (2) + Shortcut (13)
+                Constraint::Percentage(70),                // Title
                 Constraint::Length(vm.max_category_width), // Category
             ],
         )

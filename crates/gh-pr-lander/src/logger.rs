@@ -74,7 +74,7 @@ static LOGGER: OnceLock<DebugConsoleLogger> = OnceLock::new();
 
 /// Initialize the custom logger
 pub fn init() -> &'static DebugConsoleLogger {
-    let logger = LOGGER.get_or_init(|| DebugConsoleLogger::new());
+    let logger = LOGGER.get_or_init(DebugConsoleLogger::new);
 
     // Set as global logger
     log::set_logger(logger).expect("Failed to set logger");

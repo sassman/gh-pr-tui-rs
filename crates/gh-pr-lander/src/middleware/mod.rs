@@ -3,6 +3,7 @@ use crate::dispatcher::Dispatcher;
 use crate::state::AppState;
 
 pub mod bootstrap;
+pub mod command_palette;
 pub mod keyboard;
 pub mod logging;
 pub mod repository;

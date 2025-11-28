@@ -120,7 +120,7 @@ fn generate_snake_animation(frame: usize, theme: &Theme) -> Vec<Line<'static>> {
     // Show up to 5 positions: the head and up to 4 trailing segments
     // Head is at 'frame', tail segments are at frame-1, frame-2, frame-3, frame-4
     let snake_length = 5;
-    let mut lit_positions = vec![false; 25];
+    let mut lit_positions = [false; 25];
 
     for i in 0..snake_length {
         // Only show segments that actually exist (don't wrap around at the start)

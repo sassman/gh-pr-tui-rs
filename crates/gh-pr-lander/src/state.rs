@@ -1,22 +1,13 @@
+use crate::keybindings::{default_keymap, Keymap};
 use crate::logger::OwnedLogRecord;
 use crate::views::{SplashView, View};
 
 /// Debug console state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct DebugConsoleState {
     pub visible: bool,
     pub logs: Vec<OwnedLogRecord>,
     pub scroll_offset: usize, // Current scroll position (0 = bottom/latest)
-}
-
-impl Default for DebugConsoleState {
-    fn default() -> Self {
-        Self {
-            visible: false,
-            logs: Vec::new(),
-            scroll_offset: 0,
-        }
-    }
 }
 
 /// Splash screen state
@@ -36,33 +27,16 @@ impl Default for SplashState {
 }
 
 /// Main view state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct MainViewState {
     pub selected_repository: usize, // Currently selected repository index
 }
 
-impl Default for MainViewState {
-    fn default() -> Self {
-        Self {
-            selected_repository: 0,
-        }
-    }
-}
-
 /// Command palette state
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct CommandPaletteState {
-    pub query: String,          // Search query
-    pub selected_index: usize,  // Currently selected command index
-}
-
-impl Default for CommandPaletteState {
-    fn default() -> Self {
-        Self {
-            query: String::new(),
-            selected_index: 0,
-        }
-    }
+    pub query: String,         // Search query
+    pub selected_index: usize, // Currently selected command index
 }
 
 /// Application state
@@ -76,14 +50,17 @@ pub struct AppState {
     pub debug_console: DebugConsoleState,
     pub command_palette: CommandPaletteState,
     pub theme: crate::theme::Theme,
+    /// The keymap containing all keybindings
+    pub keymap: Keymap,
 }
 
 impl AppState {
     /// Get the top-most (active) view from the stack
-    pub fn active_view(&self) -> &Box<dyn View> {
+    pub fn active_view(&self) -> &dyn View {
         self.view_stack
             .last()
             .expect("View stack should never be empty")
+            .as_ref()
     }
 }
 
@@ -111,6 +88,7 @@ impl Clone for AppState {
             debug_console: self.debug_console.clone(),
             command_palette: self.command_palette.clone(),
             theme: self.theme.clone(),
+            keymap: self.keymap.clone(),
         }
     }
 }
@@ -125,6 +103,7 @@ impl Default for AppState {
             debug_console: DebugConsoleState::default(),
             command_palette: CommandPaletteState::default(),
             theme: crate::theme::Theme::default(),
+            keymap: default_keymap(),
         }
     }
 }

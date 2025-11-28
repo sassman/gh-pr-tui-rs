@@ -3,7 +3,7 @@
 //! Pre-computes all display data for the command palette view, separating
 //! data preparation from rendering logic.
 
-use crate::commands::{filter_commands, get_all_commands};
+use crate::commands::{filter_commands, get_palette_commands_with_hints};
 use crate::state::AppState;
 use ratatui::style::Color;
 
@@ -56,7 +56,7 @@ impl CommandPaletteViewModel {
     /// Build view model from application state
     pub fn from_state(state: &AppState) -> Self {
         let theme = &state.theme;
-        let all_commands = get_all_commands();
+        let all_commands = get_palette_commands_with_hints(&state.keymap);
         let total_commands = all_commands.len();
 
         // Filter commands based on query
@@ -70,7 +70,7 @@ impl CommandPaletteViewModel {
         // Add 2 for brackets [] and 2 for padding
         let max_category_width = filtered_commands
             .iter()
-            .map(|cmd| cmd.category.len())
+            .map(|cmd| cmd.category().len())
             .max()
             .unwrap_or(10) as u16
             + 4;
@@ -97,7 +97,7 @@ impl CommandPaletteViewModel {
                 };
 
                 // Format category with right alignment
-                let category = format!("[{}]", cmd.category);
+                let category = format!("[{}]", cmd.category());
                 let category = format!("{:>width$}", category, width = max_category_width as usize);
 
                 // Colors
@@ -112,7 +112,7 @@ impl CommandPaletteViewModel {
                     is_selected,
                     indicator,
                     shortcut_hint,
-                    title: cmd.title.clone(),
+                    title: cmd.title().to_string(),
                     category,
                     fg_color,
                     bg_color,
@@ -124,7 +124,7 @@ impl CommandPaletteViewModel {
         let selected_command = filtered_commands
             .get(state.command_palette.selected_index)
             .map(|cmd| SelectedCommandDetails {
-                description: cmd.description.clone(),
+                description: cmd.description().to_string(),
             });
 
         Self {

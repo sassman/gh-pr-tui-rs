@@ -874,6 +874,7 @@ dependencies = [
  "figlet-rs",
  "log",
  "ratatui",
+ "serde",
 ]
 
 [[package]]

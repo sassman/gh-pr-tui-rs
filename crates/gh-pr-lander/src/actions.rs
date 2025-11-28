@@ -27,7 +27,7 @@ pub enum Action {
     NavigateRight,    // l, right arrow
 
     /// ## Repository navigation actions
-    RepositoryNext,     // Switch to next repository
+    RepositoryNext, // Switch to next repository
     RepositoryPrevious, // Switch to previous repository
 
     /// ## Scroll actions
@@ -42,10 +42,19 @@ pub enum Action {
     DebugConsoleClear, // Clear debug console logs
     DebugConsoleLogAdded(OwnedLogRecord), // New log record added
 
+    /// ## Text input actions (generic, for any view with TEXT_INPUT capability)
+    TextInputChar(char), // Character typed into input field
+    TextInputBackspace, // Backspace pressed in input field
+    TextInputEscape,    // Escape pressed in input field (clear or close)
+    TextInputConfirm,   // Enter pressed in input field (confirm/execute)
+
     /// ## Command palette actions
-    CommandPaletteUpdateQuery(String), // Update search query
-    CommandPaletteExecute,             // Execute selected command
-    CommandPaletteClear,               // Clear query and reset
+    CommandPaletteChar(char), // Character typed into search field
+    CommandPaletteBackspace,    // Backspace pressed in search field
+    CommandPaletteClose,        // Close the command palette
+    CommandPaletteExecute,      // Execute selected command
+    CommandPaletteNavigateNext, // Navigate to next command
+    CommandPaletteNavigatePrev, // Navigate to previous command
 
     /// ## Repository management actions
     RepositoryAdd, // Show add repository dialog/popup
@@ -84,11 +93,16 @@ impl Clone for Action {
             Self::ScrollHalfPageUp => Self::ScrollHalfPageUp,
             Self::DebugConsoleClear => Self::DebugConsoleClear,
             Self::DebugConsoleLogAdded(record) => Self::DebugConsoleLogAdded(record.clone()),
-            Self::CommandPaletteUpdateQuery(query) => {
-                Self::CommandPaletteUpdateQuery(query.clone())
-            }
+            Self::TextInputChar(c) => Self::TextInputChar(*c),
+            Self::TextInputBackspace => Self::TextInputBackspace,
+            Self::TextInputEscape => Self::TextInputEscape,
+            Self::TextInputConfirm => Self::TextInputConfirm,
+            Self::CommandPaletteChar(c) => Self::CommandPaletteChar(*c),
+            Self::CommandPaletteBackspace => Self::CommandPaletteBackspace,
+            Self::CommandPaletteClose => Self::CommandPaletteClose,
             Self::CommandPaletteExecute => Self::CommandPaletteExecute,
-            Self::CommandPaletteClear => Self::CommandPaletteClear,
+            Self::CommandPaletteNavigateNext => Self::CommandPaletteNavigateNext,
+            Self::CommandPaletteNavigatePrev => Self::CommandPaletteNavigatePrev,
             Self::RepositoryAdd => Self::RepositoryAdd,
             Self::BootstrapStart => Self::BootstrapStart,
             Self::BootstrapEnd => Self::BootstrapEnd,
@@ -123,12 +137,16 @@ impl std::fmt::Debug for Action {
             Self::DebugConsoleLogAdded(record) => {
                 f.debug_tuple("DebugConsoleLogAdded").field(record).finish()
             }
-            Self::CommandPaletteUpdateQuery(query) => f
-                .debug_tuple("CommandPaletteUpdateQuery")
-                .field(query)
-                .finish(),
+            Self::TextInputChar(c) => f.debug_tuple("TextInputChar").field(c).finish(),
+            Self::TextInputBackspace => write!(f, "TextInputBackspace"),
+            Self::TextInputEscape => write!(f, "TextInputEscape"),
+            Self::TextInputConfirm => write!(f, "TextInputConfirm"),
+            Self::CommandPaletteChar(c) => f.debug_tuple("CommandPaletteChar").field(c).finish(),
+            Self::CommandPaletteBackspace => write!(f, "CommandPaletteBackspace"),
+            Self::CommandPaletteClose => write!(f, "CommandPaletteClose"),
             Self::CommandPaletteExecute => write!(f, "CommandPaletteExecute"),
-            Self::CommandPaletteClear => write!(f, "CommandPaletteClear"),
+            Self::CommandPaletteNavigateNext => write!(f, "CommandPaletteNavigateNext"),
+            Self::CommandPaletteNavigatePrev => write!(f, "CommandPaletteNavigatePrev"),
             Self::RepositoryAdd => write!(f, "RepositoryAdd"),
             Self::BootstrapStart => write!(f, "BootstrapStart"),
             Self::BootstrapEnd => write!(f, "BootstrapEnd"),

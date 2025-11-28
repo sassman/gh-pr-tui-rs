@@ -13,7 +13,7 @@ pub fn reduce(mut state: SplashState, action: &Action) -> SplashState {
         }
         Action::Tick if state.bootstrapping => {
             // Advance animation frame (16 frames total for 5x5 snake)
-            state.animation_frame = state.animation_frame + 1;
+            state.animation_frame += 1;
         }
         _ => {
             // Unhandled actions - no state change

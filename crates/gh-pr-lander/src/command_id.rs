@@ -1,0 +1,224 @@
+//! Command identifiers
+//!
+//! This module defines all command IDs as an enum for type-safe,
+//! memory-efficient command references that can be serialized/deserialized.
+
+use serde::{Deserialize, Serialize};
+
+/// Unique identifier for each command in the application.
+///
+/// Commands are the semantic actions users can trigger. Each command
+/// has a unique ID that can be referenced in keybindings and the command palette.
+///
+/// The enum is serialized as snake_case (e.g., `RepositoryAdd` -> `"repository_add"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommandId {
+    // === Repository management ===
+    /// Add a new repository to track
+    RepositoryAdd,
+    /// Switch to the next repository
+    RepositoryNext,
+    /// Switch to the previous repository
+    RepositoryPrevious,
+
+    // === Navigation ===
+    /// Navigate to the next item (down)
+    NavigateNext,
+    /// Navigate to the previous item (up)
+    NavigatePrevious,
+    /// Navigate left
+    NavigateLeft,
+    /// Navigate right
+    NavigateRight,
+
+    // === Scrolling ===
+    /// Scroll to the top (gg in vim)
+    ScrollToTop,
+    /// Scroll to the bottom (G in vim)
+    ScrollToBottom,
+    /// Scroll down one page
+    ScrollPageDown,
+    /// Scroll up one page
+    ScrollPageUp,
+    /// Scroll down half a page (Ctrl+d in vim)
+    ScrollHalfPageDown,
+    /// Scroll up half a page (Ctrl+u in vim)
+    ScrollHalfPageUp,
+
+    // === Debug ===
+    /// Toggle the debug console visibility
+    DebugToggleConsole,
+    /// Clear the debug console logs
+    DebugClearLogs,
+
+    // === Command palette ===
+    /// Open the command palette
+    CommandPaletteOpen,
+
+    // === General ===
+    /// Close the current view/panel
+    GlobalClose,
+    /// Quit the application
+    GlobalQuit,
+}
+
+impl CommandId {
+    /// Convert this command ID to an Action
+    ///
+    /// Some commands require context (like views) to create their action,
+    /// those are handled separately in the reducer.
+    pub fn to_action(self) -> crate::actions::Action {
+        use crate::actions::Action;
+        use crate::views::{CommandPaletteView, DebugConsoleView};
+
+        match self {
+            // Repository
+            Self::RepositoryAdd => Action::RepositoryAdd,
+            Self::RepositoryNext => Action::RepositoryNext,
+            Self::RepositoryPrevious => Action::RepositoryPrevious,
+
+            // Navigation
+            Self::NavigateNext => Action::NavigateNext,
+            Self::NavigatePrevious => Action::NavigatePrevious,
+            Self::NavigateLeft => Action::NavigateLeft,
+            Self::NavigateRight => Action::NavigateRight,
+
+            // Scrolling
+            Self::ScrollToTop => Action::ScrollToTop,
+            Self::ScrollToBottom => Action::ScrollToBottom,
+            Self::ScrollPageDown => Action::ScrollPageDown,
+            Self::ScrollPageUp => Action::ScrollPageUp,
+            Self::ScrollHalfPageDown => Action::ScrollHalfPageDown,
+            Self::ScrollHalfPageUp => Action::ScrollHalfPageUp,
+
+            // Debug
+            Self::DebugToggleConsole => Action::PushView(Box::new(DebugConsoleView::new())),
+            Self::DebugClearLogs => Action::DebugConsoleClear,
+
+            // Command palette
+            Self::CommandPaletteOpen => Action::PushView(Box::new(CommandPaletteView::new())),
+
+            // General
+            Self::GlobalClose => Action::GlobalClose,
+            Self::GlobalQuit => Action::GlobalQuit,
+        }
+    }
+
+    /// Get the default title for this command (used in command palette)
+    pub fn title(&self) -> &'static str {
+        match self {
+            // Repository
+            Self::RepositoryAdd => "Add repository",
+            Self::RepositoryNext => "Next repository",
+            Self::RepositoryPrevious => "Previous repository",
+
+            // Navigation
+            Self::NavigateNext => "Navigate down",
+            Self::NavigatePrevious => "Navigate up",
+            Self::NavigateLeft => "Navigate left",
+            Self::NavigateRight => "Navigate right",
+
+            // Scrolling
+            Self::ScrollToTop => "Scroll to top",
+            Self::ScrollToBottom => "Scroll to bottom",
+            Self::ScrollPageDown => "Page down",
+            Self::ScrollPageUp => "Page up",
+            Self::ScrollHalfPageDown => "Half page down",
+            Self::ScrollHalfPageUp => "Half page up",
+
+            // Debug
+            Self::DebugToggleConsole => "Toggle debug console",
+            Self::DebugClearLogs => "Clear debug logs",
+
+            // Command palette
+            Self::CommandPaletteOpen => "Open command palette",
+
+            // General
+            Self::GlobalClose => "Close",
+            Self::GlobalQuit => "Quit",
+        }
+    }
+
+    /// Get the default description for this command
+    pub fn description(&self) -> &'static str {
+        match self {
+            // Repository
+            Self::RepositoryAdd => "Add a new repository to track",
+            Self::RepositoryNext => "Switch to the next repository",
+            Self::RepositoryPrevious => "Switch to the previous repository",
+
+            // Navigation
+            Self::NavigateNext => "Move selection down",
+            Self::NavigatePrevious => "Move selection up",
+            Self::NavigateLeft => "Move selection or scroll left",
+            Self::NavigateRight => "Move selection or scroll right",
+
+            // Scrolling
+            Self::ScrollToTop => "Jump to the first item",
+            Self::ScrollToBottom => "Jump to the last item",
+            Self::ScrollPageDown => "Scroll down by one page",
+            Self::ScrollPageUp => "Scroll up by one page",
+            Self::ScrollHalfPageDown => "Scroll down by half a page",
+            Self::ScrollHalfPageUp => "Scroll up by half a page",
+
+            // Debug
+            Self::DebugToggleConsole => "Show or hide the debug console",
+            Self::DebugClearLogs => "Clear all debug console logs",
+
+            // Command palette
+            Self::CommandPaletteOpen => "Open the command palette to search and execute commands",
+
+            // General
+            Self::GlobalClose => "Close the current view or panel",
+            Self::GlobalQuit => "Exit the application",
+        }
+    }
+
+    /// Get the category for this command (used for grouping in command palette)
+    pub fn category(&self) -> &'static str {
+        match self {
+            Self::RepositoryAdd | Self::RepositoryNext | Self::RepositoryPrevious => "Repository",
+
+            Self::NavigateNext
+            | Self::NavigatePrevious
+            | Self::NavigateLeft
+            | Self::NavigateRight => "Navigation",
+
+            Self::ScrollToTop
+            | Self::ScrollToBottom
+            | Self::ScrollPageDown
+            | Self::ScrollPageUp
+            | Self::ScrollHalfPageDown
+            | Self::ScrollHalfPageUp => "Scroll",
+
+            Self::DebugToggleConsole | Self::DebugClearLogs => "Debug",
+
+            Self::CommandPaletteOpen => "Command Palette",
+
+            Self::GlobalClose | Self::GlobalQuit => "General",
+        }
+    }
+
+    /// Check if this command should appear in the command palette
+    pub fn show_in_palette(&self) -> bool {
+        match self {
+            // Navigation/scroll commands are typically not shown in palette
+            // (they're keyboard-driven)
+            Self::NavigateNext
+            | Self::NavigatePrevious
+            | Self::NavigateLeft
+            | Self::NavigateRight
+            | Self::ScrollToTop
+            | Self::ScrollToBottom
+            | Self::ScrollPageDown
+            | Self::ScrollPageUp
+            | Self::ScrollHalfPageDown
+            | Self::ScrollHalfPageUp
+            | Self::CommandPaletteOpen => false,
+
+            // All others are shown
+            _ => true,
+        }
+    }
+}
