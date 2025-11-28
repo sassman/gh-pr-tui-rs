@@ -9,6 +9,7 @@
 use crate::actions::Action;
 use crate::dispatcher::Dispatcher;
 use crate::middleware::Middleware;
+use crate::shortcuts::{self, PendingKeyPress};
 use crate::state::AppState;
 use crate::views::{CommandPaletteView, DebugConsoleView, ViewId};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -25,10 +26,12 @@ use std::time::{Duration, Instant};
 /// - **Main View**: j/k navigate items
 /// - **Debug Console**: j/k scroll logs, gg/G jump to first/last
 pub struct KeyboardMiddleware {
-    /// Last key pressed for multi-key sequences
+    /// Last key pressed for multi-key sequences (vim-style like "gg")
     last_key: Option<(char, Instant)>,
     /// Timeout for multi-key sequences (500ms)
     sequence_timeout: Duration,
+    /// Pending key for two-key shortcut combinations (like "p → a")
+    pending_shortcut_key: Option<PendingKeyPress>,
 }
 
 impl KeyboardMiddleware {
@@ -36,6 +39,7 @@ impl KeyboardMiddleware {
         Self {
             last_key: None,
             sequence_timeout: Duration::from_millis(500),
+            pending_shortcut_key: None,
         }
     }
 
@@ -88,6 +92,35 @@ impl KeyboardMiddleware {
 
         // Get the active view ID to determine context
         let active_view_id = state.active_view().view_id();
+
+        // Skip shortcut processing for views that need text input (like command palette)
+        let process_shortcuts = active_view_id != ViewId::CommandPalette;
+
+        // Try to match shortcuts first (for non-text-input views)
+        if process_shortcuts {
+            let (action, clear_pending, new_pending) =
+                shortcuts::find_action_for_key(&key, self.pending_shortcut_key.as_ref());
+
+            // Update pending key state
+            if clear_pending {
+                self.pending_shortcut_key = None;
+            }
+            if let Some(pending_char) = new_pending {
+                self.pending_shortcut_key = Some(PendingKeyPress {
+                    key: pending_char,
+                    timestamp: Instant::now(),
+                });
+                // Don't process further - waiting for second key
+                return false;
+            }
+
+            // If we got a valid action from shortcuts, dispatch it
+            if !matches!(action, Action::None) {
+                log::debug!("Shortcut matched: {:?}", action);
+                dispatcher.dispatch(action);
+                return false;
+            }
+        }
 
         // Handle character keys (vim-style)
         if let KeyCode::Char(c) = key.code {

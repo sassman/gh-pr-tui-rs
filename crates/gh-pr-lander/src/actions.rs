@@ -47,6 +47,9 @@ pub enum Action {
     CommandPaletteExecute,             // Execute selected command
     CommandPaletteClear,               // Clear query and reset
 
+    /// ## Repository management actions
+    RepositoryAdd, // Show add repository dialog/popup
+
     /// ## Bootstrap actions
     BootstrapStart,
     BootstrapEnd,
@@ -86,6 +89,7 @@ impl Clone for Action {
             }
             Self::CommandPaletteExecute => Self::CommandPaletteExecute,
             Self::CommandPaletteClear => Self::CommandPaletteClear,
+            Self::RepositoryAdd => Self::RepositoryAdd,
             Self::BootstrapStart => Self::BootstrapStart,
             Self::BootstrapEnd => Self::BootstrapEnd,
             Self::Tick => Self::Tick,
@@ -125,6 +129,7 @@ impl std::fmt::Debug for Action {
                 .finish(),
             Self::CommandPaletteExecute => write!(f, "CommandPaletteExecute"),
             Self::CommandPaletteClear => write!(f, "CommandPaletteClear"),
+            Self::RepositoryAdd => write!(f, "RepositoryAdd"),
             Self::BootstrapStart => write!(f, "BootstrapStart"),
             Self::BootstrapEnd => write!(f, "BootstrapEnd"),
             Self::Tick => write!(f, "Tick"),

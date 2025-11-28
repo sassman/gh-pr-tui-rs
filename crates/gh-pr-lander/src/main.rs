@@ -16,6 +16,7 @@ mod dispatcher;
 mod logger;
 mod middleware;
 mod reducers;
+mod shortcuts;
 mod state;
 mod store;
 mod theme;

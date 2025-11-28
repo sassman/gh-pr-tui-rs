@@ -66,6 +66,14 @@ pub fn get_all_commands() -> Vec<Command> {
             shortcut_hint: Some("Esc / q".to_string()),
             action: Action::GlobalClose,
         },
+        // Repository management
+        Command {
+            title: "Add repository".to_string(),
+            description: "Add a new repository to track".to_string(),
+            category: "Repository".to_string(),
+            shortcut_hint: Some("p → a".to_string()),
+            action: Action::RepositoryAdd,
+        },
     ]
 }
 

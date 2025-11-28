@@ -88,7 +88,9 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
             if let Some(cmd) = filtered.get(state.command_palette.selected_index) {
                 log::debug!("Executing command: {}", cmd.title);
                 // Close the command palette first
-                if state.view_stack.last().map(|v| v.view_id()) == Some(crate::views::ViewId::CommandPalette) {
+                if state.view_stack.last().map(|v| v.view_id())
+                    == Some(crate::views::ViewId::CommandPalette)
+                {
                     state.view_stack.pop();
                 }
                 // Reset command palette state

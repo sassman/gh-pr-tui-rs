@@ -194,5 +194,14 @@ impl Widget for ModernTabs<'_> {
             x += tab_width + 1; // Gap between tabs
         }
 
+        // Render "add repository" hint tab at the end
+        let hint_text = " p→a ";
+        let hint_width = hint_text.len() as u16;
+        if x + hint_width <= area.x + area.width {
+            let hint_style = ratatui::style::Style::default()
+                .fg(self.theme.text_muted)
+                .add_modifier(ratatui::style::Modifier::DIM);
+            buf.set_string(x, area.y, hint_text, hint_style);
+        }
     }
 }
