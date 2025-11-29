@@ -77,8 +77,8 @@ pub fn reduce(mut state: AddRepoFormState, action: &Action) -> AddRepoFormState 
             state.focused_field = state.focused_field.prev();
         }
 
-        // AddRepoConfirm and AddRepoClose are handled in app_reducer
-        // because they need to modify the view stack and main_view state
+        // AddRepoConfirm and AddRepoClose: form reset handled in app_reducer,
+        // view management handled in add_repository middleware
         _ => {}
     }
 

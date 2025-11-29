@@ -1,7 +1,8 @@
 use crate::actions::Action;
 use crate::dispatcher::Dispatcher;
 use crate::middleware::Middleware;
-use crate::state::AppState;
+use crate::state::{AppState, Repository};
+use gh_pr_config::load_recent_repositories;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +24,16 @@ impl Middleware for BootstrapMiddleware {
     fn handle(&mut self, action: &Action, _state: &AppState, dispatcher: &Dispatcher) -> bool {
         match action {
             Action::BootstrapStart => {
+                // Load recent repositories from config file
+                let recent_repos = load_recent_repositories();
+                if !recent_repos.is_empty() {
+                    let repositories: Vec<Repository> = recent_repos
+                        .into_iter()
+                        .map(|r| Repository::new(r.org, r.repo, r.branch))
+                        .collect();
+                    dispatcher.dispatch(Action::RepositoryAddBulk(repositories));
+                }
+
                 // Start tick thread if not already started
                 let mut started = self.tick_thread_started.lock().unwrap();
                 if !*started {

@@ -1,17 +1,59 @@
+use crate::command_id::CommandId;
+use crate::keybindings::Keymap;
 use crate::logger::OwnedLogRecord;
 use crate::state::DebugConsoleState;
 use crate::theme::Theme;
 use ratatui::style::Stylize;
 use ratatui::text::{Line, Span};
 
+/// Pre-computed footer hints for keyboard shortcuts
+#[derive(Debug, Clone)]
+pub struct DebugConsoleFooterHints {
+    /// Combined scroll hint (e.g., "j/↓/k/↑")
+    pub scroll: String,
+    /// Combined top/bottom hint (e.g., "gg/G")
+    pub top_bottom: String,
+    /// Close hint (e.g., "`")
+    pub close: String,
+}
+
 /// View model for debug console - handles presentation logic
 pub struct DebugConsoleViewModel<'a> {
     state: &'a DebugConsoleState,
+    /// Pre-computed footer hints
+    pub footer_hints: DebugConsoleFooterHints,
 }
 
 impl<'a> DebugConsoleViewModel<'a> {
-    pub fn new(state: &'a DebugConsoleState) -> Self {
-        Self { state }
+    pub fn new(state: &'a DebugConsoleState, keymap: &Keymap) -> Self {
+        let footer_hints = DebugConsoleFooterHints {
+            scroll: format!(
+                "{}/{}",
+                keymap
+                    .compact_hint_for_command(CommandId::NavigateNext)
+                    .unwrap_or_else(|| "j/↓".to_string()),
+                keymap
+                    .compact_hint_for_command(CommandId::NavigatePrevious)
+                    .unwrap_or_else(|| "k/↑".to_string()),
+            ),
+            top_bottom: format!(
+                "{}/{}",
+                keymap
+                    .compact_hint_for_command(CommandId::ScrollToTop)
+                    .unwrap_or_else(|| "gg".to_string()),
+                keymap
+                    .compact_hint_for_command(CommandId::ScrollToBottom)
+                    .unwrap_or_else(|| "G".to_string()),
+            ),
+            close: keymap
+                .compact_hint_for_command(CommandId::DebugToggleConsole)
+                .unwrap_or_else(|| "`".to_string()),
+        };
+
+        Self {
+            state,
+            footer_hints,
+        }
     }
 
     /// Get the visible logs based on scroll offset and available height

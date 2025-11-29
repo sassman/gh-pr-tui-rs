@@ -27,4 +27,5 @@ bitflags = "2.6"
 # Local crates
 gh-actions-log-parser = { path = "../gh-actions-log-parser" }
 gh-api-cache = { path = "../gh-api-cache" }
+gh-pr-config = { path = "../gh-pr-config" }
 gh-pr-tui-command-palette = { path = "../gh-pr-tui-command-palette" }

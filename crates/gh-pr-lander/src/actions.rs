@@ -1,6 +1,6 @@
 use ratatui::crossterm::event::KeyEvent;
 
-use crate::{logger::OwnedLogRecord, views::View};
+use crate::{logger::OwnedLogRecord, state::Repository, views::View};
 
 /// Actions represent all possible state changes in the application.
 /// Actions are prefixed by scope to indicate which part of the app they affect.
@@ -59,7 +59,8 @@ pub enum Action {
     CommandPaletteNavigatePrev, // Navigate to previous command
 
     /// ## Repository management actions
-    RepositoryAdd, // Show add repository dialog/popup
+    RepositoryAdd,                      // Show add repository dialog/popup
+    RepositoryAddBulk(Vec<Repository>), // Add multiple repositories at once (from config)
 
     /// ## Add repository form actions
     AddRepoChar(char),      // Character typed into current field
@@ -117,6 +118,7 @@ impl Clone for Action {
             Self::CommandPaletteNavigateNext => Self::CommandPaletteNavigateNext,
             Self::CommandPaletteNavigatePrev => Self::CommandPaletteNavigatePrev,
             Self::RepositoryAdd => Self::RepositoryAdd,
+            Self::RepositoryAddBulk(repos) => Self::RepositoryAddBulk(repos.clone()),
             Self::AddRepoChar(c) => Self::AddRepoChar(*c),
             Self::AddRepoBackspace => Self::AddRepoBackspace,
             Self::AddRepoClearField => Self::AddRepoClearField,
@@ -170,6 +172,9 @@ impl std::fmt::Debug for Action {
             Self::CommandPaletteNavigateNext => write!(f, "CommandPaletteNavigateNext"),
             Self::CommandPaletteNavigatePrev => write!(f, "CommandPaletteNavigatePrev"),
             Self::RepositoryAdd => write!(f, "RepositoryAdd"),
+            Self::RepositoryAddBulk(repos) => {
+                write!(f, "RepositoryAddBulk({} repos)", repos.len())
+            }
             Self::AddRepoChar(c) => f.debug_tuple("AddRepoChar").field(c).finish(),
             Self::AddRepoBackspace => write!(f, "AddRepoBackspace"),
             Self::AddRepoClearField => write!(f, "AddRepoClearField"),

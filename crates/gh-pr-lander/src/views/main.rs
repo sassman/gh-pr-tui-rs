@@ -1,5 +1,5 @@
 use crate::capabilities::PanelCapabilities;
-use crate::state::AppState;
+use crate::state::{AppState, Repository};
 use crate::theme::Theme;
 use crate::views::View;
 use ratatui::{
@@ -54,8 +54,13 @@ fn render(state: &AppState, area: Rect, f: &mut Frame) {
         ])
         .split(area);
 
-    // Render modern-style repository tabs
-    let tab_titles = vec!["Repository 1", "Repository 2"];
+    // Generate tab titles from repositories: "org/repo@branch"
+    let tab_titles: Vec<String> = state
+        .main_view
+        .repositories
+        .iter()
+        .map(|repo| format!("{}/{}@{}", repo.org, repo.repo, repo.branch))
+        .collect();
     let tabs_widget = ModernTabs::new(tab_titles, state.main_view.selected_repository, theme);
     f.render_widget(tabs_widget, chunks[0]);
 
@@ -66,10 +71,14 @@ fn render(state: &AppState, area: Rect, f: &mut Frame) {
         .border_style(ratatui::style::Style::default().fg(theme.accent_primary));
 
     // Render repository content based on selected repository
-    let content = match state.main_view.selected_repository {
-        0 => render_repo1_content(theme),
-        1 => render_repo2_content(theme),
-        _ => vec![Line::from("Invalid repository")],
+    let content = if let Some(repo) = state
+        .main_view
+        .repositories
+        .get(state.main_view.selected_repository)
+    {
+        render_repo_content(repo, theme)
+    } else {
+        render_no_repos_content(theme)
     };
 
     let paragraph = Paragraph::new(content)
@@ -80,17 +89,15 @@ fn render(state: &AppState, area: Rect, f: &mut Frame) {
     f.render_widget(paragraph, chunks[1]);
 }
 
-/// Render content for Repository 1
-fn render_repo1_content(theme: &crate::theme::Theme) -> Vec<Line<'static>> {
+/// Render content for a repository
+fn render_repo_content(repo: &Repository, theme: &crate::theme::Theme) -> Vec<Line<'static>> {
+    let repo_name = format!("{}/{}@{}", repo.org, repo.repo, repo.branch);
     vec![
         Line::from(""),
-        Line::from(Span::styled(
-            "Welcome to Repository 1!",
-            theme.success().bold(),
-        )),
+        Line::from(Span::styled(repo_name, theme.success().bold())),
         Line::from(""),
         Line::from(Span::styled(
-            "This is placeholder content for the first repository",
+            "Repository content will be displayed here",
             theme.text_secondary(),
         )),
         Line::from(""),
@@ -101,7 +108,11 @@ fn render_repo1_content(theme: &crate::theme::Theme) -> Vec<Line<'static>> {
         ]),
         Line::from(vec![
             Span::styled("  `              ", theme.key_hint()),
-            Span::styled("- Toggle debug console", theme.key_description()),
+            Span::styled("- Show debug console", theme.key_description()),
+        ]),
+        Line::from(vec![
+            Span::styled("  Ctrl + p       ", theme.key_hint()),
+            Span::styled("- Show Command Palette", theme.key_description()),
         ]),
         Line::from(vec![
             Span::styled("  q or Esc       ", theme.key_hint()),
@@ -110,21 +121,20 @@ fn render_repo1_content(theme: &crate::theme::Theme) -> Vec<Line<'static>> {
     ]
 }
 
-/// Render content for Repository 2
-fn render_repo2_content(theme: &crate::theme::Theme) -> Vec<Line<'static>> {
+/// Render content when no repositories are configured
+fn render_no_repos_content(theme: &crate::theme::Theme) -> Vec<Line<'static>> {
     vec![
         Line::from(""),
         Line::from(Span::styled(
-            "Welcome to Repository 2!",
-            theme.success().bold(),
+            "No Repositories",
+            theme.text_secondary().bold(),
         )),
         Line::from(""),
         Line::from(Span::styled(
-            "This is placeholder content for the second repository",
-            theme.text_secondary(),
+            "Press  p → a  to add your first repository",
+            theme.muted(),
         )),
         Line::from(""),
-        Line::from("More content coming soon..."),
     ]
 }
 
@@ -132,13 +142,13 @@ fn render_repo2_content(theme: &crate::theme::Theme) -> Vec<Line<'static>> {
 /// Uses background colors instead of borders - active tab has prominent color,
 /// inactive tabs are subtle. Content frame matches selected tab's color.
 struct ModernTabs<'a> {
-    titles: Vec<&'a str>,
+    titles: Vec<String>,
     selected: usize,
     theme: &'a Theme,
 }
 
 impl<'a> ModernTabs<'a> {
-    fn new(titles: Vec<&'a str>, selected: usize, theme: &'a Theme) -> Self {
+    fn new(titles: Vec<String>, selected: usize, theme: &'a Theme) -> Self {
         Self {
             titles,
             selected,
@@ -194,7 +204,7 @@ impl Widget for ModernTabs<'_> {
         }
 
         // Render "add repository" hint tab at the end
-        let hint_text = " p→a ";
+        let hint_text = " p → a ";
         let hint_width = hint_text.len() as u16;
         if x + hint_width <= area.x + area.width {
             let hint_style = ratatui::style::Style::default()

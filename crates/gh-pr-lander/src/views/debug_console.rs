@@ -1,4 +1,5 @@
 use crate::capabilities::{PanelCapabilities, PanelCapabilityProvider};
+use crate::keybindings::Keymap;
 use crate::state::AppState;
 use crate::state::DebugConsoleState;
 use crate::theme::Theme;
@@ -29,7 +30,7 @@ impl View for DebugConsoleView {
 
     fn render(&self, state: &AppState, area: Rect, f: &mut Frame) {
         // Render debug console - this is a floating view so it renders on top
-        render(&state.debug_console, &state.theme, area, f);
+        render(&state.debug_console, &state.theme, &state.keymap, area, f);
     }
 
     fn capabilities(&self, state: &AppState) -> PanelCapabilities {
@@ -43,7 +44,7 @@ impl View for DebugConsoleView {
 }
 
 /// Render the debug console (Quake-style drop-down)
-fn render(state: &DebugConsoleState, theme: &Theme, area: Rect, f: &mut Frame) {
+fn render(state: &DebugConsoleState, theme: &Theme, keymap: &Keymap, area: Rect, f: &mut Frame) {
     if !state.visible {
         return; // Don't render if not visible
     }
@@ -68,16 +69,16 @@ fn render(state: &DebugConsoleState, theme: &Theme, area: Rect, f: &mut Frame) {
     // Clear the console area (removes the dim effect for the console itself)
     f.render_widget(Clear, console_area);
 
-    // Create view model
-    let view_model = DebugConsoleViewModel::new(state);
+    // Create view model with pre-computed hints
+    let view_model = DebugConsoleViewModel::new(state, keymap);
 
-    // Build footer hint for bottom border
+    // Build footer hint for bottom border using pre-computed hints from view model
     let footer_hint = Line::from(vec![
-        Span::styled(" j/k", theme.key_hint().bold()),
+        Span::styled(format!(" {}", view_model.footer_hints.scroll), theme.key_hint().bold()),
         Span::styled(" scroll  ", theme.muted()),
-        Span::styled("gg/G", theme.key_hint().bold()),
+        Span::styled(&view_model.footer_hints.top_bottom, theme.key_hint().bold()),
         Span::styled(" top/bottom  ", theme.muted()),
-        Span::styled("`", theme.key_hint().bold()),
+        Span::styled(&view_model.footer_hints.close, theme.key_hint().bold()),
         Span::styled(" close ", theme.muted()),
     ]);
 

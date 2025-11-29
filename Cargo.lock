@@ -866,12 +866,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "gh-pr-config"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gh-pr-lander"
 version = "0.1.0"
 dependencies = [
  "bitflags",
  "chrono",
  "figlet-rs",
+ "gh-pr-config",
  "log",
  "ratatui",
  "serde",
@@ -889,6 +900,7 @@ dependencies = [
  "env_logger",
  "gh-actions-log-parser",
  "gh-api-cache",
+ "gh-pr-config",
  "gh-pr-tui-command-palette",
  "log",
  "octocrab",

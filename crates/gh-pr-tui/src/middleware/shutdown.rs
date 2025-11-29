@@ -64,7 +64,7 @@ impl ShutdownMiddleware {
 
     /// Save recent repositories to file
     fn store_recent_repos(&self, repos: &[crate::state::Repo]) -> anyhow::Result<()> {
-        let file = crate::infra::files::create_recent_repositories_file()?;
+        let file = gh_pr_config::create_recent_repositories_file()?;
         serde_json::to_writer_pretty(file, repos)?;
         log::debug!("Saved {} repositories", repos.len());
         Ok(())
@@ -83,7 +83,7 @@ impl ShutdownMiddleware {
             selected_repo: selected_repo.clone(),
         };
 
-        let file = crate::infra::files::create_session_file()?;
+        let file = gh_pr_config::create_session_file()?;
         serde_json::to_writer_pretty(file, &state)?;
         log::debug!("Saved session state");
         Ok(())

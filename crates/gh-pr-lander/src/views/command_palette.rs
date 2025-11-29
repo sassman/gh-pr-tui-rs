@@ -75,13 +75,16 @@ fn render(state: &AppState, area: Rect, f: &mut Frame) {
     // Render popup background
     f.render_widget(Block::default().style(theme.panel_background()), popup_area);
 
-    // Build footer hint for bottom border
+    // Build footer hint for bottom border using pre-computed hints from view model
     let footer_hint = Line::from(vec![
         Span::styled(" Enter", theme.key_hint().bold()),
         Span::styled(" execute  ", theme.muted()),
-        Span::styled("↑/↓", theme.key_hint().bold()),
+        Span::styled(
+            format!("{}/{}", vm.footer_hints.navigate_up, vm.footer_hints.navigate_down),
+            theme.key_hint().bold(),
+        ),
         Span::styled(" navigate  ", theme.muted()),
-        Span::styled("Esc", theme.key_hint().bold()),
+        Span::styled(&vm.footer_hints.close, theme.key_hint().bold()),
         Span::styled(" close ", theme.muted()),
     ]);
 

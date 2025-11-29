@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+gh-pr-config = { path = "../gh-pr-config" }
 ratatui = { version = "0.29", features = ["crossterm"] }
 log = "0.4"
 bitflags = "2.6"

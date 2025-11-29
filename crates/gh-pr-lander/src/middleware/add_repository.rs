@@ -1,13 +1,15 @@
 //! Add Repository Middleware
 //!
-//! Translates generic TextInput actions to AddRepo-specific actions
-//! when the add repository view is active.
+//! Handles view management for the add repository form:
+//! - Opening the form view on RepositoryAdd
+//! - Closing the form view on AddRepoClose/AddRepoConfirm
+//! - Translating generic TextInput actions to AddRepo-specific actions
 
 use crate::actions::Action;
 use crate::dispatcher::Dispatcher;
 use crate::middleware::Middleware;
 use crate::state::AppState;
-use crate::views::ViewId;
+use crate::views::{AddRepositoryView, ViewId};
 
 /// Middleware that handles add repository form interactions
 pub struct AddRepositoryMiddleware;
@@ -31,12 +33,38 @@ impl Default for AddRepositoryMiddleware {
 
 impl Middleware for AddRepositoryMiddleware {
     fn handle(&mut self, action: &Action, state: &AppState, dispatcher: &Dispatcher) -> bool {
-        // Only process when add repository view is active
-        if !Self::is_active(state) {
-            return true; // Pass through
-        }
-
         match action {
+            // Handle opening the add repository view
+            Action::RepositoryAdd => {
+                log::debug!("Opening add repository form");
+                // Push the view - the reducer will reset the form state
+                dispatcher.dispatch(Action::PushView(Box::new(AddRepositoryView::new())));
+                true // Let action pass through to reducer to reset form
+            }
+
+            // Handle closing the add repository view
+            Action::AddRepoClose => {
+                if Self::is_active(state) && state.view_stack.len() > 1 {
+                    log::debug!("Closing add repository form");
+                    dispatcher.dispatch(Action::GlobalClose);
+                }
+                true // Let action pass through to reducer to reset form
+            }
+
+            // Handle confirm - close view if form is valid
+            Action::AddRepoConfirm => {
+                if Self::is_active(state) && state.add_repo_form.is_valid() {
+                    // Close the view after successful add
+                    if state.view_stack.len() > 1 {
+                        dispatcher.dispatch(Action::GlobalClose);
+                    }
+                }
+                true // Let action pass through to reducer to add repository
+            }
+
+            // The rest only applies when the add repository view is active
+            _ if !Self::is_active(state) => true,
+
             // Translate generic TextInput actions to AddRepo-specific actions
             Action::TextInputChar(c) => {
                 dispatcher.dispatch(Action::AddRepoChar(*c));

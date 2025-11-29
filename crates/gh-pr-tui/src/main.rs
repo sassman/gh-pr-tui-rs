@@ -33,7 +33,6 @@ mod config;
 mod panel_capabilities;
 // Effect module removed - all side effects now in middleware
 mod gh;
-mod infra;
 mod log;
 mod log_capture;
 mod merge_bot;
@@ -428,7 +427,7 @@ impl App {
             ),
         );
 
-        let cache_file = crate::infra::files::get_cache_file_path()
+        let cache_file = gh_pr_config::get_cache_file_path()
             .unwrap_or_else(|_| std::env::temp_dir().join("gh-api-cache.json"));
 
         // Create cache and store
@@ -931,7 +930,7 @@ fn handle_key_event(key: KeyEvent, ctx: &KeyEventContext) -> Action {
 
 /// loading recent repositories from a local config file, that is just json file
 fn loading_recent_repos() -> Result<Vec<Repo>> {
-    let repos = if let Ok(recent_repos) = infra::files::open_recent_repositories_file() {
+    let repos = if let Ok(recent_repos) = gh_pr_config::open_recent_repositories_file() {
         let reader = BufReader::new(recent_repos);
         serde_json::from_reader(reader).context("Failed to parse recent repositories from file")?
     } else {
@@ -950,7 +949,7 @@ fn loading_recent_repos() -> Result<Vec<Repo>> {
 
 /// Storing recent repositories to a local json config file
 fn store_recent_repos(repos: &[Repo]) -> Result<()> {
-    let file = infra::files::create_recent_repositories_file()?;
+    let file = gh_pr_config::create_recent_repositories_file()?;
     serde_json::to_writer_pretty(file, &repos)
         .context("Failed to write recent repositories to file")?;
 
@@ -960,7 +959,7 @@ fn store_recent_repos(repos: &[Repo]) -> Result<()> {
 }
 
 fn store_persisted_state(state: &PersistedState) -> Result<()> {
-    let file = infra::files::create_session_file()?;
+    let file = gh_pr_config::create_session_file()?;
     serde_json::to_writer_pretty(file, state).context("Failed to write persisted state to file")?;
 
     debug!("Stored persisted state: {:?}", state);
@@ -969,7 +968,7 @@ fn store_persisted_state(state: &PersistedState) -> Result<()> {
 }
 
 fn load_persisted_state() -> Result<PersistedState> {
-    let file = infra::files::open_session_file()?;
+    let file = gh_pr_config::open_session_file()?;
     let reader = BufReader::new(file);
     let state: PersistedState =
         serde_json::from_reader(reader).context("Failed to parse persisted state from file")?;

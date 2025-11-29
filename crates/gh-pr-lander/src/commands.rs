@@ -68,11 +68,14 @@ fn palette_command_ids() -> Vec<CommandId> {
 }
 
 /// Get all commands with shortcut hints populated from the keymap
+///
+/// Uses `compact_hint_for_command` to show all keybindings for a command
+/// (e.g., "q/Esc" for GlobalClose instead of just "q")
 pub fn get_palette_commands_with_hints(keymap: &Keymap) -> Vec<Command> {
     palette_command_ids()
         .into_iter()
         .map(|id| {
-            if let Some(hint) = keymap.hint_for_command(id) {
+            if let Some(hint) = keymap.compact_hint_for_command(id) {
                 Command::with_shortcut(id, hint)
             } else {
                 Command::new(id)

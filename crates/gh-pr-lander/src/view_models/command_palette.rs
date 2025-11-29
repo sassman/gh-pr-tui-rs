@@ -3,6 +3,7 @@
 //! Pre-computes all display data for the command palette view, separating
 //! data preparation from rendering logic.
 
+use crate::command_id::CommandId;
 use crate::commands::{filter_commands, get_palette_commands_with_hints};
 use crate::state::AppState;
 use ratatui::style::Color;
@@ -22,6 +23,19 @@ pub struct CommandPaletteViewModel {
     pub selected_command: Option<SelectedCommandDetails>,
     /// Maximum category width for column sizing
     pub max_category_width: u16,
+    /// Footer hints for navigation
+    pub footer_hints: FooterHints,
+}
+
+/// Pre-computed footer hints for keyboard shortcuts
+#[derive(Debug, Clone)]
+pub struct FooterHints {
+    /// Hint for navigate up (e.g., "k/↑")
+    pub navigate_up: String,
+    /// Hint for navigate down (e.g., "j/↓")
+    pub navigate_down: String,
+    /// Hint for close (e.g., "q/Esc")
+    pub close: String,
 }
 
 /// A single row in the command list
@@ -127,6 +141,23 @@ impl CommandPaletteViewModel {
                 description: cmd.description().to_string(),
             });
 
+        // Build footer hints from keymap
+        let footer_hints = FooterHints {
+            navigate_up: state
+                .keymap
+                .compact_hint_for_command(CommandId::NavigatePrevious)
+                .unwrap_or_else(|| "↑".to_string()),
+            navigate_down: state
+                .keymap
+                .compact_hint_for_command(CommandId::NavigateNext)
+                .unwrap_or_else(|| "↓".to_string()),
+            close: state
+                .keymap
+                .hint_for_command(CommandId::GlobalClose)
+                .unwrap_or("Esc")
+                .to_string(),
+        };
+
         Self {
             total_commands,
             input_text,
@@ -134,6 +165,7 @@ impl CommandPaletteViewModel {
             visible_rows,
             selected_command,
             max_category_width,
+            footer_hints,
         }
     }
 }

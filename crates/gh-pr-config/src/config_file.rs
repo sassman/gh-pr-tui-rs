@@ -17,11 +17,11 @@ pub fn load_config_file() -> Option<String> {
     }
 
     // Try home directory
-    if let Some(home_config) = get_home_config_path()
-        && let Ok(content) = std::fs::read_to_string(&home_config)
-    {
-        log::debug!("Loaded config from {}", home_config.display());
-        return Some(content);
+    if let Some(home_config) = get_home_config_path() {
+        if let Ok(content) = std::fs::read_to_string(&home_config) {
+            log::debug!("Loaded config from {}", home_config.display());
+            return Some(content);
+        }
     }
 
     None

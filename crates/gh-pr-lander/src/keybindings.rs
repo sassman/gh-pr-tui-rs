@@ -237,12 +237,46 @@ impl Keymap {
         self.bindings.iter().map(|(b, _)| b)
     }
 
-    /// Find the hint for a specific command
+    /// Find the hint for a specific command (returns first match)
     pub fn hint_for_command(&self, command: CommandId) -> Option<&str> {
         self.bindings
             .iter()
             .find(|(b, _)| b.command == command)
             .map(|(b, _)| b.hint.as_str())
+    }
+
+    /// Find all hints for a specific command
+    pub fn hints_for_command(&self, command: CommandId) -> Vec<&str> {
+        self.bindings
+            .iter()
+            .filter(|(b, _)| b.command == command)
+            .map(|(b, _)| b.hint.as_str())
+            .collect()
+    }
+
+    /// Get a compact hint string for a command (e.g., "j/↓" for NavigateNext)
+    /// Deduplicates hints and joins with "/"
+    pub fn compact_hint_for_command(&self, command: CommandId) -> Option<String> {
+        let hints: Vec<&str> = self
+            .bindings
+            .iter()
+            .filter(|(b, _)| b.command == command)
+            .map(|(b, _)| b.hint.as_str())
+            .collect();
+
+        if hints.is_empty() {
+            return None;
+        }
+
+        // Deduplicate (e.g., backtab and shift+tab both have "Shift+Tab" hint)
+        let mut unique_hints: Vec<&str> = Vec::new();
+        for hint in hints {
+            if !unique_hints.contains(&hint) {
+                unique_hints.push(hint);
+            }
+        }
+
+        Some(unique_hints.join("/"))
     }
 }
 
@@ -284,4 +318,114 @@ pub fn default_keymap() -> Keymap {
     ];
 
     Keymap::new(bindings)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_keymap() -> Keymap {
+        use CommandId::*;
+        Keymap::new(vec![
+            KeyBinding::new("j", "j", NavigateNext),
+            KeyBinding::new("down", "↓", NavigateNext),
+            KeyBinding::new("k", "k", NavigatePrevious),
+            KeyBinding::new("up", "↑", NavigatePrevious),
+            KeyBinding::new("shift+tab", "Shift+Tab", RepositoryPrevious),
+            KeyBinding::new("backtab", "Shift+Tab", RepositoryPrevious), // Duplicate hint
+            KeyBinding::new("q", "q", GlobalClose),
+            KeyBinding::new("esc", "Esc", GlobalClose),
+            KeyBinding::new("`", "`", DebugToggleConsole),
+        ])
+    }
+
+    #[test]
+    fn test_hint_for_command_returns_first_match() {
+        let keymap = test_keymap();
+
+        // Should return first hint for NavigateNext
+        assert_eq!(keymap.hint_for_command(CommandId::NavigateNext), Some("j"));
+
+        // Should return first hint for GlobalClose
+        assert_eq!(keymap.hint_for_command(CommandId::GlobalClose), Some("q"));
+    }
+
+    #[test]
+    fn test_hint_for_command_returns_none_for_unmapped() {
+        let keymap = test_keymap();
+
+        // CommandPaletteOpen is not in test keymap
+        assert_eq!(keymap.hint_for_command(CommandId::CommandPaletteOpen), None);
+    }
+
+    #[test]
+    fn test_hints_for_command_returns_all_matches() {
+        let keymap = test_keymap();
+
+        // NavigateNext has two bindings
+        let hints = keymap.hints_for_command(CommandId::NavigateNext);
+        assert_eq!(hints, vec!["j", "↓"]);
+
+        // GlobalClose has two bindings
+        let hints = keymap.hints_for_command(CommandId::GlobalClose);
+        assert_eq!(hints, vec!["q", "Esc"]);
+    }
+
+    #[test]
+    fn test_hints_for_command_returns_empty_for_unmapped() {
+        let keymap = test_keymap();
+
+        let hints = keymap.hints_for_command(CommandId::CommandPaletteOpen);
+        assert!(hints.is_empty());
+    }
+
+    #[test]
+    fn test_compact_hint_joins_with_slash() {
+        let keymap = test_keymap();
+
+        // NavigateNext: "j" and "↓" -> "j/↓"
+        assert_eq!(
+            keymap.compact_hint_for_command(CommandId::NavigateNext),
+            Some("j/↓".to_string())
+        );
+
+        // NavigatePrevious: "k" and "↑" -> "k/↑"
+        assert_eq!(
+            keymap.compact_hint_for_command(CommandId::NavigatePrevious),
+            Some("k/↑".to_string())
+        );
+    }
+
+    #[test]
+    fn test_compact_hint_deduplicates() {
+        let keymap = test_keymap();
+
+        // RepositoryPrevious has two bindings but both have "Shift+Tab" hint
+        // Should deduplicate to just "Shift+Tab"
+        assert_eq!(
+            keymap.compact_hint_for_command(CommandId::RepositoryPrevious),
+            Some("Shift+Tab".to_string())
+        );
+    }
+
+    #[test]
+    fn test_compact_hint_returns_none_for_unmapped() {
+        let keymap = test_keymap();
+
+        assert_eq!(
+            keymap.compact_hint_for_command(CommandId::CommandPaletteOpen),
+            None
+        );
+    }
+
+    #[test]
+    fn test_compact_hint_single_binding() {
+        let keymap = test_keymap();
+
+        // DebugToggleConsole has only one binding
+        assert_eq!(
+            keymap.compact_hint_for_command(CommandId::DebugToggleConsole),
+            Some("`".to_string())
+        );
+    }
 }
