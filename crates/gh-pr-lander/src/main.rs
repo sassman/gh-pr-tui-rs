@@ -28,7 +28,7 @@ mod views;
 use actions::Action;
 use middleware::{
     bootstrap::BootstrapMiddleware, command_palette::CommandPaletteMiddleware,
-    keyboard::KeyboardMiddleware, logging::LoggingMiddleware,
+    github::GitHubMiddleware, keyboard::KeyboardMiddleware, logging::LoggingMiddleware,
     pull_request::PullRequestMiddleware, repository::RepositoryMiddleware,
 };
 use state::AppState;
@@ -53,10 +53,11 @@ fn main() -> io::Result<()> {
     // Add middleware in order (they execute in this order)
     store.add_middleware(Box::new(LoggingMiddleware::new()));
     store.add_middleware(Box::new(BootstrapMiddleware::new()));
+    store.add_middleware(Box::new(GitHubMiddleware::new())); // GitHub client & API operations
     store.add_middleware(Box::new(KeyboardMiddleware::new()));
     store.add_middleware(Box::new(CommandPaletteMiddleware::new()));
     store.add_middleware(Box::new(RepositoryMiddleware::new()));
-    store.add_middleware(Box::new(PullRequestMiddleware::new()));
+    store.add_middleware(Box::new(PullRequestMiddleware::new())); // Bulk loading coordination
 
     // Connect logger to dispatcher (so logs can be sent to debug console)
     logger.set_dispatcher(store.dispatcher().clone());

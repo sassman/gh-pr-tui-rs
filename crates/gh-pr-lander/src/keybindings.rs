@@ -332,7 +332,7 @@ pub fn default_keymap() -> Keymap {
         KeyBinding::new("F", "F", PrClearFilter),
         // Merge Bot
         KeyBinding::new("M", "M", MergeBotStart),
-        KeyBinding::new("Q", "Q", MergeBotAddToQueue),
+        // KeyBinding::new("Q", "Q", MergeBotAddToQueue),
         // General
         KeyBinding::new("q", "q", GlobalClose),
         KeyBinding::new("esc", "Esc", GlobalClose),
