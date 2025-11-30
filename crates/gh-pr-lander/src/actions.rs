@@ -146,6 +146,10 @@ pub enum Action {
     /// Open CI build logs in browser (for current PR)
     PrOpenBuildLogs,
 
+    /// ## IDE Integration actions
+    /// Open current PR diff in configured IDE (uses gh CLI under the hood)
+    PrOpenInIDE,
+
     /// ## Bootstrap actions
     BootstrapStart,
     BootstrapEnd,
@@ -241,6 +245,7 @@ impl Clone for Action {
                 Self::PrRerunError(*repo, *pr, *run, err.clone())
             }
             Self::PrOpenBuildLogs => Self::PrOpenBuildLogs,
+            Self::PrOpenInIDE => Self::PrOpenInIDE,
             Self::BootstrapStart => Self::BootstrapStart,
             Self::BootstrapEnd => Self::BootstrapEnd,
             Self::LoadRecentRepositories => Self::LoadRecentRepositories,
@@ -345,6 +350,7 @@ impl std::fmt::Debug for Action {
                 write!(f, "PrRerunError({}, #{}, run={}, {})", repo, pr, run, err)
             }
             Self::PrOpenBuildLogs => write!(f, "PrOpenBuildLogs"),
+            Self::PrOpenInIDE => write!(f, "PrOpenInIDE"),
             Self::BootstrapStart => write!(f, "BootstrapStart"),
             Self::BootstrapEnd => write!(f, "BootstrapEnd"),
             Self::LoadRecentRepositories => write!(f, "LoadRecentRepositories"),

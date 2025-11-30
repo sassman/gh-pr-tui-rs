@@ -325,6 +325,8 @@ pub fn default_keymap() -> Keymap {
         // CI/Build Status
         KeyBinding::new("R", "R", PrRerunFailedJobs),
         KeyBinding::new("b", "b", PrOpenBuildLogs),
+        // IDE Integration
+        KeyBinding::new("e", "e", PrOpenInIDE),
         // General
         KeyBinding::new("q", "q", GlobalClose),
         KeyBinding::new("esc", "Esc", GlobalClose),

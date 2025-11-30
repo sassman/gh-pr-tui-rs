@@ -86,6 +86,10 @@ pub enum CommandId {
     /// Open CI build logs in browser
     PrOpenBuildLogs,
 
+    // === IDE Integration ===
+    /// Open current PR in configured IDE
+    PrOpenInIDE,
+
     // === General ===
     /// Close the current view/panel
     GlobalClose,
@@ -147,6 +151,9 @@ impl CommandId {
             Self::PrRerunFailedJobs => Action::PrRerunFailedJobs,
             Self::PrOpenBuildLogs => Action::PrOpenBuildLogs,
 
+            // IDE Integration
+            Self::PrOpenInIDE => Action::PrOpenInIDE,
+
             // General
             Self::GlobalClose => Action::GlobalClose,
             Self::GlobalQuit => Action::GlobalQuit,
@@ -199,6 +206,9 @@ impl CommandId {
             // CI/Build Status
             Self::PrRerunFailedJobs => "Rerun failed CI jobs",
             Self::PrOpenBuildLogs => "Open CI build logs",
+
+            // IDE Integration
+            Self::PrOpenInIDE => "Open PR diff in IDE",
 
             // General
             Self::GlobalClose => "Close",
@@ -253,6 +263,9 @@ impl CommandId {
             Self::PrRerunFailedJobs => "Rerun failed CI workflow jobs for the current PR",
             Self::PrOpenBuildLogs => "Open CI build logs in your default web browser",
 
+            // IDE Integration
+            Self::PrOpenInIDE => "Open the PR diff in your configured IDE (uses gh pr view)",
+
             // General
             Self::GlobalClose => "Close the current view or panel",
             Self::GlobalQuit => "Exit the application",
@@ -290,7 +303,8 @@ impl CommandId {
             | Self::PrApprove
             | Self::PrClose
             | Self::PrRerunFailedJobs
-            | Self::PrOpenBuildLogs => "Pull Request",
+            | Self::PrOpenBuildLogs
+            | Self::PrOpenInIDE => "Pull Request",
 
             Self::GlobalClose | Self::GlobalQuit => "General",
         }

@@ -336,6 +336,52 @@ impl Middleware for GitHubMiddleware {
                 false // Consume action
             }
 
+            Action::PrOpenInIDE => {
+                // Get current PR info for gh CLI command
+                let repo_idx = state.main_view.selected_repository;
+                if let Some(repo) = state.main_view.repositories.get(repo_idx) {
+                    if let Some(repo_data) = state.main_view.repo_data.get(&repo_idx) {
+                        if let Some(pr) = repo_data.prs.get(repo_data.selected_pr) {
+                            let repo_full = format!("{}/{}", repo.org, repo.repo);
+                            let pr_number = pr.number;
+
+                            log::info!("Opening PR #{} diff in IDE for {}", pr_number, repo_full);
+
+                            // Use gh pr diff command to show diff in terminal/editor
+                            // This opens the diff in the default pager or can be piped to an editor
+                            let result = std::process::Command::new("gh")
+                                .args([
+                                    "pr",
+                                    "diff",
+                                    &pr_number.to_string(),
+                                    "--repo",
+                                    &repo_full,
+                                ])
+                                .spawn();
+
+                            match result {
+                                Ok(mut child) => {
+                                    // Wait for the process in a background thread
+                                    std::thread::spawn(move || {
+                                        if let Err(e) = child.wait() {
+                                            log::error!("Failed to wait for gh pr diff: {}", e);
+                                        }
+                                    });
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "Failed to open PR #{} in IDE: {} (is gh CLI installed?)",
+                                        pr_number,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                false // Consume action
+            }
+
             Action::PrRerunFailedJobs => {
                 let client = match &self.client {
                     Some(c) => c.clone(),
