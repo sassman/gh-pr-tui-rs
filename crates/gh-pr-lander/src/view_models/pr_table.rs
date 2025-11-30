@@ -78,10 +78,7 @@ impl PrTableViewModel {
         repo: &Repository,
         theme: &Theme,
     ) -> PrTableHeaderViewModel {
-        let title = format!(
-            " Pull Requests: {}/{}@{} ",
-            repo.org, repo.repo, repo.branch
-        );
+        let title = format!(" PRs: {}/{}@{} ", repo.org, repo.repo, repo.branch);
 
         let (status_text, status_color) = Self::format_loading_state(
             &repo_data.loading_state,
@@ -190,11 +187,13 @@ impl PrTableViewModel {
 }
 
 /// View model for when there's no repository data
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct EmptyPrTableViewModel {
     pub message: String,
 }
 
+#[allow(dead_code)]
 impl EmptyPrTableViewModel {
     pub fn loading() -> Self {
         Self {

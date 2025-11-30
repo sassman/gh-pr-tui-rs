@@ -1,46 +1,68 @@
 //! Pull Request Middleware
 //!
 //! Handles side effects for loading Pull Requests from GitHub:
-//! - Initializes octocrab client on BootstrapStart
+//! - Initializes GitHub client on BootstrapStart
 //! - Triggers PR loading when repositories are added
-//! - Makes octocrab API calls to fetch PRs
+//! - Makes API calls to fetch PRs (with caching support)
 //! - Dispatches PrLoaded/PrLoadError actions with results
+//!
+//! # Caching
+//!
+//! This middleware uses the `gh-client` crate's decorator pattern for caching:
+//! - Normal loads use `CacheMode::ReadWrite` (read from cache, write to cache)
+//! - Force refresh uses `CacheMode::WriteOnly` (skip cache, but update it)
+//!
+//! The caching is transparent to the rest of the application - no boolean flags needed.
 
 use crate::actions::Action;
 use crate::dispatcher::Dispatcher;
 use crate::domain_models::{MergeableStatus, Pr};
 use crate::middleware::Middleware;
 use crate::state::AppState;
-use octocrab::Octocrab;
-use std::sync::Arc;
+use gh_client::{
+    octocrab::Octocrab, ApiCache, CacheMode, CachedGitHubClient, GitHubClient, OctocrabClient,
+    PullRequest,
+};
+use std::sync::{Arc, Mutex};
 use tokio::runtime::Runtime;
 
 /// Middleware for loading Pull Requests from GitHub
 pub struct PullRequestMiddleware {
     /// Tokio runtime for async operations
     runtime: Runtime,
-    /// GitHub API client (initialized on BootstrapStart)
-    octocrab: Option<Arc<Octocrab>>,
+    /// Cached GitHub client (initialized on BootstrapStart)
+    client: Option<CachedGitHubClient<OctocrabClient>>,
+    /// Shared cache instance
+    cache: Arc<Mutex<ApiCache>>,
 }
 
 impl PullRequestMiddleware {
     pub fn new() -> Self {
         let runtime = Runtime::new().expect("Failed to create tokio runtime");
 
+        // Initialize cache from config path
+        let cache_file = gh_pr_config::get_cache_file_path()
+            .unwrap_or_else(|_| std::env::temp_dir().join("gh-api-cache.json"));
+        let cache = Arc::new(Mutex::new(
+            ApiCache::new(cache_file).unwrap_or_default(),
+        ));
+
         Self {
             runtime,
-            octocrab: None, // Will be initialized on BootstrapStart
+            client: None,
+            cache,
         }
     }
 
-    /// Initialize the octocrab client
-    fn initialize_octocrab(&mut self) {
-        let result = self.runtime.block_on(async { init_octocrab().await });
+    /// Initialize the GitHub client with caching
+    fn initialize_client(&mut self) {
+        let cache = Arc::clone(&self.cache);
+        let result = self.runtime.block_on(async { init_client(cache).await });
 
         match result {
             Ok(client) => {
-                log::info!("PullRequestMiddleware: GitHub client initialized");
-                self.octocrab = Some(client);
+                log::info!("PullRequestMiddleware: GitHub client initialized with caching");
+                self.client = Some(client);
             }
             Err(e) => {
                 log::warn!(
@@ -49,6 +71,13 @@ impl PullRequestMiddleware {
                 );
             }
         }
+    }
+
+    /// Get a client configured for force refresh (WriteOnly mode)
+    fn force_refresh_client(&self) -> Option<CachedGitHubClient<OctocrabClient>> {
+        self.client
+            .as_ref()
+            .map(|c| c.with_mode(CacheMode::WriteOnly))
     }
 }
 
@@ -61,21 +90,21 @@ impl Default for PullRequestMiddleware {
 impl Middleware for PullRequestMiddleware {
     fn handle(&mut self, action: &Action, state: &AppState, dispatcher: &Dispatcher) -> bool {
         match action {
-            // Initialize octocrab on bootstrap
+            // Initialize client on bootstrap
             Action::BootstrapStart => {
-                self.initialize_octocrab();
+                self.initialize_client();
                 true // Let action pass through
             }
 
             // When repositories are added in bulk, start loading PRs for each
             Action::RepositoryAddBulk(repos) => {
                 log::info!(
-                    "RepositoryAddBulk received with {} repos, octocrab initialized: {}",
+                    "RepositoryAddBulk received with {} repos, client initialized: {}",
                     repos.len(),
-                    self.octocrab.is_some()
+                    self.client.is_some()
                 );
 
-                if self.octocrab.is_none() {
+                if self.client.is_none() {
                     log::warn!("Cannot load PRs: GitHub client not initialized");
                     return true;
                 }
@@ -100,7 +129,7 @@ impl Middleware for PullRequestMiddleware {
 
             // When a single repository is added via confirm
             Action::AddRepoConfirm => {
-                if self.octocrab.is_none() {
+                if self.client.is_none() {
                     log::warn!("Cannot load PRs: GitHub client not initialized");
                     return true;
                 }
@@ -116,81 +145,18 @@ impl Middleware for PullRequestMiddleware {
 
             // Handle PR load start - actually fetch the PRs
             Action::PrLoadStart(repo_idx) => {
-                log::info!(
-                    "PrLoadStart({}) received, repos in state: {}",
-                    repo_idx,
-                    state.main_view.repositories.len()
-                );
-
-                let Some(octocrab) = &self.octocrab else {
-                    log::error!("PrLoadStart: octocrab not initialized");
-                    dispatcher.dispatch(Action::PrLoadError(
-                        *repo_idx,
-                        "GitHub client not initialized".to_string(),
-                    ));
-                    return true;
-                };
-
-                // Get the repository at this index
-                // Note: For RepositoryAddBulk, the repos aren't in state yet when this runs,
-                // so we need to handle this carefully. The reducer will process RepositoryAddBulk
-                // before PrLoadStart, so by the time we get here, the repos should be there.
-                let Some(repo) = state.main_view.repositories.get(*repo_idx) else {
-                    log::warn!(
-                        "PrLoadStart: Repository at index {} not found (state has {} repos), will retry",
-                        repo_idx,
-                        state.main_view.repositories.len()
-                    );
-                    // This might happen due to action ordering - the reducer might not have
-                    // processed RepositoryAddBulk yet. We'll let the action pass through
-                    // and the reducer can handle it.
-                    return true;
-                };
-
-                log::info!(
-                    "PrLoadStart: Found repo at index {}: {}/{}",
-                    repo_idx,
-                    repo.org,
-                    repo.repo
-                );
-
-                let org = repo.org.clone();
-                let repo_name = repo.repo.clone();
-                let octocrab = octocrab.clone();
-                let dispatcher = dispatcher.clone();
-                let repo_idx = *repo_idx;
-
-                // Spawn async task to load PRs
-                log::info!("Spawning async task to load PRs for {}/{}", org, repo_name);
-                self.runtime.spawn(async move {
-                    log::info!("Async task started: Loading PRs for {}/{}", org, repo_name);
-
-                    match load_prs(&octocrab, &org, &repo_name).await {
-                        Ok(prs) => {
-                            log::info!("Loaded {} PRs for {}/{}", prs.len(), org, repo_name);
-                            dispatcher.dispatch(Action::PrLoaded(repo_idx, prs));
-                        }
-                        Err(e) => {
-                            log::error!("Failed to load PRs for {}/{}: {}", org, repo_name, e);
-                            dispatcher.dispatch(Action::PrLoadError(repo_idx, e.to_string()));
-                        }
-                    }
-                });
-
-                true // Let action pass through to reducer (to set loading state)
+                self.handle_pr_load(*repo_idx, state, dispatcher, false)
             }
 
-            // Handle PR refresh request
+            // Handle PR refresh request (force refresh - bypass cache)
             Action::PrRefresh => {
-                if self.octocrab.is_none() {
+                if self.client.is_none() {
                     log::warn!("Cannot refresh PRs: GitHub client not initialized");
                     return true;
                 }
 
                 let repo_idx = state.main_view.selected_repository;
-                dispatcher.dispatch(Action::PrLoadStart(repo_idx));
-
-                true
+                self.handle_pr_load(repo_idx, state, dispatcher, true)
             }
 
             _ => true, // Pass through all other actions
@@ -198,8 +164,108 @@ impl Middleware for PullRequestMiddleware {
     }
 }
 
-/// Initialize octocrab client from environment or gh CLI
-async fn init_octocrab() -> anyhow::Result<Arc<Octocrab>> {
+impl PullRequestMiddleware {
+    /// Handle loading PRs for a repository
+    ///
+    /// # Arguments
+    /// * `repo_idx` - Index of the repository to load
+    /// * `state` - Current app state
+    /// * `dispatcher` - Action dispatcher
+    /// * `force_refresh` - If true, bypass cache (but still write to it)
+    fn handle_pr_load(
+        &self,
+        repo_idx: usize,
+        state: &AppState,
+        dispatcher: &Dispatcher,
+        force_refresh: bool,
+    ) -> bool {
+        log::info!(
+            "PrLoad({}) received, repos in state: {}, force_refresh: {}",
+            repo_idx,
+            state.main_view.repositories.len(),
+            force_refresh
+        );
+
+        let client = if force_refresh {
+            let Some(client) = self.force_refresh_client() else {
+                log::error!("PrLoad: client not initialized");
+                dispatcher.dispatch(Action::PrLoadError(
+                    repo_idx,
+                    "GitHub client not initialized".to_string(),
+                ));
+                return true;
+            };
+            client
+        } else {
+            let Some(client) = self.client.clone() else {
+                log::error!("PrLoad: client not initialized");
+                dispatcher.dispatch(Action::PrLoadError(
+                    repo_idx,
+                    "GitHub client not initialized".to_string(),
+                ));
+                return true;
+            };
+            client
+        };
+
+        // Get the repository at this index
+        let Some(repo) = state.main_view.repositories.get(repo_idx) else {
+            log::warn!(
+                "PrLoad: Repository at index {} not found (state has {} repos), will retry",
+                repo_idx,
+                state.main_view.repositories.len()
+            );
+            return true;
+        };
+
+        log::info!(
+            "PrLoad: Found repo at index {}: {}/{}",
+            repo_idx,
+            repo.org,
+            repo.repo
+        );
+
+        let org = repo.org.clone();
+        let repo_name = repo.repo.clone();
+        let base_branch = Some(repo.branch.clone());
+        let dispatcher = dispatcher.clone();
+
+        // Spawn async task to load PRs
+        let mode = if force_refresh { "force refresh" } else { "cached" };
+        log::info!(
+            "Spawning async task to load PRs for {}/{} ({})",
+            org,
+            repo_name,
+            mode
+        );
+
+        self.runtime.spawn(async move {
+            log::info!("Async task started: Loading PRs for {}/{}", org, repo_name);
+
+            match client
+                .fetch_pull_requests(&org, &repo_name, base_branch.as_deref())
+                .await
+            {
+                Ok(prs) => {
+                    let domain_prs: Vec<Pr> = prs.into_iter().map(convert_to_domain_pr).collect();
+                    log::info!("Loaded {} PRs for {}/{}", domain_prs.len(), org, repo_name);
+                    dispatcher.dispatch(Action::PrLoaded(repo_idx, domain_prs));
+                }
+                Err(e) => {
+                    log::error!("Failed to load PRs for {}/{}: {}", org, repo_name, e);
+                    dispatcher.dispatch(Action::PrLoadError(repo_idx, e.to_string()));
+                }
+            }
+        });
+
+        true // Let action pass through to reducer (to set loading state)
+    }
+}
+
+/// Initialize GitHub client with caching support
+async fn init_client(
+    cache: Arc<Mutex<ApiCache>>,
+) -> anyhow::Result<CachedGitHubClient<OctocrabClient>> {
     // Try environment variables first
     let token = std::env::var("GITHUB_TOKEN")
         .or_else(|_| std::env::var("GH_TOKEN"))
@@ -219,7 +285,7 @@ async fn init_octocrab() -> anyhow::Result<Arc<Octocrab>> {
                         None
                     }
                 })
-                .ok_or_else(|| std::env::VarError::NotPresent)
+                .ok_or(std::env::VarError::NotPresent)
         })
         .map_err(|_| {
             anyhow::anyhow!(
@@ -228,51 +294,35 @@ async fn init_octocrab() -> anyhow::Result<Arc<Octocrab>> {
         })?;
 
     let octocrab = Octocrab::builder().personal_token(token).build()?;
+    let octocrab_client = OctocrabClient::new(Arc::new(octocrab));
 
-    Ok(Arc::new(octocrab))
+    // Wrap with caching (ReadWrite mode by default)
+    let cached_client = CachedGitHubClient::new(octocrab_client, cache, CacheMode::ReadWrite);
+
+    Ok(cached_client)
 }
 
-/// Load PRs for a repository
-async fn load_prs(octocrab: &Octocrab, org: &str, repo: &str) -> anyhow::Result<Vec<Pr>> {
-    let pulls = octocrab
-        .pulls(org, repo)
-        .list()
-        .state(octocrab::params::State::Open)
-        .per_page(50)
-        .send()
-        .await?;
+/// Convert gh-client PullRequest to domain Pr
+fn convert_to_domain_pr(pr: PullRequest) -> Pr {
+    let mergeable = match pr.mergeable_state {
+        Some(gh_client::types::MergeableState::Clean) => MergeableStatus::Ready,
+        Some(gh_client::types::MergeableState::Behind) => MergeableStatus::NeedsRebase,
+        Some(gh_client::types::MergeableState::Dirty) => MergeableStatus::Conflicted,
+        Some(gh_client::types::MergeableState::Blocked) => MergeableStatus::Blocked,
+        Some(gh_client::types::MergeableState::Unstable) => MergeableStatus::BuildFailed,
+        _ => MergeableStatus::Unknown,
+    };
 
-    let prs: Vec<Pr> = pulls
-        .items
-        .into_iter()
-        .map(|pr| {
-            let mergeable = match pr.mergeable_state {
-                Some(octocrab::models::pulls::MergeableState::Clean) => MergeableStatus::Ready,
-                Some(octocrab::models::pulls::MergeableState::Behind) => {
-                    MergeableStatus::NeedsRebase
-                }
-                Some(octocrab::models::pulls::MergeableState::Dirty) => MergeableStatus::Conflicted,
-                Some(octocrab::models::pulls::MergeableState::Blocked) => MergeableStatus::Blocked,
-                Some(octocrab::models::pulls::MergeableState::Unstable) => {
-                    MergeableStatus::BuildFailed
-                }
-                _ => MergeableStatus::Unknown,
-            };
-
-            Pr {
-                number: pr.number as usize,
-                title: pr.title.clone().unwrap_or_default(),
-                body: pr.body.clone().unwrap_or_default(),
-                author: pr.user.map(|u| u.login).unwrap_or_default(),
-                comments: pr.comments.unwrap_or_default() as usize,
-                mergeable,
-                needs_rebase: matches!(mergeable, MergeableStatus::NeedsRebase),
-                head_sha: pr.head.sha.clone(),
-                created_at: pr.created_at.unwrap_or_else(chrono::Utc::now),
-                updated_at: pr.updated_at.unwrap_or_else(chrono::Utc::now),
-            }
-        })
-        .collect();
-
-    Ok(prs)
+    Pr {
+        number: pr.number as usize,
+        title: pr.title,
+        body: pr.body.unwrap_or_default(),
+        author: pr.author,
+        comments: pr.comments as usize,
+        mergeable,
+        needs_rebase: matches!(mergeable, MergeableStatus::NeedsRebase),
+        head_sha: pr.head_sha,
+        created_at: pr.created_at,
+        updated_at: pr.updated_at,
+    }
 }

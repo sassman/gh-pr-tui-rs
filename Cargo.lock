@@ -866,6 +866,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gh-client"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "gh-api-cache",
+ "log",
+ "octocrab",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "gh-pr-config"
 version = "0.1.0"
 dependencies = [
@@ -883,9 +898,9 @@ dependencies = [
  "bitflags",
  "chrono",
  "figlet-rs",
+ "gh-client",
  "gh-pr-config",
  "log",
- "octocrab",
  "ratatui",
  "serde",
  "tokio",
