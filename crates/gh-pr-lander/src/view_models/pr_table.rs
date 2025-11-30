@@ -48,8 +48,10 @@ pub struct PrRowViewModel {
     /// Metadata for interactions (not displayed)
     #[allow(dead_code)]
     pub pr_number_raw: usize, // For opening PR (future use)
-    #[allow(dead_code)]
-    pub is_selected: bool, // Keyboard navigation position (used by table state)
+    /// Is this row at the cursor position
+    pub is_cursor: bool,
+    /// Is this PR selected for bulk operations
+    pub is_multi_selected: bool,
 }
 
 impl PrTableViewModel {
@@ -63,7 +65,10 @@ impl PrTableViewModel {
             .prs
             .iter()
             .enumerate()
-            .map(|(index, pr)| Self::build_row(pr, index, repo_data.selected_pr, theme))
+            .map(|(index, pr)| {
+                let is_multi_selected = repo_data.selected_pr_numbers.contains(&pr.number);
+                Self::build_row(pr, index, repo_data.selected_pr, is_multi_selected, theme)
+            })
             .collect();
 
         Self {
@@ -93,11 +98,18 @@ impl PrTableViewModel {
         }
     }
 
-    fn build_row(pr: &Pr, index: usize, selected_index: usize, theme: &Theme) -> PrRowViewModel {
-        let is_selected = index == selected_index;
+    fn build_row(
+        pr: &Pr,
+        index: usize,
+        cursor_index: usize,
+        is_multi_selected: bool,
+        theme: &Theme,
+    ) -> PrRowViewModel {
+        let is_cursor = index == cursor_index;
 
-        // Pre-compute display text
-        let pr_number = format!("#{}", pr.number);
+        // Pre-compute display text with selection indicator
+        let selection_indicator = if is_multi_selected { "●" } else { " " };
+        let pr_number = format!("{} #{}", selection_indicator, pr.number);
         let title = pr.title.clone();
         let author = pr.author.clone();
         let comments = pr.comments.to_string();
@@ -106,9 +118,12 @@ impl PrTableViewModel {
         let status_text = format!("{} {}", pr.mergeable.icon(), pr.mergeable.label());
         let status_color = Self::mergeable_status_color(pr.mergeable, theme);
 
-        // Compute colors
-        let (fg_color, bg_color) = if is_selected {
+        // Compute colors - multi-selected rows get highlighted differently
+        let (fg_color, bg_color) = if is_cursor {
             (theme.active_fg, theme.selected_bg)
+        } else if is_multi_selected {
+            // Multi-selected but not cursor: subtle highlight
+            (theme.text().fg.unwrap_or(Color::White), Color::Rgb(40, 50, 60))
         } else {
             // Alternating row colors
             let bg = if index.is_multiple_of(2) {
@@ -129,7 +144,8 @@ impl PrTableViewModel {
             fg_color,
             status_color,
             pr_number_raw: pr.number,
-            is_selected,
+            is_cursor,
+            is_multi_selected,
         }
     }
 

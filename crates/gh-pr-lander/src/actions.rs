@@ -90,6 +90,14 @@ pub enum Action {
     /// Refresh PRs for the current repository
     PrRefresh,
 
+    /// ## PR Selection actions (for bulk operations)
+    /// Toggle selection of the current PR (at cursor)
+    PrToggleSelection,
+    /// Select all PRs in the current repository
+    PrSelectAll,
+    /// Deselect all PRs in the current repository
+    PrDeselectAll,
+
     /// ## Bootstrap actions
     BootstrapStart,
     BootstrapEnd,
@@ -158,6 +166,9 @@ impl Clone for Action {
             Self::PrNavigateNext => Self::PrNavigateNext,
             Self::PrNavigatePrevious => Self::PrNavigatePrevious,
             Self::PrRefresh => Self::PrRefresh,
+            Self::PrToggleSelection => Self::PrToggleSelection,
+            Self::PrSelectAll => Self::PrSelectAll,
+            Self::PrDeselectAll => Self::PrDeselectAll,
             Self::BootstrapStart => Self::BootstrapStart,
             Self::BootstrapEnd => Self::BootstrapEnd,
             Self::LoadRecentRepositories => Self::LoadRecentRepositories,
@@ -223,6 +234,9 @@ impl std::fmt::Debug for Action {
             Self::PrNavigateNext => write!(f, "PrNavigateNext"),
             Self::PrNavigatePrevious => write!(f, "PrNavigatePrevious"),
             Self::PrRefresh => write!(f, "PrRefresh"),
+            Self::PrToggleSelection => write!(f, "PrToggleSelection"),
+            Self::PrSelectAll => write!(f, "PrSelectAll"),
+            Self::PrDeselectAll => write!(f, "PrDeselectAll"),
             Self::BootstrapStart => write!(f, "BootstrapStart"),
             Self::BootstrapEnd => write!(f, "BootstrapEnd"),
             Self::LoadRecentRepositories => write!(f, "LoadRecentRepositories"),

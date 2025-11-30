@@ -42,8 +42,10 @@ pub struct RepositoryData {
     pub prs: Vec<crate::domain_models::Pr>,
     /// Current loading state
     pub loading_state: crate::domain_models::LoadingState,
-    /// Currently selected PR index in the table
+    /// Currently selected PR index in the table (cursor position)
     pub selected_pr: usize,
+    /// Set of selected PR numbers for bulk operations
+    pub selected_pr_numbers: std::collections::HashSet<usize>,
     /// Timestamp of last successful load
     pub last_updated: Option<chrono::DateTime<chrono::Local>>,
 }

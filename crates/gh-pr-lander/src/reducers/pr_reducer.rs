@@ -23,6 +23,8 @@ pub fn reduce(mut state: MainViewState, action: &Action) -> MainViewState {
             repo_data.loading_state = LoadingState::Loaded;
             repo_data.last_updated = Some(chrono::Local::now());
             repo_data.selected_pr = 0;
+            // Clear selection when PRs are reloaded
+            repo_data.selected_pr_numbers.clear();
             log::info!("Loaded {} PRs for repository {}", prs.len(), repo_idx);
         }
 
@@ -80,6 +82,43 @@ pub fn reduce(mut state: MainViewState, action: &Action) -> MainViewState {
                         repo_data.selected_pr - 1
                     };
                 }
+            }
+        }
+
+        Action::PrToggleSelection => {
+            let repo_idx = state.selected_repository;
+            if let Some(repo_data) = state.repo_data.get_mut(&repo_idx) {
+                if let Some(pr) = repo_data.prs.get(repo_data.selected_pr) {
+                    let pr_number = pr.number;
+                    if repo_data.selected_pr_numbers.contains(&pr_number) {
+                        repo_data.selected_pr_numbers.remove(&pr_number);
+                        log::debug!("Deselected PR #{}", pr_number);
+                    } else {
+                        repo_data.selected_pr_numbers.insert(pr_number);
+                        log::debug!("Selected PR #{}", pr_number);
+                    }
+                }
+            }
+        }
+
+        Action::PrSelectAll => {
+            let repo_idx = state.selected_repository;
+            if let Some(repo_data) = state.repo_data.get_mut(&repo_idx) {
+                repo_data.selected_pr_numbers = repo_data
+                    .prs
+                    .iter()
+                    .map(|pr| pr.number)
+                    .collect();
+                log::debug!("Selected all {} PRs", repo_data.selected_pr_numbers.len());
+            }
+        }
+
+        Action::PrDeselectAll => {
+            let repo_idx = state.selected_repository;
+            if let Some(repo_data) = state.repo_data.get_mut(&repo_idx) {
+                let count = repo_data.selected_pr_numbers.len();
+                repo_data.selected_pr_numbers.clear();
+                log::debug!("Deselected {} PRs", count);
             }
         }
 

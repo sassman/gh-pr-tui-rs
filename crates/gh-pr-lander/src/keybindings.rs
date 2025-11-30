@@ -311,6 +311,11 @@ pub fn default_keymap() -> Keymap {
         KeyBinding::new("`", "`", DebugToggleConsole),
         // Command palette
         KeyBinding::new("ctrl+p", "Ctrl+P", CommandPaletteOpen),
+        // PR Selection
+        KeyBinding::new("space", "Space", PrToggleSelection),
+        KeyBinding::new("ctrl+a", "Ctrl+A", PrSelectAll),
+        KeyBinding::new("u", "u", PrDeselectAll),
+        KeyBinding::new("ctrl+r", "Ctrl+R", PrRefresh),
         // General
         KeyBinding::new("q", "q", GlobalClose),
         KeyBinding::new("esc", "Esc", GlobalClose),

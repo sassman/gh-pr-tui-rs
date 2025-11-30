@@ -58,6 +58,16 @@ pub enum CommandId {
     /// Open the command palette
     CommandPaletteOpen,
 
+    // === PR Selection ===
+    /// Toggle selection of current PR
+    PrToggleSelection,
+    /// Select all PRs in current repository
+    PrSelectAll,
+    /// Deselect all PRs
+    PrDeselectAll,
+    /// Refresh PRs for current repository
+    PrRefresh,
+
     // === General ===
     /// Close the current view/panel
     GlobalClose,
@@ -102,6 +112,12 @@ impl CommandId {
             // Command palette
             Self::CommandPaletteOpen => Action::PushView(Box::new(CommandPaletteView::new())),
 
+            // PR Selection
+            Self::PrToggleSelection => Action::PrToggleSelection,
+            Self::PrSelectAll => Action::PrSelectAll,
+            Self::PrDeselectAll => Action::PrDeselectAll,
+            Self::PrRefresh => Action::PrRefresh,
+
             // General
             Self::GlobalClose => Action::GlobalClose,
             Self::GlobalQuit => Action::GlobalQuit,
@@ -137,6 +153,12 @@ impl CommandId {
 
             // Command palette
             Self::CommandPaletteOpen => "Open command palette",
+
+            // PR Selection
+            Self::PrToggleSelection => "Toggle PR selection",
+            Self::PrSelectAll => "Select all PRs",
+            Self::PrDeselectAll => "Deselect all PRs",
+            Self::PrRefresh => "Refresh PRs",
 
             // General
             Self::GlobalClose => "Close",
@@ -174,6 +196,12 @@ impl CommandId {
             // Command palette
             Self::CommandPaletteOpen => "Open the command palette to search and execute commands",
 
+            // PR Selection
+            Self::PrToggleSelection => "Toggle selection of the current PR for bulk operations",
+            Self::PrSelectAll => "Select all PRs in the current repository",
+            Self::PrDeselectAll => "Clear all PR selections",
+            Self::PrRefresh => "Refresh PRs for the current repository",
+
             // General
             Self::GlobalClose => "Close the current view or panel",
             Self::GlobalQuit => "Exit the application",
@@ -200,6 +228,10 @@ impl CommandId {
             Self::DebugToggleConsole | Self::DebugClearLogs | Self::DebugLogDump => "Debug",
 
             Self::CommandPaletteOpen => "Command Palette",
+
+            Self::PrToggleSelection | Self::PrSelectAll | Self::PrDeselectAll | Self::PrRefresh => {
+                "Pull Request"
+            }
 
             Self::GlobalClose | Self::GlobalQuit => "General",
         }
