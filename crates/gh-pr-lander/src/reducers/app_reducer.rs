@@ -10,8 +10,9 @@ use crate::actions::{
     KeyBindingsAction,
 };
 use crate::reducers::{
-    add_repo_reducer, build_log_reducer, command_palette_reducer, debug_console_reducer,
-    key_bindings_reducer, pull_request_reducer, splash_reducer, status_bar_reducer,
+    add_repo_reducer, build_log_reducer, command_palette_reducer, confirmation_popup_reducer,
+    debug_console_reducer, key_bindings_reducer, pull_request_reducer, splash_reducer,
+    status_bar_reducer,
 };
 use crate::state::AppState;
 use crate::views::MainView;
@@ -83,27 +84,12 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
         }
 
         // =======================================================================
-        // GENERIC ACTIONS - Translate via active view and recurse
+        // GENERIC ACTIONS - Handled by middleware (translation to view-specific actions)
+        // These reach the reducer only if no view handles them
         // =======================================================================
-        Action::Navigate(nav) => {
-            if let Some(view) = state.view_stack.last() {
-                if let Some(translated) = view.translate_navigation(*nav) {
-                    // Recurse with the translated action
-                    return reduce(state, &translated);
-                }
-            }
-            log::debug!("Navigation action not handled by active view: {:?}", nav);
-            state
-        }
-
-        Action::TextInput(input) => {
-            if let Some(view) = state.view_stack.last() {
-                if let Some(translated) = view.translate_text_input(input.clone()) {
-                    // Recurse with the translated action
-                    return reduce(state, &translated);
-                }
-            }
-            log::debug!("TextInput action not handled by active view: {:?}", input);
+        Action::Navigate(_) | Action::TextInput(_) => {
+            // Translation is handled by NavigationMiddleware and TextInputMiddleware
+            // If we reach here, the action was not handled by any view
             state
         }
 
@@ -224,6 +210,11 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
         Action::BuildLog(sub) => {
             state.build_log = build_log_reducer::reduce_build_log(state.build_log, sub);
             state
+        }
+
+        // Confirmation popup actions - delegate to dedicated reducer
+        Action::ConfirmationPopup(sub) => {
+            confirmation_popup_reducer::reduce_confirmation_popup(state, sub)
         }
 
         // No-op action

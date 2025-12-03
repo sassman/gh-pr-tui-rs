@@ -74,8 +74,17 @@ pub enum PullRequestAction {
     RebaseError(usize, usize, String),
 
     // Approve operations
-    /// Request to approve selected PRs
+    /// Request to approve selected PRs (shows confirmation popup)
     ApproveRequest,
+    /// Request to comment on selected PRs (shows confirmation popup)
+    CommentRequest,
+    /// Request to request changes on selected PRs (shows confirmation popup)
+    RequestChangesRequest,
+    /// Approve PRs with a custom message (from confirmation popup)
+    ApproveWithMessage {
+        pr_numbers: Vec<u64>,
+        message: String,
+    },
     /// Approve started for a PR (repo_idx, pr_number)
     ApproveStart(usize, usize),
     /// Approve succeeded (repo_idx, pr_number)
@@ -83,9 +92,40 @@ pub enum PullRequestAction {
     /// Approve failed (repo_idx, pr_number, error)
     ApproveError(usize, usize, String),
 
+    // Comment operations
+    /// Post a comment on PRs (from confirmation popup)
+    CommentOnPr {
+        pr_numbers: Vec<u64>,
+        message: String,
+    },
+    /// Comment started for a PR (repo_idx, pr_number)
+    CommentStart(usize, usize),
+    /// Comment succeeded (repo_idx, pr_number)
+    CommentSuccess(usize, usize),
+    /// Comment failed (repo_idx, pr_number, error)
+    CommentError(usize, usize, String),
+
+    // Request changes operations
+    /// Request changes on PRs (from confirmation popup)
+    RequestChanges {
+        pr_numbers: Vec<u64>,
+        message: String,
+    },
+    /// Request changes started for a PR (repo_idx, pr_number)
+    RequestChangesStart(usize, usize),
+    /// Request changes succeeded (repo_idx, pr_number)
+    RequestChangesSuccess(usize, usize),
+    /// Request changes failed (repo_idx, pr_number, error)
+    RequestChangesError(usize, usize, String),
+
     // Close operations
     /// Request to close selected PRs
     CloseRequest,
+    /// Close PRs with a custom message (from confirmation popup)
+    ClosePrWithMessage {
+        pr_numbers: Vec<u64>,
+        message: String,
+    },
     /// Close started for a PR (repo_idx, pr_number)
     CloseStart(usize, usize),
     /// Close succeeded (repo_idx, pr_number)

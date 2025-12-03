@@ -69,9 +69,13 @@ pub enum CommandId {
     PrMerge,
     /// Rebase/update selected PRs
     PrRebase,
-    /// Approve selected PRs
+    /// Approve selected PRs (shows confirmation popup)
     PrApprove,
-    /// Close selected PRs without merging
+    /// Comment on selected PRs (shows confirmation popup)
+    PrComment,
+    /// Request changes on selected PRs (shows confirmation popup)
+    PrRequestChanges,
+    /// Close selected PRs without merging (shows confirmation popup)
     PrClose,
 
     // === CI/Build Status ===
@@ -179,6 +183,8 @@ impl CommandId {
             Self::PrMerge => Action::PullRequest(PullRequestAction::MergeRequest),
             Self::PrRebase => Action::PullRequest(PullRequestAction::RebaseRequest),
             Self::PrApprove => Action::PullRequest(PullRequestAction::ApproveRequest),
+            Self::PrComment => Action::PullRequest(PullRequestAction::CommentRequest),
+            Self::PrRequestChanges => Action::PullRequest(PullRequestAction::RequestChangesRequest),
             Self::PrClose => Action::PullRequest(PullRequestAction::CloseRequest),
 
             // CI/Build Status
@@ -257,6 +263,8 @@ impl CommandId {
             Self::PrMerge => "Merge PRs",
             Self::PrRebase => "Rebase PRs",
             Self::PrApprove => "Approve PRs",
+            Self::PrComment => "Comment on PRs",
+            Self::PrRequestChanges => "Request changes on PRs",
             Self::PrClose => "Close PRs",
 
             // CI/Build Status
@@ -329,6 +337,8 @@ impl CommandId {
             Self::PrMerge => "Merge selected PRs (or current PR if none selected)",
             Self::PrRebase => "Update selected PRs with latest from base branch",
             Self::PrApprove => "Approve selected PRs with a review",
+            Self::PrComment => "Post a comment on selected PRs",
+            Self::PrRequestChanges => "Request changes on selected PRs with a review",
             Self::PrClose => "Close selected PRs without merging",
 
             // CI/Build Status
@@ -392,6 +402,8 @@ impl CommandId {
             | Self::PrMerge
             | Self::PrRebase
             | Self::PrApprove
+            | Self::PrComment
+            | Self::PrRequestChanges
             | Self::PrClose
             | Self::PrRerunFailedJobs
             | Self::PrOpenBuildLogs

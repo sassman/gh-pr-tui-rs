@@ -7,6 +7,7 @@ use ratatui::{layout::Rect, Frame};
 pub mod add_repository_view;
 pub mod build_log_view;
 pub mod command_palette_view;
+pub mod confirmation_popup_view;
 pub mod debug_console_view;
 pub mod key_bindings_view;
 pub mod pull_request_view;
@@ -18,6 +19,7 @@ pub mod status_bar;
 pub use add_repository_view::AddRepositoryView;
 pub use build_log_view::BuildLogView;
 pub use command_palette_view::CommandPaletteView;
+pub use confirmation_popup_view::ConfirmationPopupView;
 pub use debug_console_view::DebugConsoleView;
 pub use key_bindings_view::KeyBindingsView;
 pub use pull_request_view::MainView;
@@ -33,6 +35,7 @@ pub enum ViewId {
     AddRepository,
     KeyBindings,
     BuildLog,
+    ConfirmationPopup,
 }
 
 /// View trait - defines the interface that all views must implement

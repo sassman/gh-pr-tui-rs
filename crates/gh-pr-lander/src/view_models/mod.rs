@@ -1,5 +1,6 @@
 pub mod build_log_view_model;
 pub mod command_palette_view_model;
+pub mod confirmation_popup_view_model;
 pub mod debug_console_view_model;
 pub mod key_bindings_view_model;
 pub mod pull_request_view_model;
@@ -11,6 +12,7 @@ pub use build_log_view_model::{
     BuildLogViewModel,
 };
 pub use command_palette_view_model::CommandPaletteViewModel;
+pub use confirmation_popup_view_model::ConfirmationPopupViewModel;
 pub use key_bindings_view_model::KeyBindingsPanelViewModel;
 #[allow(unused_imports)]
 pub use pull_request_view_model::{EmptyPrTableViewModel, PrTableViewModel};

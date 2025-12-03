@@ -159,9 +159,19 @@ pub fn reduce_pull_request(mut state: MainViewState, action: &PullRequestAction)
         | PullRequestAction::MergeRequest
         | PullRequestAction::RebaseRequest
         | PullRequestAction::ApproveRequest
+        | PullRequestAction::CommentRequest
+        | PullRequestAction::RequestChangesRequest
         | PullRequestAction::CloseRequest
         | PullRequestAction::RerunFailedJobs => {
             // These are request actions - handled by middleware
+        }
+
+        // Actions with message payloads - handled by middleware
+        PullRequestAction::ApproveWithMessage { .. }
+        | PullRequestAction::CommentOnPr { .. }
+        | PullRequestAction::RequestChanges { .. }
+        | PullRequestAction::ClosePrWithMessage { .. } => {
+            // These are confirmation actions - handled by middleware
         }
 
         // Merge operation state changes
@@ -187,6 +197,20 @@ pub fn reduce_pull_request(mut state: MainViewState, action: &PullRequestAction)
         PullRequestAction::ApproveSuccess(_repo_idx, _pr_idx) => {}
         PullRequestAction::ApproveError(_repo_idx, _pr_idx, error) => {
             log::error!("Approve failed: {}", error);
+        }
+
+        // Comment operation state changes
+        PullRequestAction::CommentStart(_repo_idx, _pr_idx) => {}
+        PullRequestAction::CommentSuccess(_repo_idx, _pr_idx) => {}
+        PullRequestAction::CommentError(_repo_idx, _pr_idx, error) => {
+            log::error!("Comment failed: {}", error);
+        }
+
+        // Request changes operation state changes
+        PullRequestAction::RequestChangesStart(_repo_idx, _pr_idx) => {}
+        PullRequestAction::RequestChangesSuccess(_repo_idx, _pr_idx) => {}
+        PullRequestAction::RequestChangesError(_repo_idx, _pr_idx, error) => {
+            log::error!("Request changes failed: {}", error);
         }
 
         // Close operation state changes

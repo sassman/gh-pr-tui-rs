@@ -19,6 +19,18 @@ pub struct AppConfig {
     /// Default message for PR approvals
     #[serde(default = "default_approval_message")]
     pub approval_message: String,
+
+    /// Default message for PR comments
+    #[serde(default = "default_comment_message")]
+    pub comment_message: String,
+
+    /// Default message for requesting changes on PRs
+    #[serde(default = "default_request_changes_message")]
+    pub request_changes_message: String,
+
+    /// Default message for closing PRs
+    #[serde(default = "default_close_message")]
+    pub close_message: String,
 }
 
 fn default_ide_command() -> String {
@@ -36,12 +48,27 @@ fn default_approval_message() -> String {
     ":rocket: thanks for your contribution".to_string()
 }
 
+fn default_comment_message() -> String {
+    String::new() // Empty default - user must enter comment
+}
+
+fn default_request_changes_message() -> String {
+    "Please address the following concerns:".to_string()
+}
+
+fn default_close_message() -> String {
+    "Closing this PR.".to_string()
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
             ide_command: default_ide_command(),
             temp_dir: default_temp_dir(),
             approval_message: default_approval_message(),
+            comment_message: default_comment_message(),
+            request_changes_message: default_request_changes_message(),
+            close_message: default_close_message(),
         }
     }
 }
@@ -76,6 +103,9 @@ mod tests {
         assert_eq!(config.ide_command, "code");
         assert!(!config.temp_dir.is_empty());
         assert!(!config.approval_message.is_empty());
+        assert!(config.comment_message.is_empty()); // Empty default
+        assert!(!config.request_changes_message.is_empty());
+        assert!(!config.close_message.is_empty());
     }
 
     #[test]

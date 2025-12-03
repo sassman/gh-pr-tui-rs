@@ -39,20 +39,19 @@ pub fn default_keymap() -> Keymap {
         KeyBinding::new("ctrl+r", "Ctrl+R", PrRefresh),
         // PR Operations
         KeyBinding::new("enter", "Enter", PrOpenInBrowser),
-        // TODO: for as long as key bingings are not view-specific handled, deactivate them
         KeyBinding::new("p m", "p -> m", PrMerge),
-        // KeyBinding::new("r", "r", PrRebase),
-        // KeyBinding::new("a", "a", PrApprove),
-        // KeyBinding::new("c", "c", PrClose),
-        // CI/Build Status
-        // KeyBinding::new("R", "R", PrRerunFailedJobs),
+        KeyBinding::new("p a", "p -> a", PrApprove),
+        KeyBinding::new("p c", "p -> c", PrComment),
+        KeyBinding::new("p d", "p -> d", PrRequestChanges),
+        KeyBinding::new("p x", "p -> x", PrClose),
+        KeyBinding::new("p i", "p -> i", PrOpenInIDE),
         KeyBinding::new("p l", "p -> l", PrOpenBuildLogs),
-        KeyBinding::new("b l", "b -> l", BuildLogOpen), // In-app build log viewer
-        // IDE Integration
-        KeyBinding::new("i", "i", PrOpenInIDE),
+        KeyBinding::new("p r", "p -> r", PrRebase),
         // Filter & Search
         KeyBinding::new("f", "f", PrCycleFilter),
         KeyBinding::new("F", "F", PrClearFilter),
+        // Build Log Operations
+        KeyBinding::new("b l", "b -> l", BuildLogOpen),
         // Merge Bot
         // KeyBinding::new("M", "M", MergeBotStart),
         // KeyBinding::new("Q", "Q", MergeBotAddToQueue),

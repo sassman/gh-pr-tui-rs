@@ -6,6 +6,7 @@ mod add_repo;
 mod app;
 mod build_log;
 mod command_palette;
+mod confirmation_popup;
 mod debug_console;
 mod key_bindings;
 mod main_view;
@@ -19,6 +20,7 @@ pub use build_log::{
     BuildLogJobMetadata, BuildLogJobStatus, BuildLogLoadingState, BuildLogPrContext, BuildLogState,
 };
 pub use command_palette::CommandPaletteState;
+pub use confirmation_popup::{ConfirmationIntent, ConfirmationPopupState};
 pub use debug_console::DebugConsoleState;
 pub use key_bindings::KeyBindingsPanelState;
 pub use main_view::{MainViewState, PrFilter, RepositoryData};

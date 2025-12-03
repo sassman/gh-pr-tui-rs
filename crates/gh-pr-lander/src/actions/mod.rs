@@ -16,6 +16,7 @@ pub mod add_repository;
 pub mod bootstrap;
 pub mod build_log;
 pub mod command_palette;
+pub mod confirmation_popup;
 pub mod debug_console;
 pub mod key_bindings;
 pub mod merge_bot;
@@ -28,6 +29,7 @@ pub use add_repository::AddRepositoryAction;
 pub use bootstrap::BootstrapAction;
 pub use build_log::BuildLogAction;
 pub use command_palette::CommandPaletteAction;
+pub use confirmation_popup::ConfirmationPopupAction;
 pub use debug_console::DebugConsoleAction;
 pub use global::GlobalAction;
 pub use key_bindings::KeyBindingsAction;
@@ -77,6 +79,8 @@ pub enum Action {
     StatusBar(StatusBarAction),
     /// Build Log panel actions
     BuildLog(BuildLogAction),
+    /// Confirmation Popup actions (approve, comment, request changes, close)
+    ConfirmationPopup(ConfirmationPopupAction),
 
     /// No-op action
     None,

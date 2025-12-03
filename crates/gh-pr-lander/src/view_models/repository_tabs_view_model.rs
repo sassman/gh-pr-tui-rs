@@ -119,19 +119,33 @@ impl RepositoryTabsViewModel {
             .collect();
 
         // Build help hint (left side)
+        let label = format!(
+            " {} ",
+            state
+                .keymap
+                .compact_hint_for_command(crate::keymap::CommandId::KeyBindingsToggleView)
+                .unwrap_or("KeyBindingsToggleView".to_string())
+        );
         let help_hint = TabHintViewModel {
-            text: " ? ".to_string(),
+            text: label.clone(),
             style: Style::default()
                 .fg(theme.tab_hint_fg)
                 .add_modifier(Modifier::DIM),
-            width: 3, // " ? " is 3 chars
+            width: label.len() as _,
         };
 
         // Build add repo hint (right side)
+        let label = format!(
+            " {} ",
+            state
+                .keymap
+                .compact_hint_for_command(crate::keymap::CommandId::RepositoryAdd)
+                .unwrap_or("RepositoryAdd".to_string())
+        );
         let hint = TabHintViewModel {
-            text: " p → a ".to_string(),
+            text: label.clone(),
             style: help_hint.style,
-            width: 7, // " p → a " is 7 chars
+            width: label.len() as _,
         };
 
         Self {

@@ -29,9 +29,12 @@ mod views;
 use actions::{Action, BootstrapAction, GlobalAction};
 use middleware::{
     app_config_middleware::AppConfigMiddleware, bootstrap_middleware::BootstrapMiddleware,
-    command_palette_middleware::CommandPaletteMiddleware, github_middleware::GitHubMiddleware,
-    keyboard_middleware::KeyboardMiddleware, logging_middleware::LoggingMiddleware,
+    command_palette_middleware::CommandPaletteMiddleware,
+    confirmation_popup_middleware::ConfirmationPopupMiddleware,
+    github_middleware::GitHubMiddleware, keyboard_middleware::KeyboardMiddleware,
+    logging_middleware::LoggingMiddleware, navigation_middleware::NavigationMiddleware,
     pull_request_middleware::PullRequestMiddleware, repository_middleware::RepositoryMiddleware,
+    text_input_middleware::TextInputMiddleware,
 };
 use state::AppState;
 use store::Store;
@@ -58,7 +61,12 @@ fn main() -> io::Result<()> {
     store.add_middleware(Box::new(AppConfigMiddleware::new())); // Load app config early
     store.add_middleware(Box::new(GitHubMiddleware::new())); // GitHub client & API operations
     store.add_middleware(Box::new(KeyboardMiddleware::new()));
+    // Translation middlewares - convert generic actions to view-specific actions
+    store.add_middleware(Box::new(NavigationMiddleware::new()));
+    store.add_middleware(Box::new(TextInputMiddleware::new()));
+    // View-specific middlewares
     store.add_middleware(Box::new(CommandPaletteMiddleware::new()));
+    store.add_middleware(Box::new(ConfirmationPopupMiddleware::new()));
     store.add_middleware(Box::new(RepositoryMiddleware::new()));
     store.add_middleware(Box::new(PullRequestMiddleware::new())); // Bulk loading coordination
 
