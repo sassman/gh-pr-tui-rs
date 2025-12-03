@@ -120,11 +120,11 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
             if matches!(
                 sub,
                 CommandPaletteAction::Close | CommandPaletteAction::Execute
-            )
-                && state.view_stack.len() > 1 {
-                    let popped = state.view_stack.pop();
-                    log::debug!("Closed view: {:?}", popped.map(|v| v.view_id()));
-                }
+            ) && state.view_stack.len() > 1
+            {
+                let popped = state.view_stack.pop();
+                log::debug!("Closed view: {:?}", popped.map(|v| v.view_id()));
+            }
             state.command_palette = command_palette_reducer::reduce_command_palette(
                 state.command_palette,
                 sub,
@@ -163,11 +163,10 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
 
         Action::KeyBindings(sub) => {
             // Handle Close here for view stack management
-            if matches!(sub, KeyBindingsAction::Close)
-                && state.view_stack.len() > 1 {
-                    let popped = state.view_stack.pop();
-                    log::debug!("Closed view: {:?}", popped.map(|v| v.view_id()));
-                }
+            if matches!(sub, KeyBindingsAction::Close) && state.view_stack.len() > 1 {
+                let popped = state.view_stack.pop();
+                log::debug!("Closed view: {:?}", popped.map(|v| v.view_id()));
+            }
             state.key_bindings_panel =
                 key_bindings_reducer::reduce_key_bindings(state.key_bindings_panel, sub);
             state
@@ -213,13 +212,9 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
         }
 
         // MergeBot actions - currently handled by middlewares (no state changes in reducer)
-        Action::MergeBot(_) => {
-            state
-        }
+        Action::MergeBot(_) => state,
 
         // No-op action
-        Action::None => {
-            state
-        }
+        Action::None => state,
     }
 }
