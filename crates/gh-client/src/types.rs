@@ -178,9 +178,9 @@ pub enum MergeMethod {
     /// Create a merge commit
     Merge,
     /// Squash all commits into one
+    #[default]
     Squash,
     /// Rebase commits onto the base branch
-    #[default]
     Rebase,
 }
 

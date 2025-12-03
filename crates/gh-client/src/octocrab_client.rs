@@ -205,7 +205,7 @@ impl GitHubClient for OctocrabClient {
             merge_builder = merge_builder.message(message);
         }
 
-        let response = merge_builder.send().await?;
+        let response = merge_builder.send().await.map_err(format_octocrab_error)?;
 
         Ok(MergeResult {
             merged: response.merged,
@@ -230,7 +230,11 @@ impl GitHubClient for OctocrabClient {
             "/repos/{}/{}/pulls/{}/update-branch",
             owner, repo, pr_number
         );
-        let _response: serde_json::Value = self.octocrab.put(route, None::<&()>).await?;
+        let _response: serde_json::Value = self
+            .octocrab
+            .put(route, None::<&()>)
+            .await
+            .map_err(format_octocrab_error)?;
 
         Ok(())
     }
@@ -265,7 +269,11 @@ impl GitHubClient for OctocrabClient {
             payload["body"] = serde_json::Value::String(b.to_string());
         }
 
-        let _response: serde_json::Value = self.octocrab.post(route, Some(&payload)).await?;
+        let _response: serde_json::Value = self
+            .octocrab
+            .post(route, Some(&payload))
+            .await
+            .map_err(format_octocrab_error)?;
 
         Ok(())
     }
@@ -284,7 +292,11 @@ impl GitHubClient for OctocrabClient {
             "state": "closed"
         });
 
-        let _response: serde_json::Value = self.octocrab.patch(route, Some(&payload)).await?;
+        let _response: serde_json::Value = self
+            .octocrab
+            .patch(route, Some(&payload))
+            .await
+            .map_err(format_octocrab_error)?;
 
         Ok(())
     }
@@ -299,7 +311,11 @@ impl GitHubClient for OctocrabClient {
             "/repos/{}/{}/actions/runs/{}/rerun-failed-jobs",
             owner, repo, run_id
         );
-        let _response: serde_json::Value = self.octocrab.post(route, None::<&()>).await?;
+        let _response: serde_json::Value = self
+            .octocrab
+            .post(route, None::<&()>)
+            .await
+            .map_err(format_octocrab_error)?;
 
         Ok(())
     }
@@ -449,6 +465,35 @@ fn convert_status_state(state: &octocrab::models::StatusState) -> CheckState {
         octocrab::models::StatusState::Failure => CheckState::Failure,
         octocrab::models::StatusState::Error => CheckState::Error,
         _ => CheckState::Pending,
+    }
+}
+
+/// Format octocrab errors with useful message content
+///
+/// The default Display for octocrab::Error only shows the variant name (e.g., "GitHub")
+/// which is not helpful. This function extracts the actual error message.
+fn format_octocrab_error(err: octocrab::Error) -> anyhow::Error {
+    match &err {
+        octocrab::Error::GitHub { source, .. } => {
+            // Extract the actual error message from GitHubError
+            let msg = &source.message;
+            let details = source
+                .errors
+                .as_ref()
+                .map(|errs| {
+                    errs.iter()
+                        .filter_map(|e| e.as_str().or_else(|| e.get("message")?.as_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
+                .filter(|s| !s.is_empty());
+
+            match details {
+                Some(d) => anyhow::anyhow!("{}: {}", msg, d),
+                None => anyhow::anyhow!("{}", msg),
+            }
+        }
+        _ => anyhow::anyhow!("{:?}", err),
     }
 }
 
