@@ -1,115 +1,41 @@
-use crate::actions::{Action, DebugConsoleAction};
-use crate::dispatcher::Dispatcher;
-use log::{Level, Metadata, Record};
-use std::fmt::Display;
-use std::sync::{Arc, Mutex};
+//! File-based logging using simplelog
+//!
+//! Logs are written to a timestamped file in the current working directory.
+//! The debug console reads from this file when opened.
 
-/// Custom logger that sends log messages to the debug console
-pub struct DebugConsoleLogger {
-    dispatcher: Arc<Mutex<Option<Dispatcher>>>,
-    debug_mode: bool,
-}
+use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
+use std::fs::File;
+use std::path::PathBuf;
 
-impl DebugConsoleLogger {
-    pub fn new() -> Self {
-        // Check DEBUG env var
-        let debug_mode = std::env::var("DEBUG")
-            .map(|v| v == "1" || v.to_lowercase().eq("true"))
-            .unwrap_or(false);
-
-        Self {
-            dispatcher: Arc::new(Mutex::new(None)),
-            debug_mode,
-        }
-    }
-
-    /// Set the dispatcher after app initialization
-    pub fn set_dispatcher(&self, dispatcher: Dispatcher) {
-        if let Ok(mut d) = self.dispatcher.lock() {
-            *d = Some(dispatcher);
-        }
-    }
-}
-
-impl log::Log for DebugConsoleLogger {
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        // Enable all log levels
-        metadata.level() <= Level::Debug
-    }
-
-    fn log(&self, record: &Record) {
-        if !self.enabled(record.metadata()) {
-            return;
-        }
-
-        // Create owned log record
-        let owned_record = OwnedLogRecord {
-            ts: std::time::SystemTime::now(),
-            level: record.level(),
-            target: record.target().to_string(),
-            message: format!("{}", record.args()),
-        };
-
-        // If DEBUG=1, also print to stderr (won't interfere with TUI)
-        if self.debug_mode {
-            eprintln!("{}", owned_record);
-        }
-
-        // Send to debug console
-        if let Ok(dispatcher) = self.dispatcher.lock() {
-            if let Some(ref d) = *dispatcher {
-                d.dispatch(Action::DebugConsole(DebugConsoleAction::LogAdded(
-                    owned_record,
-                )));
-            }
-        }
-    }
-
-    fn flush(&self) {}
-}
-
-use std::sync::OnceLock;
-use std::time::SystemTime;
-
-/// Global logger instance
-static LOGGER: OnceLock<DebugConsoleLogger> = OnceLock::new();
-
-/// Initialize the custom logger
-pub fn init() -> &'static DebugConsoleLogger {
-    let logger = LOGGER.get_or_init(DebugConsoleLogger::new);
-
-    // Set as global logger
-    log::set_logger(logger).expect("Failed to set logger");
+/// Initialize file-based logging
+///
+/// Creates a log file with timestamp in the current directory.
+/// Returns the path to the log file for use by the debug console.
+pub fn init() -> PathBuf {
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let log_file = PathBuf::from(format!("debug-{}.log", timestamp));
 
     let level = std::env::var("RUST_LOG")
-        .map(|v| match v.as_str().to_lowercase().as_str() {
-            "error" => log::LevelFilter::Error,
-            "warn" => log::LevelFilter::Warn,
-            "info" => log::LevelFilter::Info,
-            "debug" => log::LevelFilter::Debug,
-            "trace" => log::LevelFilter::Trace,
-            _ => log::LevelFilter::Info,
+        .map(|v| match v.to_lowercase().as_str() {
+            "error" => LevelFilter::Error,
+            "warn" => LevelFilter::Warn,
+            "info" => LevelFilter::Info,
+            "debug" => LevelFilter::Debug,
+            "trace" => LevelFilter::Trace,
+            _ => LevelFilter::Info,
         })
-        .unwrap_or(log::LevelFilter::Debug);
+        .unwrap_or(LevelFilter::Debug);
 
-    log::set_max_level(level);
+    // Configure simplelog with timestamps
+    let config = ConfigBuilder::new()
+        .set_time_format_rfc3339()
+        .set_time_offset_to_local()
+        .unwrap_or_else(|c| c) // Fallback if local time offset fails
+        .build();
 
-    logger
-}
+    let file = File::create(&log_file).expect("Failed to create log file");
 
-/// Owned log record (extracted from log::Record)
-#[derive(Debug, Clone)]
-pub struct OwnedLogRecord {
-    pub ts: SystemTime,
-    pub level: log::Level,
-    pub target: String,
-    pub message: String,
-}
+    WriteLogger::init(level, config, file).expect("Failed to initialize logger");
 
-impl Display for OwnedLogRecord {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let datetime: chrono::DateTime<chrono::Local> = self.ts.into();
-        let timestamp = datetime.format("%H:%M:%S%.3f");
-        write!(f, "[{}] [{}] {}", timestamp, self.level, self.message)
-    }
+    log_file
 }

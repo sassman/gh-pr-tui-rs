@@ -2,8 +2,6 @@
 //!
 //! Actions specific to the debug console overlay.
 
-use crate::logger::OwnedLogRecord;
-
 /// Actions for the Debug Console screen
 #[derive(Debug, Clone)]
 pub enum DebugConsoleAction {
@@ -18,12 +16,10 @@ pub enum DebugConsoleAction {
     NavigateToBottom,
 
     // Specific actions
-    /// Clear all logs
+    /// Clear all logs from view
     Clear,
-    /// New log record added
-    LogAdded(OwnedLogRecord),
-    /// Dump logs to file
-    DumpLogs,
     /// Update visible height (for proper scroll bounds)
     SetVisibleHeight(usize),
+    /// Batch update of lines from middleware
+    LinesUpdated(Vec<String>),
 }

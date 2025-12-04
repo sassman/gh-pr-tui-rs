@@ -1835,10 +1835,10 @@ fn dispatch_ci_status_checks(repo_idx: usize, prs: &[Pr], dispatcher: &Dispatche
         // --------------- THIS IS A SMOKE TEST - REMOVE ME ---------------
         // SMOKE TEST: for now do nothing to see if this is faster
         // --------------- REMOVE ME --------------------------------------
-        dispatcher.dispatch(Action::Bootstrap(
-            BootstrapAction::LoadRecentRepositoriesDone,
-        ));
-        return;
+        // dispatcher.dispatch(Action::Bootstrap(
+        // BootstrapAction::LoadRecentRepositoriesDone,
+        // ));
+        // return;
         // --------------- END OF REMOVE ME -------------------------------
 
         dispatcher.dispatch(Action::PullRequest(PullRequestAction::CheckBuildStatus {

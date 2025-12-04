@@ -56,8 +56,6 @@ pub enum CommandId {
     DebugToggleConsoleView,
     /// Clear the debug console logs
     DebugClearLogs,
-    /// Dumps the debug logs to file
-    DebugLogDump,
 
     // === Command palette ===
     /// Open the command palette
@@ -198,7 +196,6 @@ impl CommandId {
                 Action::Global(GlobalAction::PushView(Box::new(DebugConsoleView::new())))
             }
             Self::DebugClearLogs => Action::DebugConsole(DebugConsoleAction::Clear),
-            Self::DebugLogDump => Action::DebugConsole(DebugConsoleAction::DumpLogs),
 
             // Command palette
             Self::CommandPaletteOpen => {
@@ -307,7 +304,6 @@ impl CommandId {
             // Debug
             Self::DebugToggleConsoleView => "Toggle debug console",
             Self::DebugClearLogs => "Clear debug logs",
-            Self::DebugLogDump => "Dump debug logs to file",
 
             // Command palette
             Self::CommandPaletteOpen => "Open command palette",
@@ -396,7 +392,6 @@ impl CommandId {
             // Debug
             Self::DebugToggleConsoleView => "Show or hide the debug console",
             Self::DebugClearLogs => "Clear all debug console logs",
-            Self::DebugLogDump => "Save debug logs to a file",
 
             // Command palette
             Self::CommandPaletteOpen => "Open the command palette to search and execute commands",
@@ -480,7 +475,7 @@ impl CommandId {
             | Self::NavigateToTop
             | Self::NavigateToBottom => "Navigation",
 
-            Self::DebugToggleConsoleView | Self::DebugClearLogs | Self::DebugLogDump => "Debug",
+            Self::DebugToggleConsoleView | Self::DebugClearLogs => "Debug",
 
             Self::CommandPaletteOpen => "Command Palette",
 

@@ -17,6 +17,7 @@ mod dispatcher;
 mod domain_models;
 mod keybindings;
 mod keymap;
+mod log_reader;
 mod logger;
 mod middleware;
 mod reducers;
@@ -31,8 +32,8 @@ use middleware::{
     app_config_middleware::AppConfigMiddleware, bootstrap_middleware::BootstrapMiddleware,
     command_palette_middleware::CommandPaletteMiddleware,
     confirmation_popup_middleware::ConfirmationPopupMiddleware,
-    github_middleware::GitHubMiddleware, keyboard_middleware::KeyboardMiddleware,
-    logging_middleware::LoggingMiddleware, navigation_middleware::NavigationMiddleware,
+    debug_console_middleware::DebugConsoleMiddleware, github_middleware::GitHubMiddleware,
+    keyboard_middleware::KeyboardMiddleware, navigation_middleware::NavigationMiddleware,
     pull_request_middleware::PullRequestMiddleware, repository_middleware::RepositoryMiddleware,
     text_input_middleware::TextInputMiddleware,
 };
@@ -40,8 +41,8 @@ use state::AppState;
 use store::Store;
 
 fn main() -> io::Result<()> {
-    // Initialize custom logger
-    let logger = logger::init();
+    // Initialize file-based logger (returns log file path for debug console)
+    let log_file = logger::init();
 
     log::info!("Starting gh-pr-lander");
 
@@ -56,7 +57,6 @@ fn main() -> io::Result<()> {
     let mut store = Store::new(AppState::default());
 
     // Add middleware in order (they execute in this order)
-    store.add_middleware(Box::new(LoggingMiddleware::new()));
     store.add_middleware(Box::new(BootstrapMiddleware::new()));
     store.add_middleware(Box::new(AppConfigMiddleware::new())); // Load app config early
     store.add_middleware(Box::new(GitHubMiddleware::new())); // GitHub client & API operations
@@ -69,9 +69,7 @@ fn main() -> io::Result<()> {
     store.add_middleware(Box::new(ConfirmationPopupMiddleware::new()));
     store.add_middleware(Box::new(RepositoryMiddleware::new()));
     store.add_middleware(Box::new(PullRequestMiddleware::new())); // Bulk loading coordination
-
-    // Connect logger to dispatcher (so logs can be sent to debug console)
-    logger.set_dispatcher(store.dispatcher().clone());
+    store.add_middleware(Box::new(DebugConsoleMiddleware::new(log_file))); // Debug console log reader
 
     // Main event loop
     let result = run_app(&mut terminal, &mut store);

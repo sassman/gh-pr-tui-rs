@@ -1,3 +1,5 @@
+//! Debug Console View
+
 use crate::actions::{Action, ContextAction, DebugConsoleAction, NavigationAction};
 use crate::capabilities::{PanelCapabilities, PanelCapabilityProvider};
 use crate::keybindings::Keymap;
@@ -70,10 +72,6 @@ impl View for DebugConsoleView {
 
 /// Render the debug console (Quake-style drop-down)
 fn render(state: &DebugConsoleState, theme: &Theme, keymap: &Keymap, area: Rect, f: &mut Frame) {
-    // if !state.visible {
-    // return; // Don't render if not visible
-    // }
-
     // Render dimmed overlay over the entire screen to create modal effect
     let overlay = Block::default().style(
         ratatui::style::Style::default()
@@ -121,11 +119,11 @@ fn render(state: &DebugConsoleState, theme: &Theme, keymap: &Keymap, area: Rect,
     // Calculate visible window
     let available_height = console_height.saturating_sub(2) as usize; // -2 for borders
 
-    // Get visible logs and format them
-    let visible_logs = view_model.visible_logs(available_height);
-    let formatted_lines: Vec<_> = visible_logs
+    // Get visible lines and format them
+    let visible_lines = view_model.visible_lines(available_height);
+    let formatted_lines: Vec<Line> = visible_lines
         .iter()
-        .map(|record| DebugConsoleViewModel::format_log_line(record, theme))
+        .map(|line| Line::from(Span::styled(line.clone(), theme.text())))
         .collect();
 
     let paragraph = Paragraph::new(formatted_lines)
