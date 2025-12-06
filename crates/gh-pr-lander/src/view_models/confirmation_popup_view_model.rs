@@ -20,8 +20,10 @@ pub struct ConfirmationPopupViewModel {
     /// Current input value
     pub input_value: String,
     /// Whether input is empty (for placeholder styling)
+    #[allow(dead_code)]
     pub input_is_empty: bool,
     /// Whether the form is valid for submission
+    #[allow(dead_code)]
     pub is_valid: bool,
     /// Validation hint if not valid
     pub validation_hint: Option<String>,
@@ -43,6 +45,7 @@ pub struct ConfirmationFooterHints {
 /// Theme colors for the confirmation popup
 #[derive(Debug, Clone)]
 pub struct ConfirmationPopupColors {
+    #[allow(dead_code)]
     pub title_fg: Color,
     pub target_fg: Color,
     pub instructions_fg: Color,
@@ -50,6 +53,7 @@ pub struct ConfirmationPopupColors {
     pub input_fg: Color,
     pub input_bg: Color,
     pub border_fg: Color,
+    #[allow(dead_code)]
     pub hint_fg: Color,
     pub error_fg: Color,
 }

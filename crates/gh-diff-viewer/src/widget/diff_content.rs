@@ -201,6 +201,7 @@ impl<T: ThemeProvider> DiffContentWidget<'_, T> {
         buf.set_string(x, y, display_header, style);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn render_diff_line(
         &mut self,
         line: &DiffLine,

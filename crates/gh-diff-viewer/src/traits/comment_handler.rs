@@ -112,6 +112,7 @@ pub trait CommentHandler: Send + Sync {
 }
 
 /// A no-op comment handler for when commenting is disabled or in read-only mode.
+#[allow(dead_code)]
 pub struct NoOpCommentHandler;
 
 #[async_trait]

@@ -14,6 +14,7 @@ pub struct ReviewPopupWidget<'a, T: ThemeProvider> {
     /// Currently selected review event.
     selected: ReviewEvent,
     /// Theme provider.
+    #[allow(dead_code)]
     theme: &'a T,
 }
 

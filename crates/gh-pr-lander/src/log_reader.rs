@@ -60,15 +60,13 @@ impl FileLogReader {
         let reader = BufReader::new(file);
 
         let mut new_count = 0;
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                self.lines.push(line);
-                new_count += 1;
+        for line in reader.lines().map_while(Result::ok) {
+            self.lines.push(line);
+            new_count += 1;
 
-                // Trim old lines if over max
-                if self.lines.len() > self.max_lines {
-                    self.lines.remove(0);
-                }
+            // Trim old lines if over max
+            if self.lines.len() > self.max_lines {
+                self.lines.remove(0);
             }
         }
 
@@ -82,11 +80,13 @@ impl FileLogReader {
     }
 
     /// Total line count
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.lines.len()
     }
 
     /// Check if empty
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.lines.is_empty()
     }

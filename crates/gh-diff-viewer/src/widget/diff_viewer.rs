@@ -57,7 +57,7 @@ impl<T: ThemeProvider> Widget for DiffViewer<'_, T> {
 /// Stateful rendering for DiffViewer.
 impl<T: ThemeProvider> DiffViewer<'_, T> {
     /// Render the diff viewer with state.
-    pub fn render_with_state(mut self, area: Rect, buf: &mut Buffer, state: &mut DiffViewerState) {
+    pub fn render_with_state(self, area: Rect, buf: &mut Buffer, state: &mut DiffViewerState) {
         // Update viewport height from actual render area (for scroll calculations)
         // Subtract 2 for borders
         state.viewport_height = area.height.saturating_sub(2) as usize;
@@ -110,21 +110,21 @@ impl<T: ThemeProvider> DiffViewer<'_, T> {
         let current_file = state.current_file();
 
         // Build DiffRenderData with owned data (no large vector copies)
-        let render_data_struct = render_data.as_ref().map(|(line_no_width, display_name, total_lines)| {
-            DiffRenderData {
+        let render_data_struct = render_data.as_ref().map(
+            |(line_no_width, display_name, total_lines)| DiffRenderData {
                 line_no_width: *line_no_width,
                 comment_lines: &comment_lines,
                 display_name,
                 total_lines: *total_lines,
-            }
-        });
+            },
+        );
 
         let diff_content = DiffContentWidget::new(
             current_file,
             render_data_struct,
             if file_tree_focused { 0 } else { cursor_line },
             scroll_offset,
-            &mut self.highlighter,
+            self.highlighter,
             self.theme,
             !file_tree_focused,
         )

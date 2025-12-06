@@ -87,6 +87,7 @@ pub trait ContextProvider: Send + Sync {
 }
 
 /// A no-op context provider for when context expansion is disabled.
+#[allow(dead_code)]
 pub struct NoOpContextProvider;
 
 #[async_trait]

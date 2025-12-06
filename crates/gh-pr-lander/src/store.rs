@@ -12,7 +12,9 @@ pub struct Store {
 
 impl Store {
     pub fn new(initial_state: AppState) -> Self {
-        Self { state: initial_state }
+        Self {
+            state: initial_state,
+        }
     }
 
     /// Get the current state
@@ -21,6 +23,7 @@ impl Store {
     }
 
     /// Get mutable state reference
+    #[allow(dead_code)]
     pub fn state_mut(&mut self) -> &mut AppState {
         &mut self.state
     }

@@ -16,6 +16,7 @@ pub struct BuildLogViewModel {
 
     /// Scroll state
     pub scroll_offset: usize,
+    #[allow(dead_code)]
     pub viewport_height: usize,
 
     /// Loading state
@@ -41,6 +42,7 @@ pub struct BuildLogTreeRowViewModel {
     pub text: String,
 
     /// Indentation level (for manual indent if needed)
+    #[allow(dead_code)]
     pub indent_level: usize,
 
     /// Whether this row is under cursor
@@ -50,7 +52,9 @@ pub struct BuildLogTreeRowViewModel {
     pub style: BuildLogRowStyle,
 
     /// Additional metadata for interactions (not displayed)
+    #[allow(dead_code)]
     pub path: Vec<usize>,
+    #[allow(dead_code)]
     pub node_type: BuildLogNodeType,
 }
 
@@ -58,8 +62,9 @@ pub struct BuildLogTreeRowViewModel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BuildLogRowStyle {
     Normal,
-    Error,    // Red text for errors
-    Success,  // Green for success
+    Error,   // Red text for errors
+    Success, // Green for success
+    #[allow(dead_code)]
     Selected, // Highlighted background
 }
 
@@ -359,6 +364,7 @@ impl BuildLogViewModel {
     }
 
     /// Get rows visible in viewport
+    #[allow(dead_code)]
     pub fn visible_rows(&self) -> &[BuildLogTreeRowViewModel] {
         let start = self.scroll_offset;
         let end = (start + self.viewport_height).min(self.rows.len());

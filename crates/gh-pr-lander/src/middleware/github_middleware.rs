@@ -198,10 +198,7 @@ impl GitHubMiddleware {
 
     /// Get target PR CI info for build operations (respects multi-selection)
     /// Returns: Vec<(Repository, pr_number, head_sha, head_branch)>
-    fn get_target_pr_ci_info(
-        &self,
-        state: &AppState,
-    ) -> Vec<(Repository, u64, String, String)> {
+    fn get_target_pr_ci_info(&self, state: &AppState) -> Vec<(Repository, u64, String, String)> {
         let repo_idx = state.main_view.selected_repository;
 
         if let Some(repo) = state.main_view.repositories.get(repo_idx) {
@@ -236,15 +233,6 @@ impl GitHubMiddleware {
         }
 
         vec![]
-    }
-
-    /// Get repository info for a PR operation
-    fn get_repo_info(&self, state: &AppState, repo_idx: usize) -> Option<(String, String)> {
-        state
-            .main_view
-            .repositories
-            .get(repo_idx)
-            .map(|r| (r.org.clone(), r.repo.clone()))
     }
 
     /// Get repository context string for confirmation popup
@@ -290,7 +278,7 @@ impl GitHubMiddleware {
     fn handle_pr_load_2(
         &self,
         repo: &Repository,
-        state: &AppState,
+        _state: &AppState,
         dispatcher: &Dispatcher,
         force_refresh: bool,
     ) -> bool {
@@ -335,7 +323,11 @@ impl GitHubMiddleware {
         );
 
         self.runtime.spawn(async move {
-            log::info!("Async task started: Loading PRs for {}/{}", repo.org, repo.repo);
+            log::info!(
+                "Async task started: Loading PRs for {}/{}",
+                repo.org,
+                repo.repo
+            );
 
             match client
                 .fetch_pull_requests(&repo.org, &repo.repo, Some(&repo.branch))
@@ -343,9 +335,19 @@ impl GitHubMiddleware {
             {
                 Ok(prs) => {
                     let domain_prs: Vec<Pr> = prs.into_iter().map(convert_to_domain_pr).collect();
-                    log::info!("Loaded {} PRs for {}/{}", domain_prs.len(), repo.org, repo.repo);
+                    log::info!(
+                        "Loaded {} PRs for {}/{}",
+                        domain_prs.len(),
+                        repo.org,
+                        repo.repo
+                    );
                     dispatcher.dispatch(Action::StatusBar(StatusBarAction::info(
-                        format!("Loaded {} PRs from {}/{}", domain_prs.len(), repo.org, repo.repo),
+                        format!(
+                            "Loaded {} PRs from {}/{}",
+                            domain_prs.len(),
+                            repo.org,
+                            repo.repo
+                        ),
                         "Load",
                     )));
 
@@ -527,12 +529,10 @@ impl Middleware for GitHubMiddleware {
                         {
                             Ok(result) if result.merged => {
                                 log::info!("Successfully merged PR #{}", pr_number);
-                                dispatcher.dispatch(Action::StatusBar(
-                                    StatusBarAction::success(
-                                        format!("PR #{} merged", pr_number),
-                                        "Merge",
-                                    ),
-                                ));
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::success(
+                                    format!("PR #{} merged", pr_number),
+                                    "Merge",
+                                )));
                                 // Trigger refresh to update PR list
                                 dispatcher
                                     .dispatch(Action::PullRequest(PullRequestAction::Refresh));
@@ -603,10 +603,7 @@ impl Middleware for GitHubMiddleware {
                                 .await
                             {
                                 Ok(_) => {
-                                    log::info!(
-                                        "Requested dependabot rebase for PR #{}",
-                                        pr_number
-                                    );
+                                    log::info!("Requested dependabot rebase for PR #{}", pr_number);
                                     dispatcher.dispatch(Action::StatusBar(
                                         StatusBarAction::success(
                                             format!(
@@ -619,12 +616,10 @@ impl Middleware for GitHubMiddleware {
                                 }
                                 Err(e) => {
                                     log::error!("Dependabot rebase request error: {}", e);
-                                    dispatcher.dispatch(Action::StatusBar(
-                                        StatusBarAction::error(
-                                            format!("Rebase request failed: {}", e),
-                                            "Rebase",
-                                        ),
-                                    ));
+                                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                        format!("Rebase request failed: {}", e),
+                                        "Rebase",
+                                    )));
                                 }
                             }
                         });
@@ -645,18 +640,15 @@ impl Middleware for GitHubMiddleware {
                                         ),
                                     ));
                                     // Trigger refresh to update PR status
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::Refresh,
-                                    ));
+                                    dispatcher
+                                        .dispatch(Action::PullRequest(PullRequestAction::Refresh));
                                 }
                                 Err(e) => {
                                     log::error!("Rebase error: {}", e);
-                                    dispatcher.dispatch(Action::StatusBar(
-                                        StatusBarAction::error(
-                                            format!("Rebase failed: {}", e),
-                                            "Rebase",
-                                        ),
-                                    ));
+                                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                        format!("Rebase failed: {}", e),
+                                        "Rebase",
+                                    )));
                                 }
                             }
                         });
@@ -784,12 +776,10 @@ impl Middleware for GitHubMiddleware {
                         {
                             Ok(()) => {
                                 log::info!("Successfully approved PR #{}", pr_number_owned);
-                                dispatcher.dispatch(Action::StatusBar(
-                                    StatusBarAction::success(
-                                        format!("PR #{} approved", pr_number_owned),
-                                        "Approve",
-                                    ),
-                                ));
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::success(
+                                    format!("PR #{} approved", pr_number_owned),
+                                    "Approve",
+                                )));
                             }
                             Err(e) => {
                                 log::error!("Approve error: {}", e);
@@ -847,12 +837,10 @@ impl Middleware for GitHubMiddleware {
                         {
                             Ok(_) => {
                                 log::info!("Successfully commented on PR #{}", pr_number_owned);
-                                dispatcher.dispatch(Action::StatusBar(
-                                    StatusBarAction::success(
-                                        format!("Commented on PR #{}", pr_number_owned),
-                                        "Comment",
-                                    ),
-                                ));
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::success(
+                                    format!("Commented on PR #{}", pr_number_owned),
+                                    "Comment",
+                                )));
                             }
                             Err(e) => {
                                 log::error!("Comment error: {}", e);
@@ -920,12 +908,10 @@ impl Middleware for GitHubMiddleware {
                                     "Successfully requested changes on PR #{}",
                                     pr_number_owned
                                 );
-                                dispatcher.dispatch(Action::StatusBar(
-                                    StatusBarAction::success(
-                                        format!("Requested changes on PR #{}", pr_number_owned),
-                                        "Request Changes",
-                                    ),
-                                ));
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::success(
+                                    format!("Requested changes on PR #{}", pr_number_owned),
+                                    "Request Changes",
+                                )));
                             }
                             Err(e) => {
                                 log::error!("Request changes error: {}", e);
@@ -1028,12 +1014,10 @@ impl Middleware for GitHubMiddleware {
                         {
                             Ok(()) => {
                                 log::info!("Successfully closed PR #{}", pr_number_owned);
-                                dispatcher.dispatch(Action::StatusBar(
-                                    StatusBarAction::success(
-                                        format!("PR #{} closed", pr_number_owned),
-                                        "Close",
-                                    ),
-                                ));
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::success(
+                                    format!("PR #{} closed", pr_number_owned),
+                                    "Close",
+                                )));
                                 // Trigger refresh to update PR list
                                 dispatcher
                                     .dispatch(Action::PullRequest(PullRequestAction::Refresh));

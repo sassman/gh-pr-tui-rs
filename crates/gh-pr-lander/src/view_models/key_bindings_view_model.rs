@@ -46,6 +46,7 @@ pub struct KeyBindingsPanelViewModel {
     /// Current scroll offset
     pub scroll_offset: usize,
     /// Total number of lines (for scroll bounds)
+    #[allow(dead_code)]
     pub total_lines: usize,
 }
 
@@ -176,6 +177,7 @@ impl KeyBindingsPanelViewModel {
     }
 
     /// Calculate max scroll offset based on visible height
+    #[allow(dead_code)]
     pub fn max_scroll(&self, visible_height: usize) -> usize {
         self.total_lines.saturating_sub(visible_height)
     }
