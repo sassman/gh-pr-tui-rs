@@ -111,6 +111,45 @@ and eventually flow to reducers for state updates.
 dispatcher.dispatch(Action::Bootstrap(BootstrapAction::LoadRepositories));
 ```
 
+## Action Design Principles
+
+### Actions Carry Domain Data, Not Indices
+
+Actions carry domain model data (e.g., `Repository`) instead of state indices (e.g., `repo_idx: usize`).
+This avoids **state timing issues** where middleware-dispatched actions might see stale state.
+
+**Problem with indices:**
+```rust
+// Middleware A dispatches action
+dispatcher.dispatch(PullRequestAction::LoadStart(repo_idx));
+// Middleware B handles it, but reducer hasn't run yet!
+// State lookup with repo_idx might fail or return wrong data
+```
+
+**Solution with domain data:**
+```rust
+// Actions carry the data they need
+PullRequestAction::LoadStart { repo: Repository }
+PullRequestAction::Loaded { repo: Repository, prs: Vec<Pr> }
+
+// Reducer looks up index when processing
+fn find_repo_idx(state: &MainViewState, repo: &Repository) -> Option<usize> {
+    state.repositories.iter()
+        .position(|r| r.org == repo.org && r.repo == repo.repo)
+}
+```
+
+This ensures actions are self-contained and can be processed regardless of when the reducer runs.
+
+### Bulk Loading Coordination
+
+`RepositoryMiddleware` coordinates bulk repository loading:
+1. Tracks pending repos in `HashSet<Repository>` when `LoadRecentRepositories` is handled
+2. Listens for `PullRequestAction::Loaded` / `LoadError` to mark repos as done
+3. Dispatches `LoadRecentRepositoriesDone` when all repos complete
+
+This pattern keeps loading orchestration in one place while actual API calls remain in `GitHubMiddleware`.
+
 ## Components
 
 ### Actions (`src/actions/`)

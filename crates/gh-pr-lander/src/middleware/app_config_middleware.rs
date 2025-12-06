@@ -33,6 +33,7 @@ impl Middleware for AppConfigMiddleware {
             Action::Bootstrap(BootstrapAction::Start) => {
                 if !self.config_loaded {
                     log::info!("AppConfigMiddleware: Loading application configuration");
+                    // This can block - we're on the background thread
                     let config = AppConfig::load();
                     log::info!(
                         "AppConfigMiddleware: Loaded config (ide_command: {})",

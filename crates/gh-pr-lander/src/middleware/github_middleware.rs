@@ -8,11 +8,11 @@
 //! - Browser/IDE integration
 
 use crate::actions::{
-    Action, BootstrapAction, BuildLogAction, DiffViewerAction, GlobalAction, PullRequestAction,
-    StatusBarAction,
+    Action, BootstrapAction, BuildLogAction, DiffViewerAction, Event, GlobalAction,
+    PullRequestAction, RepositoryAction, StatusBarAction,
 };
 use crate::dispatcher::Dispatcher;
-use crate::domain_models::{MergeableStatus, Pr};
+use crate::domain_models::{MergeableStatus, Pr, Repository};
 use crate::middleware::Middleware;
 use crate::state::AppState;
 use crate::state::{BuildLogJobMetadata, BuildLogJobStatus, BuildLogPrContext};
@@ -70,7 +70,7 @@ impl GitHubMiddleware {
                     log::info!("GitHubMiddleware: GitHub client initialized with caching");
                     *client_holder.lock().unwrap() = Some(client);
                     // Signal that client is ready - trigger any pending operations
-                    dispatcher.dispatch(Action::Bootstrap(BootstrapAction::ClientReady));
+                    dispatcher.dispatch(Action::event(Event::ClientReady));
                 }
                 Err(e) => {
                     log::warn!("GitHubMiddleware: GitHub client not initialized: {}", e);
@@ -90,8 +90,13 @@ impl GitHubMiddleware {
     }
 
     /// Get target PRs for an operation (selected PRs or cursor PR)
-    fn get_target_prs(&self, state: &AppState) -> Vec<(usize, usize)> {
+    /// Returns: Vec<(Repository, pr_number)>
+    fn get_target_prs(&self, state: &AppState) -> Vec<(Repository, usize)> {
         let repo_idx = state.main_view.selected_repository;
+
+        let Some(repo) = state.main_view.repositories.get(repo_idx) else {
+            return vec![];
+        };
 
         if let Some(repo_data) = state.main_view.repo_data.get(&repo_idx) {
             // If there are selected PRs, use those
@@ -99,13 +104,42 @@ impl GitHubMiddleware {
                 return repo_data
                     .selected_pr_numbers
                     .iter()
-                    .map(|&pr_num| (repo_idx, pr_num))
+                    .map(|&pr_num| (repo.clone(), pr_num))
                     .collect();
             }
 
             // Otherwise use the cursor PR
             if let Some(pr) = repo_data.prs.get(repo_data.selected_pr) {
-                return vec![(repo_idx, pr.number)];
+                return vec![(repo.clone(), pr.number)];
+            }
+        }
+
+        vec![]
+    }
+
+    /// Get target PRs with author info for rebase operation
+    /// Returns: Vec<(Repository, pr_number, author)>
+    fn get_target_prs_with_author(&self, state: &AppState) -> Vec<(Repository, usize, String)> {
+        let repo_idx = state.main_view.selected_repository;
+
+        let Some(repo) = state.main_view.repositories.get(repo_idx) else {
+            return vec![];
+        };
+
+        if let Some(repo_data) = state.main_view.repo_data.get(&repo_idx) {
+            // If there are selected PRs, use those
+            if !repo_data.selected_pr_numbers.is_empty() {
+                return repo_data
+                    .prs
+                    .iter()
+                    .filter(|pr| repo_data.selected_pr_numbers.contains(&pr.number))
+                    .map(|pr| (repo.clone(), pr.number, pr.author.clone()))
+                    .collect();
+            }
+
+            // Otherwise use the cursor PR
+            if let Some(pr) = repo_data.prs.get(repo_data.selected_pr) {
+                return vec![(repo.clone(), pr.number, pr.author.clone())];
             }
         }
 
@@ -163,11 +197,11 @@ impl GitHubMiddleware {
     }
 
     /// Get target PR CI info for build operations (respects multi-selection)
-    /// Returns: Vec<(repo_idx, pr_number, owner, repo, head_sha, head_branch)>
+    /// Returns: Vec<(Repository, pr_number, head_sha, head_branch)>
     fn get_target_pr_ci_info(
         &self,
         state: &AppState,
-    ) -> Vec<(usize, u64, String, String, String, String)> {
+    ) -> Vec<(Repository, u64, String, String)> {
         let repo_idx = state.main_view.selected_repository;
 
         if let Some(repo) = state.main_view.repositories.get(repo_idx) {
@@ -180,10 +214,8 @@ impl GitHubMiddleware {
                         .filter(|pr| repo_data.selected_pr_numbers.contains(&pr.number))
                         .map(|pr| {
                             (
-                                repo_idx,
+                                repo.clone(),
                                 pr.number as u64,
-                                repo.org.clone(),
-                                repo.repo.clone(),
                                 pr.head_sha.clone(),
                                 pr.head_branch.clone(),
                             )
@@ -194,10 +226,8 @@ impl GitHubMiddleware {
                 // Otherwise use the cursor PR
                 if let Some(pr) = repo_data.prs.get(repo_data.selected_pr) {
                     return vec![(
-                        repo_idx,
+                        repo.clone(),
                         pr.number as u64,
-                        repo.org.clone(),
-                        repo.repo.clone(),
                         pr.head_sha.clone(),
                         pr.head_branch.clone(),
                     )];
@@ -239,6 +269,10 @@ impl GitHubMiddleware {
             return;
         }
 
+        let Some(repo) = state.main_view.repositories.get(repo_idx) else {
+            return;
+        };
+
         // Check if this repository has PRs loaded
         if let Some(repo_data) = state.main_view.repo_data.get(&repo_idx) {
             // Filter PRs with Unknown status
@@ -249,8 +283,97 @@ impl GitHubMiddleware {
                 .cloned()
                 .collect();
 
-            dispatch_ci_status_checks(repo_idx, &prs_needing_status, dispatcher);
+            dispatch_ci_status_checks(repo, &prs_needing_status, dispatcher);
         }
+    }
+
+    fn handle_pr_load_2(
+        &self,
+        repo: &Repository,
+        state: &AppState,
+        dispatcher: &Dispatcher,
+        force_refresh: bool,
+    ) -> bool {
+        let client = if force_refresh {
+            let Some(client) = self.force_refresh_client() else {
+                log::error!("PrLoad: client not initialized");
+                // dispatcher.dispatch(Action::PullRequest(PullRequestAction::LoadError(
+                // repo_idx,
+                // "GitHub client not initialized".to_string(),
+                // )));
+                return true;
+            };
+            client
+        } else {
+            let Some(client) = self.client() else {
+                log::error!("PrLoad: client not initialized");
+                // dispatcher.dispatch(Action::PullRequest(PullRequestAction::LoadError(
+                //     repo_idx,
+                //     "GitHub client not initialized".to_string(),
+                // )));
+                return true;
+            };
+            client
+        };
+
+        log::info!("PrLoad: Loading PRs for {}/{}", repo.org, repo.repo);
+
+        let repo = repo.clone();
+        let dispatcher = dispatcher.clone();
+
+        // Spawn async task to load PRs
+        let mode = if force_refresh {
+            "force refresh"
+        } else {
+            "cached"
+        };
+        log::info!(
+            "Spawning async task to load PRs for {}/{} ({})",
+            repo.org,
+            repo.repo,
+            mode
+        );
+
+        self.runtime.spawn(async move {
+            log::info!("Async task started: Loading PRs for {}/{}", repo.org, repo.repo);
+
+            match client
+                .fetch_pull_requests(&repo.org, &repo.repo, Some(&repo.branch))
+                .await
+            {
+                Ok(prs) => {
+                    let domain_prs: Vec<Pr> = prs.into_iter().map(convert_to_domain_pr).collect();
+                    log::info!("Loaded {} PRs for {}/{}", domain_prs.len(), repo.org, repo.repo);
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::info(
+                        format!("Loaded {} PRs from {}/{}", domain_prs.len(), repo.org, repo.repo),
+                        "Load",
+                    )));
+
+                    // First dispatch Loaded to populate repo_data.prs
+                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::Loaded {
+                        repo: repo.clone(),
+                        prs: domain_prs.clone(),
+                    }));
+
+                    // Then trigger CI status checks for each PR (background fetch)
+                    // This must come AFTER Loaded so the PRs exist when BuildStatusUpdated arrives
+                    dispatch_ci_status_checks(&repo, &domain_prs, &dispatcher);
+                }
+                Err(e) => {
+                    log::error!("Failed to load PRs for {}/{}: {}", repo.org, repo.repo, e);
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                        format!("Failed to load PRs: {}", e),
+                        "Load",
+                    )));
+                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::LoadError {
+                        repo,
+                        error: e.to_string(),
+                    }));
+                }
+            }
+        });
+
+        true // Let action pass through to reducer (to set loading state)
     }
 
     /// Handle loading PRs for a repository
@@ -268,28 +391,6 @@ impl GitHubMiddleware {
             force_refresh
         );
 
-        let client = if force_refresh {
-            let Some(client) = self.force_refresh_client() else {
-                log::error!("PrLoad: client not initialized");
-                dispatcher.dispatch(Action::PullRequest(PullRequestAction::LoadError(
-                    repo_idx,
-                    "GitHub client not initialized".to_string(),
-                )));
-                return true;
-            };
-            client
-        } else {
-            let Some(client) = self.client() else {
-                log::error!("PrLoad: client not initialized");
-                dispatcher.dispatch(Action::PullRequest(PullRequestAction::LoadError(
-                    repo_idx,
-                    "GitHub client not initialized".to_string(),
-                )));
-                return true;
-            };
-            client
-        };
-
         // Get the repository at this index
         let Some(repo) = state.main_view.repositories.get(repo_idx) else {
             log::warn!(
@@ -300,71 +401,7 @@ impl GitHubMiddleware {
             return true;
         };
 
-        log::info!(
-            "PrLoad: Found repo at index {}: {}/{}",
-            repo_idx,
-            repo.org,
-            repo.repo
-        );
-
-        let org = repo.org.clone();
-        let repo_name = repo.repo.clone();
-        let base_branch = Some(repo.branch.clone());
-        let dispatcher = dispatcher.clone();
-
-        // Spawn async task to load PRs
-        let mode = if force_refresh {
-            "force refresh"
-        } else {
-            "cached"
-        };
-        log::info!(
-            "Spawning async task to load PRs for {}/{} ({})",
-            org,
-            repo_name,
-            mode
-        );
-
-        self.runtime.spawn(async move {
-            log::info!("Async task started: Loading PRs for {}/{}", org, repo_name);
-
-            match client
-                .fetch_pull_requests(&org, &repo_name, base_branch.as_deref())
-                .await
-            {
-                Ok(prs) => {
-                    let domain_prs: Vec<Pr> = prs.into_iter().map(convert_to_domain_pr).collect();
-                    log::info!("Loaded {} PRs for {}/{}", domain_prs.len(), org, repo_name);
-                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::info(
-                        format!("Loaded {} PRs from {}/{}", domain_prs.len(), org, repo_name),
-                        "Load",
-                    )));
-
-                    // First dispatch Loaded to populate repo_data.prs
-                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::Loaded(
-                        repo_idx,
-                        domain_prs.clone(),
-                    )));
-
-                    // Then trigger CI status checks for each PR (background fetch)
-                    // This must come AFTER Loaded so the PRs exist when BuildStatusUpdated arrives
-                    dispatch_ci_status_checks(repo_idx, &domain_prs, &dispatcher);
-                }
-                Err(e) => {
-                    log::error!("Failed to load PRs for {}/{}: {}", org, repo_name, e);
-                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
-                        format!("Failed to load PRs: {}", e),
-                        "Load",
-                    )));
-                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::LoadError(
-                        repo_idx,
-                        e.to_string(),
-                    )));
-                }
-            }
-        });
-
-        true // Let action pass through to reducer (to set loading state)
+        self.handle_pr_load_2(repo, state, dispatcher, force_refresh)
     }
 }
 
@@ -383,16 +420,20 @@ impl Middleware for GitHubMiddleware {
                 true // Let action pass through
             }
 
-            // Client ready - trigger repository loading
-            Action::Bootstrap(BootstrapAction::ClientReady) => {
+            // Client ready event - trigger repository loading
+            Action::Event(Event::ClientReady) => {
                 log::info!("GitHub client ready, triggering repository loading");
                 dispatcher.dispatch(Action::Bootstrap(BootstrapAction::LoadRecentRepositories));
                 true // Let action pass through
             }
 
+            Action::Repository(RepositoryAction::LoadRepositoryData(repo)) => {
+                self.handle_pr_load_2(repo, state, dispatcher, false)
+            }
+
             // Handle PR load start - actually fetch the PRs
-            Action::PullRequest(PullRequestAction::LoadStart(repo_idx)) => {
-                self.handle_pr_load(*repo_idx, state, dispatcher, false)
+            Action::PullRequest(PullRequestAction::LoadStart { repo }) => {
+                self.handle_pr_load_2(repo, state, dispatcher, false)
             }
 
             // Handle PR refresh request (force refresh - bypass cache)
@@ -459,77 +500,59 @@ impl Middleware for GitHubMiddleware {
                     return false;
                 }
 
-                for (repo_idx, pr_number) in targets {
-                    if let Some((owner, repo)) = self.get_repo_info(state, repo_idx) {
-                        let dispatcher = dispatcher.clone();
-                        let client = client.clone();
+                for (repo, pr_number) in targets {
+                    let dispatcher = dispatcher.clone();
+                    let client = client.clone();
 
-                        dispatcher.dispatch(Action::PullRequest(PullRequestAction::MergeStart(
-                            repo_idx, pr_number,
-                        )));
-                        dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
-                            format!("Merging PR #{}...", pr_number),
-                            "Merge",
-                        )));
+                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::MergeStart {
+                        repo: repo.clone(),
+                        pr_number,
+                    }));
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
+                        format!("Merging PR #{}...", pr_number),
+                        "Merge",
+                    )));
 
-                        self.runtime.spawn(async move {
-                            match client
-                                .merge_pull_request(
-                                    &owner,
-                                    &repo,
-                                    pr_number as u64,
-                                    MergeMethod::default(),
-                                    None,
-                                    None,
-                                )
-                                .await
-                            {
-                                Ok(result) if result.merged => {
-                                    log::info!("Successfully merged PR #{}", pr_number);
-                                    dispatcher.dispatch(Action::StatusBar(
-                                        StatusBarAction::success(
-                                            format!("PR #{} merged", pr_number),
-                                            "Merge",
-                                        ),
-                                    ));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::MergeSuccess(repo_idx, pr_number),
-                                    ));
-                                    // Trigger refresh to update PR list
-                                    dispatcher
-                                        .dispatch(Action::PullRequest(PullRequestAction::Refresh));
-                                }
-                                Ok(result) => {
-                                    log::error!("Merge failed: {}", result.message);
-                                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
-                                        format!("Merge failed: {}", result.message),
+                    self.runtime.spawn(async move {
+                        match client
+                            .merge_pull_request(
+                                &repo.org,
+                                &repo.repo,
+                                pr_number as u64,
+                                MergeMethod::default(),
+                                None,
+                                None,
+                            )
+                            .await
+                        {
+                            Ok(result) if result.merged => {
+                                log::info!("Successfully merged PR #{}", pr_number);
+                                dispatcher.dispatch(Action::StatusBar(
+                                    StatusBarAction::success(
+                                        format!("PR #{} merged", pr_number),
                                         "Merge",
-                                    )));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::MergeError(
-                                            repo_idx,
-                                            pr_number,
-                                            result.message,
-                                        ),
-                                    ));
-                                }
-                                Err(e) => {
-                                    log::error!("Merge error: {}", e);
-                                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
-                                        format!("Merge error: {}", e),
-                                        "Merge",
-                                    )));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::MergeError(
-                                            repo_idx,
-                                            pr_number,
-                                            e.to_string(),
-                                        ),
-                                    ));
-                                }
+                                    ),
+                                ));
+                                // Trigger refresh to update PR list
+                                dispatcher
+                                    .dispatch(Action::PullRequest(PullRequestAction::Refresh));
                             }
-                        });
-                    }
+                            Ok(result) => {
+                                log::error!("Merge failed: {}", result.message);
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                    format!("Merge failed: {}", result.message),
+                                    "Merge",
+                                )));
+                            }
+                            Err(e) => {
+                                log::error!("Merge error: {}", e);
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                    format!("Merge error: {}", e),
+                                    "Merge",
+                                )));
+                            }
+                        }
+                    });
                 }
                 false // Consume action
             }
@@ -551,121 +574,92 @@ impl Middleware for GitHubMiddleware {
                     }
                 };
 
-                let targets = self.get_target_prs(state);
+                let targets = self.get_target_prs_with_author(state);
                 if targets.is_empty() {
                     log::warn!("No PRs selected for rebase");
                     return false;
                 }
 
-                for (repo_idx, pr_number) in targets {
-                    if let Some((owner, repo)) = self.get_repo_info(state, repo_idx) {
-                        // Look up PR author to determine rebase method
-                        let is_dependabot = state
-                            .main_view
-                            .repo_data
-                            .get(&repo_idx)
-                            .and_then(|data| data.prs.iter().find(|pr| pr.number == pr_number))
-                            .map(|pr| pr.author.to_lowercase().contains("dependabot"))
-                            .unwrap_or(false);
+                for (repo, pr_number, author) in targets {
+                    let is_dependabot = author.to_lowercase().contains("dependabot");
+                    let dispatcher = dispatcher.clone();
 
-                        let dispatcher = dispatcher.clone();
+                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::RebaseStart {
+                        repo: repo.clone(),
+                        pr_number,
+                    }));
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
+                        format!("Updating branch for PR #{}...", pr_number),
+                        "Rebase",
+                    )));
 
-                        dispatcher.dispatch(Action::PullRequest(PullRequestAction::RebaseStart(
-                            repo_idx, pr_number,
-                        )));
-                        dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
-                            format!("Updating branch for PR #{}...", pr_number),
-                            "Rebase",
-                        )));
-
-                        if is_dependabot {
-                            // For dependabot PRs, post a comment to trigger rebase
-                            let octocrab = Arc::clone(&octocrab);
-                            self.runtime.spawn(async move {
-                                match octocrab
-                                    .issues(&owner, &repo)
-                                    .create_comment(pr_number as u64, "@dependabot rebase")
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        log::info!(
-                                            "Requested dependabot rebase for PR #{}",
-                                            pr_number
-                                        );
-                                        dispatcher.dispatch(Action::StatusBar(
-                                            StatusBarAction::success(
-                                                format!(
-                                                    "Dependabot rebase requested for PR #{}",
-                                                    pr_number
-                                                ),
-                                                "Rebase",
+                    if is_dependabot {
+                        // For dependabot PRs, post a comment to trigger rebase
+                        let octocrab = Arc::clone(&octocrab);
+                        self.runtime.spawn(async move {
+                            match octocrab
+                                .issues(&repo.org, &repo.repo)
+                                .create_comment(pr_number as u64, "@dependabot rebase")
+                                .await
+                            {
+                                Ok(_) => {
+                                    log::info!(
+                                        "Requested dependabot rebase for PR #{}",
+                                        pr_number
+                                    );
+                                    dispatcher.dispatch(Action::StatusBar(
+                                        StatusBarAction::success(
+                                            format!(
+                                                "Dependabot rebase requested for PR #{}",
+                                                pr_number
                                             ),
-                                        ));
-                                        dispatcher.dispatch(Action::PullRequest(
-                                            PullRequestAction::RebaseSuccess(repo_idx, pr_number),
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        log::error!("Dependabot rebase request error: {}", e);
-                                        dispatcher.dispatch(Action::StatusBar(
-                                            StatusBarAction::error(
-                                                format!("Rebase request failed: {}", e),
-                                                "Rebase",
-                                            ),
-                                        ));
-                                        dispatcher.dispatch(Action::PullRequest(
-                                            PullRequestAction::RebaseError(
-                                                repo_idx,
-                                                pr_number,
-                                                e.to_string(),
-                                            ),
-                                        ));
-                                    }
+                                            "Rebase",
+                                        ),
+                                    ));
                                 }
-                            });
-                        } else {
-                            // For regular PRs, use the update branch API
-                            let client = client.clone();
-                            self.runtime.spawn(async move {
-                                match client
-                                    .update_pull_request_branch(&owner, &repo, pr_number as u64)
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        log::info!("Successfully rebased PR #{}", pr_number);
-                                        dispatcher.dispatch(Action::StatusBar(
-                                            StatusBarAction::success(
-                                                format!("PR #{} branch updated", pr_number),
-                                                "Rebase",
-                                            ),
-                                        ));
-                                        dispatcher.dispatch(Action::PullRequest(
-                                            PullRequestAction::RebaseSuccess(repo_idx, pr_number),
-                                        ));
-                                        // Trigger refresh to update PR status
-                                        dispatcher.dispatch(Action::PullRequest(
-                                            PullRequestAction::Refresh,
-                                        ));
-                                    }
-                                    Err(e) => {
-                                        log::error!("Rebase error: {}", e);
-                                        dispatcher.dispatch(Action::StatusBar(
-                                            StatusBarAction::error(
-                                                format!("Rebase failed: {}", e),
-                                                "Rebase",
-                                            ),
-                                        ));
-                                        dispatcher.dispatch(Action::PullRequest(
-                                            PullRequestAction::RebaseError(
-                                                repo_idx,
-                                                pr_number,
-                                                e.to_string(),
-                                            ),
-                                        ));
-                                    }
+                                Err(e) => {
+                                    log::error!("Dependabot rebase request error: {}", e);
+                                    dispatcher.dispatch(Action::StatusBar(
+                                        StatusBarAction::error(
+                                            format!("Rebase request failed: {}", e),
+                                            "Rebase",
+                                        ),
+                                    ));
                                 }
-                            });
-                        }
+                            }
+                        });
+                    } else {
+                        // For regular PRs, use the update branch API
+                        let client = client.clone();
+                        self.runtime.spawn(async move {
+                            match client
+                                .update_pull_request_branch(&repo.org, &repo.repo, pr_number as u64)
+                                .await
+                            {
+                                Ok(()) => {
+                                    log::info!("Successfully rebased PR #{}", pr_number);
+                                    dispatcher.dispatch(Action::StatusBar(
+                                        StatusBarAction::success(
+                                            format!("PR #{} branch updated", pr_number),
+                                            "Rebase",
+                                        ),
+                                    ));
+                                    // Trigger refresh to update PR status
+                                    dispatcher.dispatch(Action::PullRequest(
+                                        PullRequestAction::Refresh,
+                                    ));
+                                }
+                                Err(e) => {
+                                    log::error!("Rebase error: {}", e);
+                                    dispatcher.dispatch(Action::StatusBar(
+                                        StatusBarAction::error(
+                                            format!("Rebase failed: {}", e),
+                                            "Rebase",
+                                        ),
+                                    ));
+                                }
+                            }
+                        });
                     }
                 }
                 false // Consume action
@@ -749,6 +743,11 @@ impl Middleware for GitHubMiddleware {
                 };
 
                 let repo_idx = state.main_view.selected_repository;
+                let Some(repo) = state.main_view.repositories.get(repo_idx).cloned() else {
+                    log::error!("No repository selected");
+                    return false;
+                };
+
                 let message = if message.is_empty() {
                     None
                 } else {
@@ -756,61 +755,51 @@ impl Middleware for GitHubMiddleware {
                 };
 
                 for pr_number in pr_numbers {
-                    if let Some((owner, repo)) = self.get_repo_info(state, repo_idx) {
-                        let dispatcher = dispatcher.clone();
-                        let client = client.clone();
-                        let message = message.clone();
-                        let pr_num = *pr_number as usize;
-                        let pr_number_owned = *pr_number; // Clone to owned value
+                    let dispatcher = dispatcher.clone();
+                    let client = client.clone();
+                    let message = message.clone();
+                    let pr_num = *pr_number as usize;
+                    let pr_number_owned = *pr_number;
+                    let repo = repo.clone();
 
-                        dispatcher.dispatch(Action::PullRequest(PullRequestAction::ApproveStart(
-                            repo_idx, pr_num,
-                        )));
-                        dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
-                            format!("Approving PR #{}...", pr_number_owned),
-                            "Approve",
-                        )));
+                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::ApproveStart {
+                        repo: repo.clone(),
+                        pr_number: pr_num,
+                    }));
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
+                        format!("Approving PR #{}...", pr_number_owned),
+                        "Approve",
+                    )));
 
-                        self.runtime.spawn(async move {
-                            match client
-                                .create_review(
-                                    &owner,
-                                    &repo,
-                                    pr_number_owned,
-                                    ReviewEvent::Approve,
-                                    message.as_deref(),
-                                )
-                                .await
-                            {
-                                Ok(()) => {
-                                    log::info!("Successfully approved PR #{}", pr_number_owned);
-                                    dispatcher.dispatch(Action::StatusBar(
-                                        StatusBarAction::success(
-                                            format!("PR #{} approved", pr_number_owned),
-                                            "Approve",
-                                        ),
-                                    ));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::ApproveSuccess(repo_idx, pr_num),
-                                    ));
-                                }
-                                Err(e) => {
-                                    log::error!("Approve error: {}", e);
-                                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
-                                        format!("Approve failed: {}", e),
+                    self.runtime.spawn(async move {
+                        match client
+                            .create_review(
+                                &repo.org,
+                                &repo.repo,
+                                pr_number_owned,
+                                ReviewEvent::Approve,
+                                message.as_deref(),
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                log::info!("Successfully approved PR #{}", pr_number_owned);
+                                dispatcher.dispatch(Action::StatusBar(
+                                    StatusBarAction::success(
+                                        format!("PR #{} approved", pr_number_owned),
                                         "Approve",
-                                    )));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::ApproveError(
-                                            repo_idx,
-                                            pr_num,
-                                            e.to_string(),
-                                        ),
-                                    ));
-                                }
+                                    ),
+                                ));
                             }
-                        });
-                    }
+                            Err(e) => {
+                                log::error!("Approve error: {}", e);
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                    format!("Approve failed: {}", e),
+                                    "Approve",
+                                )));
+                            }
+                        }
+                    });
                 }
                 false // Consume action
             }
@@ -828,58 +817,52 @@ impl Middleware for GitHubMiddleware {
                 };
 
                 let repo_idx = state.main_view.selected_repository;
+                let Some(repo) = state.main_view.repositories.get(repo_idx).cloned() else {
+                    log::error!("No repository selected");
+                    return false;
+                };
 
                 for pr_number in pr_numbers {
-                    if let Some((owner, repo)) = self.get_repo_info(state, repo_idx) {
-                        let dispatcher = dispatcher.clone();
-                        let client = Arc::clone(&client);
-                        let message = message.clone();
-                        let pr_num = *pr_number as usize;
-                        let pr_number_owned = *pr_number; // Clone to owned value
+                    let dispatcher = dispatcher.clone();
+                    let client = Arc::clone(&client);
+                    let message = message.clone();
+                    let pr_num = *pr_number as usize;
+                    let pr_number_owned = *pr_number;
+                    let repo = repo.clone();
 
-                        dispatcher.dispatch(Action::PullRequest(PullRequestAction::CommentStart(
-                            repo_idx, pr_num,
-                        )));
-                        dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
-                            format!("Commenting on PR #{}...", pr_number_owned),
-                            "Comment",
-                        )));
+                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::CommentStart {
+                        repo: repo.clone(),
+                        pr_number: pr_num,
+                    }));
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
+                        format!("Commenting on PR #{}...", pr_number_owned),
+                        "Comment",
+                    )));
 
-                        self.runtime.spawn(async move {
-                            match client
-                                .issues(&owner, &repo)
-                                .create_comment(pr_number_owned, &message)
-                                .await
-                            {
-                                Ok(_) => {
-                                    log::info!("Successfully commented on PR #{}", pr_number_owned);
-                                    dispatcher.dispatch(Action::StatusBar(
-                                        StatusBarAction::success(
-                                            format!("Commented on PR #{}", pr_number_owned),
-                                            "Comment",
-                                        ),
-                                    ));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::CommentSuccess(repo_idx, pr_num),
-                                    ));
-                                }
-                                Err(e) => {
-                                    log::error!("Comment error: {}", e);
-                                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
-                                        format!("Comment failed: {}", e),
+                    self.runtime.spawn(async move {
+                        match client
+                            .issues(&repo.org, &repo.repo)
+                            .create_comment(pr_number_owned, &message)
+                            .await
+                        {
+                            Ok(_) => {
+                                log::info!("Successfully commented on PR #{}", pr_number_owned);
+                                dispatcher.dispatch(Action::StatusBar(
+                                    StatusBarAction::success(
+                                        format!("Commented on PR #{}", pr_number_owned),
                                         "Comment",
-                                    )));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::CommentError(
-                                            repo_idx,
-                                            pr_num,
-                                            e.to_string(),
-                                        ),
-                                    ));
-                                }
+                                    ),
+                                ));
                             }
-                        });
-                    }
+                            Err(e) => {
+                                log::error!("Comment error: {}", e);
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                    format!("Comment failed: {}", e),
+                                    "Comment",
+                                )));
+                            }
+                        }
+                    });
                 }
                 false // Consume action
             }
@@ -897,66 +880,62 @@ impl Middleware for GitHubMiddleware {
                 };
 
                 let repo_idx = state.main_view.selected_repository;
+                let Some(repo) = state.main_view.repositories.get(repo_idx).cloned() else {
+                    log::error!("No repository selected");
+                    return false;
+                };
 
                 for pr_number in pr_numbers {
-                    if let Some((owner, repo)) = self.get_repo_info(state, repo_idx) {
-                        let dispatcher = dispatcher.clone();
-                        let client = client.clone();
-                        let message = message.clone();
-                        let pr_num = *pr_number as usize;
-                        let pr_number_owned = *pr_number; // Clone to owned value
+                    let dispatcher = dispatcher.clone();
+                    let client = client.clone();
+                    let message = message.clone();
+                    let pr_num = *pr_number as usize;
+                    let pr_number_owned = *pr_number;
+                    let repo = repo.clone();
 
-                        dispatcher.dispatch(Action::PullRequest(
-                            PullRequestAction::RequestChangesStart(repo_idx, pr_num),
-                        ));
-                        dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
-                            format!("Requesting changes on PR #{}...", pr_number_owned),
-                            "Request Changes",
-                        )));
+                    dispatcher.dispatch(Action::PullRequest(
+                        PullRequestAction::RequestChangesStart {
+                            repo: repo.clone(),
+                            pr_number: pr_num,
+                        },
+                    ));
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
+                        format!("Requesting changes on PR #{}...", pr_number_owned),
+                        "Request Changes",
+                    )));
 
-                        self.runtime.spawn(async move {
-                            match client
-                                .create_review(
-                                    &owner,
-                                    &repo,
-                                    pr_number_owned,
-                                    ReviewEvent::RequestChanges,
-                                    Some(&message),
-                                )
-                                .await
-                            {
-                                Ok(()) => {
-                                    log::info!(
-                                        "Successfully requested changes on PR #{}",
-                                        pr_number_owned
-                                    );
-                                    dispatcher.dispatch(Action::StatusBar(
-                                        StatusBarAction::success(
-                                            format!("Requested changes on PR #{}", pr_number_owned),
-                                            "Request Changes",
-                                        ),
-                                    ));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::RequestChangesSuccess(repo_idx, pr_num),
-                                    ));
-                                }
-                                Err(e) => {
-                                    log::error!("Request changes error: {}", e);
-                                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
-                                        format!("Request changes failed: {}", e),
+                    self.runtime.spawn(async move {
+                        match client
+                            .create_review(
+                                &repo.org,
+                                &repo.repo,
+                                pr_number_owned,
+                                ReviewEvent::RequestChanges,
+                                Some(&message),
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                log::info!(
+                                    "Successfully requested changes on PR #{}",
+                                    pr_number_owned
+                                );
+                                dispatcher.dispatch(Action::StatusBar(
+                                    StatusBarAction::success(
+                                        format!("Requested changes on PR #{}", pr_number_owned),
                                         "Request Changes",
-                                    )));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::RequestChangesError(
-                                            repo_idx,
-                                            pr_num,
-                                            e.to_string(),
-                                        ),
-                                    ));
-                                }
+                                    ),
+                                ));
                             }
-                        });
-                    }
+                            Err(e) => {
+                                log::error!("Request changes error: {}", e);
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                    format!("Request changes failed: {}", e),
+                                    "Request Changes",
+                                )));
+                            }
+                        }
+                    });
                 }
                 false // Consume action
             }
@@ -1003,77 +982,71 @@ impl Middleware for GitHubMiddleware {
                 };
 
                 let repo_idx = state.main_view.selected_repository;
+                let Some(repo) = state.main_view.repositories.get(repo_idx).cloned() else {
+                    log::error!("No repository selected");
+                    return false;
+                };
 
                 for pr_number in pr_numbers {
-                    if let Some((owner, repo)) = self.get_repo_info(state, repo_idx) {
-                        let dispatcher = dispatcher.clone();
-                        let client = Arc::clone(&client);
-                        let cached_client = cached_client.clone();
-                        let message = message.clone();
-                        let pr_num = *pr_number as usize;
-                        let pr_number_owned = *pr_number; // Clone to owned value
+                    let dispatcher = dispatcher.clone();
+                    let client = Arc::clone(&client);
+                    let cached_client = cached_client.clone();
+                    let message = message.clone();
+                    let pr_num = *pr_number as usize;
+                    let pr_number_owned = *pr_number;
+                    let repo = repo.clone();
 
-                        dispatcher.dispatch(Action::PullRequest(PullRequestAction::CloseStart(
-                            repo_idx, pr_num,
-                        )));
-                        dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
-                            format!("Closing PR #{}...", pr_number_owned),
-                            "Close",
-                        )));
+                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::CloseStart {
+                        repo: repo.clone(),
+                        pr_number: pr_num,
+                    }));
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
+                        format!("Closing PR #{}...", pr_number_owned),
+                        "Close",
+                    )));
 
-                        self.runtime.spawn(async move {
-                            // Post comment if message is not empty
-                            if !message.is_empty() {
-                                if let Err(e) = client
-                                    .issues(&owner, &repo)
-                                    .create_comment(pr_number_owned, &message)
-                                    .await
-                                {
-                                    log::warn!(
-                                        "Failed to post close comment on PR #{}: {}",
-                                        pr_number_owned,
-                                        e
-                                    );
-                                }
-                            }
-
-                            // Close the PR
-                            match cached_client
-                                .close_pull_request(&owner, &repo, pr_number_owned)
+                    self.runtime.spawn(async move {
+                        // Post comment if message is not empty
+                        if !message.is_empty() {
+                            if let Err(e) = client
+                                .issues(&repo.org, &repo.repo)
+                                .create_comment(pr_number_owned, &message)
                                 .await
                             {
-                                Ok(()) => {
-                                    log::info!("Successfully closed PR #{}", pr_number_owned);
-                                    dispatcher.dispatch(Action::StatusBar(
-                                        StatusBarAction::success(
-                                            format!("PR #{} closed", pr_number_owned),
-                                            "Close",
-                                        ),
-                                    ));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::CloseSuccess(repo_idx, pr_num),
-                                    ));
-                                    // Trigger refresh to update PR list
-                                    dispatcher
-                                        .dispatch(Action::PullRequest(PullRequestAction::Refresh));
-                                }
-                                Err(e) => {
-                                    log::error!("Close error: {}", e);
-                                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
-                                        format!("Close failed: {}", e),
-                                        "Close",
-                                    )));
-                                    dispatcher.dispatch(Action::PullRequest(
-                                        PullRequestAction::CloseError(
-                                            repo_idx,
-                                            pr_num,
-                                            e.to_string(),
-                                        ),
-                                    ));
-                                }
+                                log::warn!(
+                                    "Failed to post close comment on PR #{}: {}",
+                                    pr_number_owned,
+                                    e
+                                );
                             }
-                        });
-                    }
+                        }
+
+                        // Close the PR
+                        match cached_client
+                            .close_pull_request(&repo.org, &repo.repo, pr_number_owned)
+                            .await
+                        {
+                            Ok(()) => {
+                                log::info!("Successfully closed PR #{}", pr_number_owned);
+                                dispatcher.dispatch(Action::StatusBar(
+                                    StatusBarAction::success(
+                                        format!("PR #{} closed", pr_number_owned),
+                                        "Close",
+                                    ),
+                                ));
+                                // Trigger refresh to update PR list
+                                dispatcher
+                                    .dispatch(Action::PullRequest(PullRequestAction::Refresh));
+                            }
+                            Err(e) => {
+                                log::error!("Close error: {}", e);
+                                dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                    format!("Close failed: {}", e),
+                                    "Close",
+                                )));
+                            }
+                        }
+                    });
                 }
                 false // Consume action
             }
@@ -1087,10 +1060,10 @@ impl Middleware for GitHubMiddleware {
 
                 log::info!("Opening build logs for {} PR(s)", targets.len());
 
-                for (_repo_idx, _pr_number, owner, repo, _head_sha, head_branch) in targets {
+                for (repo, _pr_number, _head_sha, head_branch) in targets {
                     let url = format!(
                         "https://github.com/{}/{}/actions?query=branch%3A{}",
-                        owner, repo, head_branch
+                        repo.org, repo.repo, head_branch
                     );
                     self.runtime.spawn(open_url(url));
                 }
@@ -1233,14 +1206,14 @@ impl Middleware for GitHubMiddleware {
                 log::info!("Rerunning failed jobs for {} PR(s)", targets.len());
 
                 // Rerun failed jobs for each target PR
-                for (repo_idx, pr_number, owner, repo, head_sha, _head_branch) in targets {
+                for (repo, pr_number, head_sha, _head_branch) in targets {
                     let dispatcher = dispatcher.clone();
                     let client = client.clone();
 
                     // Fetch workflow runs, then rerun failed ones
                     self.runtime.spawn(async move {
                         // Fetch workflow runs for this commit
-                        match client.fetch_workflow_runs(&owner, &repo, &head_sha).await {
+                        match client.fetch_workflow_runs(&repo.org, &repo.repo, &head_sha).await {
                             Ok(runs) => {
                                 // Filter to failed runs and rerun each
                                 let failed_runs: Vec<_> = runs
@@ -1265,24 +1238,25 @@ impl Middleware for GitHubMiddleware {
                                 }
 
                                 for run in failed_runs {
-                                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::RerunStart(
-                                        repo_idx,
+                                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::RerunStart {
+                                        repo: repo.clone(),
                                         pr_number,
-                                        run.id,
-                                    )));
+                                        run_id: run.id,
+                                    }));
 
-                                    match client.rerun_failed_jobs(&owner, &repo, run.id).await {
+                                    match client.rerun_failed_jobs(&repo.org, &repo.repo, run.id).await {
                                         Ok(()) => {
                                             log::info!(
                                                 "Successfully triggered rerun for workflow {} (PR #{})",
                                                 run.name,
                                                 pr_number
                                             );
-                                            dispatcher.dispatch(Action::PullRequest(PullRequestAction::RerunSuccess(
-                                                repo_idx,
-                                                pr_number,
-                                                run.id,
-                                            )));
+                                            dispatcher.dispatch(Action::StatusBar(
+                                                StatusBarAction::success(
+                                                    format!("Rerun triggered for {} (PR #{})", run.name, pr_number),
+                                                    "Rerun",
+                                                ),
+                                            ));
                                         }
                                         Err(e) => {
                                             log::error!(
@@ -1291,12 +1265,12 @@ impl Middleware for GitHubMiddleware {
                                                 pr_number,
                                                 e
                                             );
-                                            dispatcher.dispatch(Action::PullRequest(PullRequestAction::RerunError(
-                                                repo_idx,
-                                                pr_number,
-                                                run.id,
-                                                e.to_string(),
-                                            )));
+                                            dispatcher.dispatch(Action::StatusBar(
+                                                StatusBarAction::error(
+                                                    format!("Rerun failed: {}", e),
+                                                    "Rerun",
+                                                ),
+                                            ));
                                         }
                                     }
                                 }
@@ -1411,7 +1385,7 @@ impl Middleware for GitHubMiddleware {
 
             // Handle CI status check request
             Action::PullRequest(PullRequestAction::CheckBuildStatus {
-                repo_idx,
+                repo,
                 pr_number,
                 head_sha,
             }) => {
@@ -1423,12 +1397,7 @@ impl Middleware for GitHubMiddleware {
                     }
                 };
 
-                let Some((owner, repo)) = self.get_repo_info(state, *repo_idx) else {
-                    log::warn!("Cannot check build status: repository not found");
-                    return true;
-                };
-
-                let repo_idx = *repo_idx;
+                let repo = repo.clone();
                 let pr_number = *pr_number;
                 let head_sha = head_sha.clone();
                 let dispatcher = dispatcher.clone();
@@ -1436,7 +1405,7 @@ impl Middleware for GitHubMiddleware {
                 // Spawn async task to fetch CI status
                 log::info!("Spawning CI status fetch for PR #{}", pr_number);
                 self.runtime.spawn(async move {
-                    match client.fetch_ci_status(&owner, &repo, &head_sha).await {
+                    match client.fetch_ci_status(&repo.org, &repo.repo, &head_sha).await {
                         Ok(ci_status) => {
                             // Convert CiState to MergeableStatus using From trait
                             let status: MergeableStatus = ci_status.state.into();
@@ -1450,7 +1419,7 @@ impl Middleware for GitHubMiddleware {
                             );
                             dispatcher.dispatch(Action::PullRequest(
                                 PullRequestAction::BuildStatusUpdated {
-                                    repo_idx,
+                                    repo,
                                     pr_number,
                                     status,
                                 },
@@ -1830,19 +1799,10 @@ async fn init_client(
 }
 
 /// Dispatch CheckBuildStatus actions for the given PRs
-fn dispatch_ci_status_checks(repo_idx: usize, prs: &[Pr], dispatcher: &Dispatcher) {
+fn dispatch_ci_status_checks(repo: &Repository, prs: &[Pr], dispatcher: &Dispatcher) {
     for pr in prs {
-        // --------------- THIS IS A SMOKE TEST - REMOVE ME ---------------
-        // SMOKE TEST: for now do nothing to see if this is faster
-        // --------------- REMOVE ME --------------------------------------
-        // dispatcher.dispatch(Action::Bootstrap(
-        // BootstrapAction::LoadRecentRepositoriesDone,
-        // ));
-        // return;
-        // --------------- END OF REMOVE ME -------------------------------
-
         dispatcher.dispatch(Action::PullRequest(PullRequestAction::CheckBuildStatus {
-            repo_idx,
+            repo: repo.clone(),
             pr_number: pr.number as u64,
             head_sha: pr.head_sha.clone(),
         }));

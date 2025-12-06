@@ -3,38 +3,61 @@
 //! Handles state updates for Pull Request data using tagged PullRequestAction.
 
 use crate::actions::PullRequestAction;
-use crate::domain_models::LoadingState;
+use crate::domain_models::{LoadingState, Repository};
 use crate::state::MainViewState;
+
+/// Find repository index by Repository
+fn find_repo_idx(state: &MainViewState, repo: &Repository) -> Option<usize> {
+    state
+        .repositories
+        .iter()
+        .position(|r| r.org == repo.org && r.repo == repo.repo)
+}
 
 /// Reduce PR-related state based on actions (new tagged action version)
 ///
 /// Accepts only PullRequestAction, making it type-safe and focused.
 pub fn reduce_pull_request(mut state: MainViewState, action: &PullRequestAction) -> MainViewState {
     match action {
-        PullRequestAction::LoadStart(repo_idx) => {
+        PullRequestAction::LoadStart { repo } => {
+            // Find repo index
+            let Some(repo_idx) = find_repo_idx(&state, repo) else {
+                log::warn!("LoadStart: Repository {}/{} not found in state", repo.org, repo.repo);
+                return state;
+            };
             // Set loading state for the repository
-            let repo_data = state.repo_data.entry(*repo_idx).or_default();
+            let repo_data = state.repo_data.entry(repo_idx).or_default();
             repo_data.loading_state = LoadingState::Loading;
-            log::debug!("PR loading started for repository {}", repo_idx);
+            log::debug!("PR loading started for repository {}/{}", repo.org, repo.repo);
         }
 
-        PullRequestAction::Loaded(repo_idx, prs) => {
+        PullRequestAction::Loaded { repo, prs } => {
+            // Find repo index
+            let Some(repo_idx) = find_repo_idx(&state, repo) else {
+                log::warn!("Loaded: Repository {}/{} not found in state", repo.org, repo.repo);
+                return state;
+            };
             // Update repository data with loaded PRs
-            let repo_data = state.repo_data.entry(*repo_idx).or_default();
+            let repo_data = state.repo_data.entry(repo_idx).or_default();
             repo_data.prs = prs.clone();
             repo_data.loading_state = LoadingState::Loaded;
             repo_data.last_updated = Some(chrono::Local::now());
             repo_data.selected_pr = 0;
             // Clear selection when PRs are reloaded
             repo_data.selected_pr_numbers.clear();
-            log::info!("Loaded {} PRs for repository {}", prs.len(), repo_idx);
+            log::info!("Loaded {} PRs for repository {}/{}", prs.len(), repo.org, repo.repo);
         }
 
-        PullRequestAction::LoadError(repo_idx, error) => {
+        PullRequestAction::LoadError { repo, error } => {
+            // Find repo index
+            let Some(repo_idx) = find_repo_idx(&state, repo) else {
+                log::warn!("LoadError: Repository {}/{} not found in state", repo.org, repo.repo);
+                return state;
+            };
             // Set error state for the repository
-            let repo_data = state.repo_data.entry(*repo_idx).or_default();
+            let repo_data = state.repo_data.entry(repo_idx).or_default();
             repo_data.loading_state = LoadingState::Error(error.clone());
-            log::error!("Failed to load PRs for repository {}: {}", repo_idx, error);
+            log::error!("Failed to load PRs for repository {}/{}: {}", repo.org, repo.repo, error);
         }
 
         // Navigation actions (translated from NavigationAction)
@@ -174,57 +197,15 @@ pub fn reduce_pull_request(mut state: MainViewState, action: &PullRequestAction)
             // These are confirmation actions - handled by middleware
         }
 
-        // Merge operation state changes
-        PullRequestAction::MergeStart(_repo_idx, _pr_idx) => {
-            // Could set a "merging" flag if needed
-        }
-        PullRequestAction::MergeSuccess(_repo_idx, _pr_idx) => {
-            // Middleware will trigger a refresh
-        }
-        PullRequestAction::MergeError(_repo_idx, _pr_idx, error) => {
-            log::error!("Merge failed: {}", error);
-        }
-
-        // Rebase operation state changes
-        PullRequestAction::RebaseStart(_repo_idx, _pr_idx) => {}
-        PullRequestAction::RebaseSuccess(_repo_idx, _pr_idx) => {}
-        PullRequestAction::RebaseError(_repo_idx, _pr_idx, error) => {
-            log::error!("Rebase failed: {}", error);
-        }
-
-        // Approve operation state changes
-        PullRequestAction::ApproveStart(_repo_idx, _pr_idx) => {}
-        PullRequestAction::ApproveSuccess(_repo_idx, _pr_idx) => {}
-        PullRequestAction::ApproveError(_repo_idx, _pr_idx, error) => {
-            log::error!("Approve failed: {}", error);
-        }
-
-        // Comment operation state changes
-        PullRequestAction::CommentStart(_repo_idx, _pr_idx) => {}
-        PullRequestAction::CommentSuccess(_repo_idx, _pr_idx) => {}
-        PullRequestAction::CommentError(_repo_idx, _pr_idx, error) => {
-            log::error!("Comment failed: {}", error);
-        }
-
-        // Request changes operation state changes
-        PullRequestAction::RequestChangesStart(_repo_idx, _pr_idx) => {}
-        PullRequestAction::RequestChangesSuccess(_repo_idx, _pr_idx) => {}
-        PullRequestAction::RequestChangesError(_repo_idx, _pr_idx, error) => {
-            log::error!("Request changes failed: {}", error);
-        }
-
-        // Close operation state changes
-        PullRequestAction::CloseStart(_repo_idx, _pr_idx) => {}
-        PullRequestAction::CloseSuccess(_repo_idx, _pr_idx) => {}
-        PullRequestAction::CloseError(_repo_idx, _pr_idx, error) => {
-            log::error!("Close failed: {}", error);
-        }
-
-        // Rerun jobs state changes
-        PullRequestAction::RerunStart(_repo_idx, _check_suite_id, _check_run_id) => {}
-        PullRequestAction::RerunSuccess(_repo_idx, _check_suite_id, _check_run_id) => {}
-        PullRequestAction::RerunError(_repo_idx, _check_suite_id, _check_run_id, error) => {
-            log::error!("Rerun failed: {}", error);
+        // Operation start actions (could set loading state if needed)
+        PullRequestAction::MergeStart { .. }
+        | PullRequestAction::RebaseStart { .. }
+        | PullRequestAction::ApproveStart { .. }
+        | PullRequestAction::CommentStart { .. }
+        | PullRequestAction::RequestChangesStart { .. }
+        | PullRequestAction::CloseStart { .. }
+        | PullRequestAction::RerunStart { .. } => {
+            // These could set operation-in-progress state if needed
         }
 
         // CI/Build status actions
@@ -233,12 +214,22 @@ pub fn reduce_pull_request(mut state: MainViewState, action: &PullRequestAction)
         }
 
         PullRequestAction::BuildStatusUpdated {
-            repo_idx,
+            repo,
             pr_number,
             status,
         } => {
+            // Find repo index
+            let Some(repo_idx) = find_repo_idx(&state, repo) else {
+                log::warn!(
+                    "Reducer: Repository {}/{} not found when updating PR #{}",
+                    repo.org,
+                    repo.repo,
+                    pr_number
+                );
+                return state;
+            };
             // Update the PR's mergeable status with the fetched CI status
-            if let Some(repo_data) = state.repo_data.get_mut(repo_idx) {
+            if let Some(repo_data) = state.repo_data.get_mut(&repo_idx) {
                 if let Some(pr) = repo_data
                     .prs
                     .iter_mut()
@@ -253,15 +244,17 @@ pub fn reduce_pull_request(mut state: MainViewState, action: &PullRequestAction)
                     pr.mergeable = status.clone();
                 } else {
                     log::warn!(
-                        "Reducer: PR #{} not found in repo_data for repo_idx {}",
+                        "Reducer: PR #{} not found in repo_data for {}/{}",
                         pr_number,
-                        repo_idx
+                        repo.org,
+                        repo.repo
                     );
                 }
             } else {
                 log::warn!(
-                    "Reducer: repo_data not found for repo_idx {} when updating PR #{}",
-                    repo_idx,
+                    "Reducer: repo_data not found for {}/{} when updating PR #{}",
+                    repo.org,
+                    repo.repo,
                     pr_number
                 );
             }

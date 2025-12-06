@@ -15,9 +15,16 @@ pub mod repository_middleware;
 pub mod text_input_middleware;
 
 /// Middleware trait - intercepts actions before they reach the reducer
-pub trait Middleware {
+///
+/// Middleware runs on the background thread, so it can perform blocking operations
+/// (API calls, file I/O) without affecting the UI render loop.
+pub trait Middleware: Send {
     /// Handle an action
-    /// Returns true if the action should continue to the next middleware/reducer
-    /// Returns false if the action should be consumed (not passed further)
+    ///
+    /// - `action`: The action to process
+    /// - `state`: Current application state (read-only snapshot)
+    /// - `dispatcher`: Use to dispatch actions that should re-enter middleware chain
+    ///
+    /// Returns `true` to continue chain, `false` to consume action
     fn handle(&mut self, action: &Action, state: &AppState, dispatcher: &Dispatcher) -> bool;
 }

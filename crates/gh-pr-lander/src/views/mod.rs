@@ -51,8 +51,8 @@ pub enum ViewId {
 /// - No generic methods
 /// - No Self: Sized bounds
 /// - All methods must use &self (not consume self)
-/// - Must be Send for thread safety (actions are sent between threads)
-pub trait View: std::fmt::Debug + Send {
+/// - Must be Send + Sync for thread safety (state is shared between threads)
+pub trait View: std::fmt::Debug + Send + Sync {
     /// Get the unique identifier for this view type
     fn view_id(&self) -> ViewId;
 

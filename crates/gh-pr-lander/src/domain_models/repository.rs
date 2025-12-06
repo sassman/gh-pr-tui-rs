@@ -5,7 +5,7 @@
 use serde::{Deserialize, Serialize};
 
 /// A tracked GitHub repository
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, Eq, PartialEq, Hash)]
 pub struct Repository {
     /// Organization or owner name
     pub org: String,

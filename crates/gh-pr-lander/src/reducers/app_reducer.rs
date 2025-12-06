@@ -6,7 +6,7 @@
 //! - No ViewId matching - views own their action translation
 
 use crate::actions::{
-    Action, AddRepositoryAction, BootstrapAction, CommandPaletteAction, GlobalAction,
+    Action, AddRepositoryAction, BootstrapAction, CommandPaletteAction, Event, GlobalAction,
     KeyBindingsAction,
 };
 use crate::reducers::{
@@ -24,6 +24,16 @@ use crate::views::DiffViewerView;
 /// generic actions via the active view.
 pub fn reduce(mut state: AppState, action: &Action) -> AppState {
     match action {
+        // =======================================================================
+        // EVENTS - Re-routed to middleware in main loop, should not reach here
+        // =======================================================================
+        Action::Event(_) => {
+            // Events are re-routed to middleware chain in main.rs
+            // If we reach here, it's unexpected but harmless - just pass through
+            log::trace!("Event reached reducer (unexpected): {:?}", action);
+            state
+        }
+
         // =======================================================================
         // GLOBAL ACTIONS - Application-wide behavior
         // =======================================================================
@@ -212,15 +222,9 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
                     state.app_config = config.clone();
                     log::info!("App config loaded into state");
                 }
-                BootstrapAction::ClientReady
-                | BootstrapAction::LoadRecentRepositories
+                BootstrapAction::LoadRecentRepositories
                 | BootstrapAction::LoadRecentRepositoriesDone => {
                     // Handled by middleware
-                }
-                BootstrapAction::RepositoryAddBulk(repos) => {
-                    let count = repos.len();
-                    log::info!("Adding {} repositories from config", count);
-                    state.main_view.repositories.extend(repos.clone());
                 }
             }
             state

@@ -9,6 +9,7 @@
 // Shared action types
 pub mod available_action;
 pub mod context_action;
+pub mod event;
 pub mod global;
 pub mod navigation;
 pub mod text_input;
@@ -32,6 +33,7 @@ pub mod status_bar;
 pub use add_repository::AddRepositoryAction;
 pub use available_action::{ActionCategory, AvailableAction};
 pub use bootstrap::BootstrapAction;
+pub use event::Event;
 pub use build_log::BuildLogAction;
 pub use command_palette::CommandPaletteAction;
 pub use confirmation_popup::ConfirmationPopupAction;
@@ -56,6 +58,11 @@ pub use text_input::TextInputAction;
 /// - Screen-specific variants: Already targeted to a specific screen's reducer
 #[derive(Debug, Clone)]
 pub enum Action {
+    // Events (re-enter middleware chain)
+    /// Events are facts/observations that re-enter the middleware chain.
+    /// Use `Action::event(Event::X)` to create - ensures visibility at call site.
+    Event(Event),
+
     // Generic actions (need translation by active view)
     /// Generic navigation action - will be translated by active view
     Navigate(NavigationAction),
@@ -100,4 +107,20 @@ pub enum Action {
 
     /// No-op action
     None,
+}
+
+impl Action {
+    /// Factory method for creating events.
+    ///
+    /// Using this factory makes event creation visually distinct at the call site,
+    /// signaling that the action will re-enter the middleware chain.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// result_tx.send(Action::event(Event::ClientReady)).ok();
+    /// ```
+    pub fn event(event: Event) -> Action {
+        Action::Event(event)
+    }
 }

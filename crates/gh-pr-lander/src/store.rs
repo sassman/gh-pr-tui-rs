@@ -1,28 +1,18 @@
 use crate::actions::Action;
-use crate::dispatcher::Dispatcher;
-use crate::middleware::Middleware;
 use crate::reducers::app_reducer::reduce;
 use crate::state::AppState;
 
-/// Store - holds application state and manages the Redux loop
+/// Store - holds application state
+///
+/// In the new architecture, middleware runs on a background thread.
+/// The store only handles reducer logic on the main thread.
 pub struct Store {
     state: AppState,
-    middleware: Vec<Box<dyn Middleware>>,
-    dispatcher: Dispatcher,
 }
 
 impl Store {
     pub fn new(initial_state: AppState) -> Self {
-        Self {
-            state: initial_state,
-            middleware: Vec::new(),
-            dispatcher: Dispatcher::new(),
-        }
-    }
-
-    /// Add middleware to the store
-    pub fn add_middleware(&mut self, middleware: Box<dyn Middleware>) {
-        self.middleware.push(middleware);
+        Self { state: initial_state }
     }
 
     /// Get the current state
@@ -30,30 +20,15 @@ impl Store {
         &self.state
     }
 
-    /// Get the dispatcher
-    pub fn dispatcher(&self) -> &Dispatcher {
-        &self.dispatcher
+    /// Get mutable state reference
+    pub fn state_mut(&mut self) -> &mut AppState {
+        &mut self.state
     }
 
-    /// Process an action through middleware chain and reducer
+    /// Process an action through reducer ONLY (no middleware)
+    ///
+    /// Middleware runs on background thread, so this is just reducer logic.
     pub fn dispatch(&mut self, action: Action) {
-        let mut should_reduce = true;
-
-        // Pass through middleware chain
-        for middleware in &mut self.middleware {
-            if !middleware.handle(&action, &self.state, &self.dispatcher) {
-                should_reduce = false;
-                break;
-            }
-        }
-
-        // If no middleware consumed the action, send to reducer
-        if should_reduce {
-            self.state = reduce(self.state.clone(), &action);
-        }
-
-        // NOTE: We intentionally do NOT recursively drain pending actions here.
-        // The main loop is responsible for draining the dispatcher between renders.
-        // This ensures the UI updates during long-running operations like bootstrap.
+        self.state = reduce(self.state.clone(), &action);
     }
 }

@@ -6,6 +6,8 @@
 //! - Translating generic TextInput actions to AddRepository-specific actions
 //! - Opening repository URLs in the browser
 
+use std::collections::HashSet;
+
 use crate::actions::{
     Action, AddRepositoryAction, BootstrapAction, GlobalAction, PullRequestAction,
     RepositoryAction, StatusBarAction,
@@ -23,12 +25,16 @@ use tokio::runtime::Runtime;
 pub struct RepositoryMiddleware {
     /// Tokio runtime for async operations (opening URLs)
     runtime: Runtime,
+    /// Track pending bulk load repository indices
+    /// When all are loaded, we dispatch LoadRecentRepositoriesDone
+    pending_bulk_load: HashSet<Repository>,
 }
 
 impl RepositoryMiddleware {
     pub fn new() -> Self {
         Self {
             runtime: Runtime::new().expect("Failed to create tokio runtime"),
+            pending_bulk_load: HashSet::new(),
         }
     }
 
@@ -45,6 +51,23 @@ impl RepositoryMiddleware {
             .repositories
             .get(repo_idx)
             .map(|repo| format!("https://github.com/{}/{}", repo.org, repo.repo))
+    }
+    /// Mark a repository as done loading and check if bulk load is complete
+    fn mark_bulk_load_done(&mut self, repo: Repository, dispatcher: &Dispatcher) {
+        if self.pending_bulk_load.remove(&repo) {
+            log::debug!(
+                "PullRequestMiddleware: Repo {} done, {} remaining in bulk load",
+                repo.full_display_name(),
+                self.pending_bulk_load.len()
+            );
+
+            if self.pending_bulk_load.is_empty() {
+                log::info!("PullRequestMiddleware: All bulk repositories loaded");
+                dispatcher.dispatch(Action::Bootstrap(
+                    BootstrapAction::LoadRecentRepositoriesDone,
+                ));
+            }
+        }
     }
 }
 
@@ -71,9 +94,20 @@ impl Middleware for RepositoryMiddleware {
                         "RepositoryMiddleware: Found {} recent repositories",
                         repositories.len()
                     );
-                    dispatcher.dispatch(Action::Bootstrap(BootstrapAction::RepositoryAddBulk(
-                        repositories,
-                    )));
+                    log::info!("Adding {} repositories from config", repositories.len());
+
+                    for repo in repositories.into_iter() {
+                        dispatcher.dispatch(Action::Repository(RepositoryAction::AddRepository(
+                            repo.clone(),
+                        )));
+
+                        // when does it actually get removed?
+                        self.pending_bulk_load.insert(repo.clone());
+
+                        dispatcher.dispatch(Action::Repository(
+                            RepositoryAction::LoadRepositoryData(repo.clone()),
+                        ));
+                    }
                 } else {
                     log::info!("RepositoryMiddleware: No recent repositories found");
                     // Even if no repos, signal that loading is done
@@ -85,6 +119,18 @@ impl Middleware for RepositoryMiddleware {
                 true // Let action pass through
             }
 
+            // When a single repository is added via confirm
+            Action::AddRepository(AddRepositoryAction::Confirm) => {
+                if state.add_repo_form.is_valid() {
+                    dispatcher.dispatch(Action::Repository(RepositoryAction::LoadRepositoryData(
+                        state.add_repo_form.to_repository(),
+                    )));
+                    dispatcher.dispatch(Action::Global(GlobalAction::Close));
+                }
+
+                true // Let action pass through to reducer
+            }
+
             // Handle closing the add repository view
             Action::AddRepository(AddRepositoryAction::Close) => {
                 if Self::is_add_repo_active(state) && state.view_stack.len() > 1 {
@@ -92,17 +138,6 @@ impl Middleware for RepositoryMiddleware {
                     dispatcher.dispatch(Action::Global(GlobalAction::Close));
                 }
                 true // Let action pass through to reducer to reset form
-            }
-
-            // Handle confirm - close view if form is valid
-            Action::AddRepository(AddRepositoryAction::Confirm) => {
-                if Self::is_add_repo_active(state) && state.add_repo_form.is_valid() {
-                    // Close the view after successful add
-                    if state.view_stack.len() > 1 {
-                        dispatcher.dispatch(Action::Global(GlobalAction::Close));
-                    }
-                }
-                true // Let action pass through to reducer to add repository
             }
 
             // Handle opening repository in browser
@@ -132,6 +167,18 @@ impl Middleware for RepositoryMiddleware {
                     )));
                 }
                 false // Consume action
+            }
+
+            // Handle PR loaded - check if bulk load is complete
+            Action::PullRequest(PullRequestAction::Loaded { repo, .. }) => {
+                self.mark_bulk_load_done(repo.clone(), dispatcher);
+                true // Let action pass through to reducer
+            }
+
+            // Handle PR load error - still counts as "done" for bulk tracking
+            Action::PullRequest(PullRequestAction::LoadError { repo, .. }) => {
+                self.mark_bulk_load_done(repo.clone(), dispatcher);
+                true // Let action pass through to reducer
             }
 
             // All other actions pass through

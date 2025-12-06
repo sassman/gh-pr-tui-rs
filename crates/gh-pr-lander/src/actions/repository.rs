@@ -9,4 +9,7 @@ pub enum RepositoryAction {
 
     /// Adds a new repository
     AddRepository(Repository),
+
+    /// Load all repository related data (e.g., pull requests etc.)
+    LoadRepositoryData(Repository),
 }

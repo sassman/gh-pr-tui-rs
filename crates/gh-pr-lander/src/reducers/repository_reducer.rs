@@ -9,6 +9,9 @@ pub fn reduce_repository(mut state: MainViewState, action: &RepositoryAction) ->
             log::info!("Adding repository: {}", repo.display_name());
             state.repositories.push(repo.clone());
         }
+        RepositoryAction::LoadRepositoryData(_) => {
+            // that is a side effect handled by middleware
+        }
     }
     state
 }
