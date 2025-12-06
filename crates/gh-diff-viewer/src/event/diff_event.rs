@@ -107,7 +107,7 @@ mod tests {
     #[test]
     fn test_diff_event_variants() {
         // Just ensure all variants can be constructed
-        let events = vec![
+        let events = [
             DiffEvent::RequestContext {
                 file_path: "src/main.rs".to_string(),
                 commit_sha: "abc123".to_string(),

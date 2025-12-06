@@ -170,9 +170,7 @@ impl FileTreeNode {
                 if is_last {
                     // Find the entry we just added for this child
                     if let Some(entry) = result.iter_mut().rev().find(|e| {
-                        e.name == child.name
-                            && e.depth == child_depth
-                            && e.path == child.path
+                        e.name == child.name && e.depth == child_depth && e.path == child.path
                     }) {
                         entry.is_last = true;
                     }

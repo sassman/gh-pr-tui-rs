@@ -186,7 +186,7 @@ impl DiffHighlighter {
         match highlighter.highlight_line(content, &self.syntax_set) {
             Ok(ranges) => ranges
                 .iter()
-                .map(|(style, text)| syntect_to_span(*style, *text))
+                .map(|(style, text)| syntect_to_span(*style, text))
                 .collect(),
             Err(_) => {
                 // Fallback to plain text on error

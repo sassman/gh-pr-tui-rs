@@ -215,7 +215,11 @@ impl DiffViewerState {
     fn jump_to_prev_hunk(&mut self) -> bool {
         let headers = self.hunk_header_lines();
         // Find last header before current cursor
-        if let Some(&prev) = headers.iter().rev().find(|&&idx| idx < self.nav.cursor_line) {
+        if let Some(&prev) = headers
+            .iter()
+            .rev()
+            .find(|&&idx| idx < self.nav.cursor_line)
+        {
             self.nav.cursor_line = prev;
             self.nav.ensure_cursor_visible(self.viewport_height);
             true

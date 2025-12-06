@@ -31,15 +31,15 @@ pub mod status_bar;
 
 // Re-export all action types for convenience
 pub use add_repository::AddRepositoryAction;
-pub use available_action::{ActionCategory, AvailableAction};
+pub use available_action::AvailableAction;
 pub use bootstrap::BootstrapAction;
-pub use event::Event;
 pub use build_log::BuildLogAction;
 pub use command_palette::CommandPaletteAction;
 pub use confirmation_popup::ConfirmationPopupAction;
 pub use context_action::ContextAction;
 pub use debug_console::DebugConsoleAction;
 pub use diff_viewer::DiffViewerAction;
+pub use event::Event;
 pub use global::GlobalAction;
 pub use key_bindings::KeyBindingsAction;
 pub use merge_bot::MergeBotAction;

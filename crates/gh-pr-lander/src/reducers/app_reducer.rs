@@ -6,7 +6,7 @@
 //! - No ViewId matching - views own their action translation
 
 use crate::actions::{
-    Action, AddRepositoryAction, BootstrapAction, CommandPaletteAction, Event, GlobalAction,
+    Action, AddRepositoryAction, BootstrapAction, CommandPaletteAction, GlobalAction,
     KeyBindingsAction,
 };
 use crate::reducers::{

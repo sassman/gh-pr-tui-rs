@@ -223,9 +223,7 @@ impl View for DiffViewerView {
             TextInputAction::Char('h') => Some(Action::DiffViewer(DiffViewerAction::NavigateLeft)),
             TextInputAction::Char('l') => Some(Action::DiffViewer(DiffViewerAction::NavigateRight)),
             // g for top, G for bottom
-            TextInputAction::Char('g') => {
-                Some(Action::DiffViewer(DiffViewerAction::NavigateToTop))
-            }
+            TextInputAction::Char('g') => Some(Action::DiffViewer(DiffViewerAction::NavigateToTop)),
             TextInputAction::Char('G') => {
                 Some(Action::DiffViewer(DiffViewerAction::NavigateToBottom))
             }

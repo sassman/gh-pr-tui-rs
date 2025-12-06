@@ -22,19 +22,31 @@ pub fn reduce_pull_request(mut state: MainViewState, action: &PullRequestAction)
         PullRequestAction::LoadStart { repo } => {
             // Find repo index
             let Some(repo_idx) = find_repo_idx(&state, repo) else {
-                log::warn!("LoadStart: Repository {}/{} not found in state", repo.org, repo.repo);
+                log::warn!(
+                    "LoadStart: Repository {}/{} not found in state",
+                    repo.org,
+                    repo.repo
+                );
                 return state;
             };
             // Set loading state for the repository
             let repo_data = state.repo_data.entry(repo_idx).or_default();
             repo_data.loading_state = LoadingState::Loading;
-            log::debug!("PR loading started for repository {}/{}", repo.org, repo.repo);
+            log::debug!(
+                "PR loading started for repository {}/{}",
+                repo.org,
+                repo.repo
+            );
         }
 
         PullRequestAction::Loaded { repo, prs } => {
             // Find repo index
             let Some(repo_idx) = find_repo_idx(&state, repo) else {
-                log::warn!("Loaded: Repository {}/{} not found in state", repo.org, repo.repo);
+                log::warn!(
+                    "Loaded: Repository {}/{} not found in state",
+                    repo.org,
+                    repo.repo
+                );
                 return state;
             };
             // Update repository data with loaded PRs
@@ -45,19 +57,33 @@ pub fn reduce_pull_request(mut state: MainViewState, action: &PullRequestAction)
             repo_data.selected_pr = 0;
             // Clear selection when PRs are reloaded
             repo_data.selected_pr_numbers.clear();
-            log::info!("Loaded {} PRs for repository {}/{}", prs.len(), repo.org, repo.repo);
+            log::info!(
+                "Loaded {} PRs for repository {}/{}",
+                prs.len(),
+                repo.org,
+                repo.repo
+            );
         }
 
         PullRequestAction::LoadError { repo, error } => {
             // Find repo index
             let Some(repo_idx) = find_repo_idx(&state, repo) else {
-                log::warn!("LoadError: Repository {}/{} not found in state", repo.org, repo.repo);
+                log::warn!(
+                    "LoadError: Repository {}/{} not found in state",
+                    repo.org,
+                    repo.repo
+                );
                 return state;
             };
             // Set error state for the repository
             let repo_data = state.repo_data.entry(repo_idx).or_default();
             repo_data.loading_state = LoadingState::Error(error.clone());
-            log::error!("Failed to load PRs for repository {}/{}: {}", repo.org, repo.repo, error);
+            log::error!(
+                "Failed to load PRs for repository {}/{}: {}",
+                repo.org,
+                repo.repo,
+                error
+            );
         }
 
         // Navigation actions (translated from NavigationAction)
@@ -241,7 +267,7 @@ pub fn reduce_pull_request(mut state: MainViewState, action: &PullRequestAction)
                         pr.mergeable,
                         status
                     );
-                    pr.mergeable = status.clone();
+                    pr.mergeable = *status;
                 } else {
                     log::warn!(
                         "Reducer: PR #{} not found in repo_data for {}/{}",
