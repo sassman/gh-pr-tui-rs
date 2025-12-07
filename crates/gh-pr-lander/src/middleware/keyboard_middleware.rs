@@ -54,10 +54,17 @@ impl KeyboardMiddleware {
             return false;
         }
 
-        // Esc: Close current view - always works
+        // Esc: Route based on capabilities
+        // - If view accepts text input, send TextInputAction::Escape (view decides: cancel/close)
+        // - Otherwise, dispatch Global(Close) to close the view
         if key.code == KeyCode::Esc {
-            log::debug!("Layer 1: Esc - dispatching Close");
-            dispatcher.dispatch(Action::Global(GlobalAction::Close));
+            if capabilities.accepts_text_input() {
+                log::debug!("Layer 1: Esc - routing to TextInput::Escape (view has TEXT_INPUT)");
+                dispatcher.dispatch(Action::TextInput(TextInputAction::Escape));
+            } else {
+                log::debug!("Layer 1: Esc - dispatching Close");
+                dispatcher.dispatch(Action::Global(GlobalAction::Close));
+            }
             return false;
         }
 

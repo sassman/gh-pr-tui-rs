@@ -243,43 +243,25 @@ impl View for DiffViewerView {
     }
 
     fn translate_text_input(&self, input: TextInputAction) -> Option<Action> {
+        // All input is forwarded to the reducer which decides based on inner state mode
+        // (normal navigation, comment editing, or review popup)
         match input {
-            // === Navigation keys (temporary mapping until keyboard middleware is fixed) ===
-            // j/k for up/down navigation
-            TextInputAction::Char('j') => Some(Action::DiffViewer(DiffViewerAction::NavigateDown)),
-            TextInputAction::Char('k') => Some(Action::DiffViewer(DiffViewerAction::NavigateUp)),
-            // h/l for left/right (file tree / diff pane focus)
-            TextInputAction::Char('h') => Some(Action::DiffViewer(DiffViewerAction::NavigateLeft)),
-            TextInputAction::Char('l') => Some(Action::DiffViewer(DiffViewerAction::NavigateRight)),
-            // g for top, G for bottom
-            TextInputAction::Char('g') => Some(Action::DiffViewer(DiffViewerAction::NavigateToTop)),
-            TextInputAction::Char('G') => {
-                Some(Action::DiffViewer(DiffViewerAction::NavigateToBottom))
-            }
-            // n for next hunk, N for previous hunk
-            TextInputAction::Char('n') => Some(Action::DiffViewer(DiffViewerAction::NextHunk)),
-            TextInputAction::Char('N') => Some(Action::DiffViewer(DiffViewerAction::PrevHunk)),
+            // All character keys go through KeyPress - reducer routes based on mode
+            TextInputAction::Char(c) => Some(Action::DiffViewer(DiffViewerAction::KeyPress(c))),
 
-            // === Pane switching ===
-            // Space switches panes
-            TextInputAction::Char(' ') => Some(Action::DiffViewer(DiffViewerAction::SwitchPane)),
-            // Tab also switches panes
-            TextInputAction::Char('\t') => Some(Action::DiffViewer(DiffViewerAction::SwitchPane)),
+            // Backspace - reducer checks if in comment mode
+            TextInputAction::Backspace => Some(Action::DiffViewer(DiffViewerAction::Backspace)),
 
-            // === Comment editing ===
-            TextInputAction::Char('c') => Some(Action::DiffViewer(DiffViewerAction::AddComment)),
-            TextInputAction::Char(c) => Some(Action::DiffViewer(DiffViewerAction::CommentChar(c))),
-            TextInputAction::Backspace => {
-                Some(Action::DiffViewer(DiffViewerAction::CommentBackspace))
-            }
-            TextInputAction::ClearLine => None,
-
-            // Escape: if editing comment, cancel; otherwise switch to file tree
+            // Escape - context-aware (cancel comment, hide popup, or focus tree)
             TextInputAction::Escape => {
                 Some(Action::DiffViewer(DiffViewerAction::EscapeOrFocusTree))
             }
-            // Enter: in file tree selects and switches, in diff does toggle
-            TextInputAction::Confirm => Some(Action::DiffViewer(DiffViewerAction::Toggle)),
+
+            // Confirm/Enter - context-aware (commit comment, submit review, or toggle)
+            TextInputAction::Confirm => Some(Action::DiffViewer(DiffViewerAction::Confirm)),
+
+            // Clear line - not used in diff viewer
+            TextInputAction::ClearLine => None,
         }
     }
 

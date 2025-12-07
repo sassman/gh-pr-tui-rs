@@ -114,6 +114,9 @@ pub fn reduce_diff_viewer(
         }
 
         DiffViewerAction::EscapeOrFocusTree => {
+            // Note: The "close view" case is handled by DiffViewerMiddleware
+            // which checks the state BEFORE this reducer runs and dispatches
+            // Global(Close) if there's nothing to escape from.
             if let Some(ref inner) = state.inner {
                 if inner.is_editing_comment() {
                     // Cancel comment if editing
@@ -125,8 +128,9 @@ pub fn reduce_diff_viewer(
                     // If in diff pane, switch to file tree
                     forward_action(&mut state, DiffAction::FocusFileTree);
                 }
-                // If already in file tree, do nothing
+                // else: already at file tree - middleware handles close
             }
+            // No inner state case is also handled by middleware
             state
         }
 
@@ -141,7 +145,68 @@ pub fn reduce_diff_viewer(
             state
         }
 
-        // === Comments ===
+        // === Generic Input (mode-aware routing) ===
+        DiffViewerAction::KeyPress(c) => {
+            if let Some(ref inner) = state.inner {
+                if inner.is_editing_comment() {
+                    // In comment mode: insert character
+                    forward_action(&mut state, DiffAction::CommentInsertChar(*c));
+                } else if inner.show_review_popup {
+                    // In review popup: arrow keys for navigation
+                    match c {
+                        'h' | 'H' => forward_action(&mut state, DiffAction::ReviewOptionPrev),
+                        'l' | 'L' => forward_action(&mut state, DiffAction::ReviewOptionNext),
+                        _ => {} // Ignore other keys in review popup
+                    }
+                } else {
+                    // Normal mode: route to navigation/commands
+                    match c {
+                        'j' => forward_action(&mut state, DiffAction::CursorDown),
+                        'k' => forward_action(&mut state, DiffAction::CursorUp),
+                        'h' => forward_action(&mut state, DiffAction::FocusFileTree),
+                        'l' => forward_action(&mut state, DiffAction::FocusDiffContent),
+                        'g' => forward_action(&mut state, DiffAction::CursorFirst),
+                        'G' => forward_action(&mut state, DiffAction::CursorLast),
+                        'n' => forward_action(&mut state, DiffAction::NextHunk),
+                        'N' => forward_action(&mut state, DiffAction::PrevHunk),
+                        ' ' | '\t' => forward_action(&mut state, DiffAction::ToggleFocus),
+                        'c' => forward_action(&mut state, DiffAction::StartComment),
+                        'R' => forward_action(&mut state, DiffAction::ShowReviewPopup),
+                        'v' => forward_action(&mut state, DiffAction::EnterVisualMode),
+                        _ => {} // Ignore unknown keys
+                    }
+                }
+            }
+            state
+        }
+
+        DiffViewerAction::Backspace => {
+            if let Some(ref inner) = state.inner {
+                if inner.is_editing_comment() {
+                    forward_action(&mut state, DiffAction::CommentBackspace);
+                }
+                // No-op in other modes
+            }
+            state
+        }
+
+        DiffViewerAction::Confirm => {
+            if let Some(ref inner) = state.inner {
+                if inner.is_editing_comment() {
+                    // Commit comment
+                    forward_action(&mut state, DiffAction::CommitComment);
+                } else if inner.show_review_popup {
+                    // Submit review
+                    forward_action(&mut state, DiffAction::SubmitReview);
+                } else {
+                    // Toggle file tree node or other confirm action
+                    forward_action(&mut state, DiffAction::ToggleTreeNode);
+                }
+            }
+            state
+        }
+
+        // === Comments (explicit actions) ===
         DiffViewerAction::AddComment => {
             forward_action(&mut state, DiffAction::StartComment);
             state

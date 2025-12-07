@@ -37,7 +37,8 @@ use middleware::{
     app_config_middleware::AppConfigMiddleware, bootstrap_middleware::BootstrapMiddleware,
     command_palette_middleware::CommandPaletteMiddleware,
     confirmation_popup_middleware::ConfirmationPopupMiddleware,
-    debug_console_middleware::DebugConsoleMiddleware, github_middleware::GitHubMiddleware,
+    debug_console_middleware::DebugConsoleMiddleware,
+    diff_viewer_middleware::DiffViewerMiddleware, github_middleware::GitHubMiddleware,
     keyboard_middleware::KeyboardMiddleware, navigation_middleware::NavigationMiddleware,
     pull_request_middleware::PullRequestMiddleware, repository_middleware::RepositoryMiddleware,
     text_input_middleware::TextInputMiddleware, Middleware,
@@ -79,6 +80,7 @@ fn main() -> io::Result<()> {
         Box::new(NavigationMiddleware::new()),
         Box::new(TextInputMiddleware::new()),
         // View-specific middlewares
+        Box::new(DiffViewerMiddleware::new()),
         Box::new(CommandPaletteMiddleware::new()),
         Box::new(ConfirmationPopupMiddleware::new()),
         Box::new(RepositoryMiddleware::new()),

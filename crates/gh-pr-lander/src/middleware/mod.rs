@@ -7,6 +7,7 @@ pub mod bootstrap_middleware;
 pub mod command_palette_middleware;
 pub mod confirmation_popup_middleware;
 pub mod debug_console_middleware;
+pub mod diff_viewer_middleware;
 pub mod github_middleware;
 pub mod keyboard_middleware;
 pub mod navigation_middleware;

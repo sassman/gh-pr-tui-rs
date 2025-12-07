@@ -65,16 +65,24 @@ pub enum DiffViewerAction {
     /// Exit visual mode
     ExitVisualMode,
 
-    // === Comments ===
+    // === Generic Input (mode-aware, reducer decides based on inner state) ===
+    /// Generic key press - reducer routes based on mode (navigation vs comment editing)
+    KeyPress(char),
+    /// Backspace - deletes char in comment mode, no-op otherwise
+    Backspace,
+    /// Confirm - commits comment, selects file, or submits review based on mode
+    Confirm,
+
+    // === Comments (explicit actions when needed) ===
     /// Start adding a comment on current line
     AddComment,
     /// Cancel comment editing
     CancelComment,
-    /// Commit the current comment
+    /// Commit the current comment (also triggered by Confirm in comment mode)
     CommitComment,
-    /// Insert character into comment editor
+    /// Insert character into comment editor (also triggered by KeyPress in comment mode)
     CommentChar(char),
-    /// Delete character from comment editor
+    /// Delete character from comment editor (also triggered by Backspace in comment mode)
     CommentBackspace,
 
     // === Review ===
