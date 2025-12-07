@@ -148,7 +148,9 @@ Example format:
 
 ## Configuration
 
-Repositories are stored in `.recent-repositories.json`:
+### Repositories
+
+Tracked repositories are stored in `.recent-repositories.json`:
 
 ```json
 [
@@ -157,13 +159,23 @@ Repositories are stored in `.recent-repositories.json`:
 ]
 ```
 
-<!--
-TODO: Document .gh-pr-lander.toml if/when implemented:
+### App Settings
+
+Create `~/.gh-pr-lander.toml` (or `.gh-pr-lander.toml` in the current directory):
+
 ```toml
-ide_command = "zed"  # or "code", "vim"
-approval_message = "LGTM!"
+# IDE to open PRs in (default: "code")
+ide_command = "zed"  # or "code", "cursor", "vim"
+
+# Directory for cloning PRs (default: system temp dir)
+temp_dir = "/tmp/gh-pr-lander"
+
+# Default messages for PR actions
+approval_message = "LGTM! :rocket:"
+comment_message = ""
+request_changes_message = "Please address the following:"
+close_message = "Closing this PR."
 ```
--->
 
 ## Architecture
 
