@@ -7,13 +7,26 @@ A TUI for devs who review PRs faster than GitHub can load.
 
 ## Features
 
-- **Multi-repo tabs** — Switch between repositories instantly
-- **Vim navigation** — `j/k`, `gg/G`, and all the keys you expect
-- **Bulk PR actions** — Select multiple PRs, merge/approve/close in one go
-- **Diff viewer** — Review changes with syntax highlighting and inline comments
-- **Build log viewer** — Tree-based logs with smart error navigation
-- **Command palette** — Fuzzy search all commands with `Ctrl+P`
-- **CI status** — See build status at a glance
+### Multi-repo tabs
+Stop juggling browser tabs. All your repositories in one view, switch with `Tab`.
+
+### Vim navigation
+`j/k`, `gg/G`, and all the keys you expect. Your muscle memory just works.
+
+### Bulk PR actions
+Dependabot opened 15 PRs? Select all, approve, merge. Done in seconds, not minutes.
+
+### Diff viewer
+Full PR review in your terminal. Syntax highlighting, inline comments, submit reviews—no browser needed.
+
+### Build log viewer
+CI failed? Jump straight to errors with `n`. Navigate through workflows → jobs → steps in a tree.
+
+### Command palette
+Forgot a keybinding? `Ctrl+P` and fuzzy search. Every action is discoverable.
+
+### CI status at a glance
+Green check, red X, yellow spinner. Know instantly which PRs are ready to merge.
 
 ### Planned
 
