@@ -37,11 +37,11 @@ use middleware::{
     app_config_middleware::AppConfigMiddleware, bootstrap_middleware::BootstrapMiddleware,
     command_palette_middleware::CommandPaletteMiddleware,
     confirmation_popup_middleware::ConfirmationPopupMiddleware,
-    debug_console_middleware::DebugConsoleMiddleware,
-    diff_viewer_middleware::DiffViewerMiddleware, github_middleware::GitHubMiddleware,
-    keyboard_middleware::KeyboardMiddleware, navigation_middleware::NavigationMiddleware,
-    pull_request_middleware::PullRequestMiddleware, repository_middleware::RepositoryMiddleware,
-    text_input_middleware::TextInputMiddleware, Middleware,
+    debug_console_middleware::DebugConsoleMiddleware, diff_viewer_middleware::DiffViewerMiddleware,
+    github_middleware::GitHubMiddleware, keyboard_middleware::KeyboardMiddleware,
+    navigation_middleware::NavigationMiddleware, pull_request_middleware::PullRequestMiddleware,
+    repository_middleware::RepositoryMiddleware, text_input_middleware::TextInputMiddleware,
+    Middleware,
 };
 use state::AppState;
 use store::Store;

@@ -186,8 +186,7 @@ impl View for DiffViewerView {
             };
 
             // Create the diff viewer widget with theme and hints
-            let widget = DiffViewer::new(&mut highlighter, &theme_adapter)
-                .with_footer_hints(hints);
+            let widget = DiffViewer::new(&mut highlighter, &theme_adapter).with_footer_hints(hints);
 
             // We need to clone the inner state for rendering since render_with_state requires &mut
             let mut render_state = inner_state.clone();

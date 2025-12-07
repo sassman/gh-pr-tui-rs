@@ -1549,14 +1549,7 @@ impl Middleware for GitHubMiddleware {
                 self.runtime.spawn(async move {
                     match client
                         .create_review_comment(
-                            &repo.org,
-                            &repo.repo,
-                            pr_number,
-                            &head_sha,
-                            &path,
-                            line,
-                            &side,
-                            &body,
+                            &repo.org, &repo.repo, pr_number, &head_sha, &path, line, &side, &body,
                         )
                         .await
                     {

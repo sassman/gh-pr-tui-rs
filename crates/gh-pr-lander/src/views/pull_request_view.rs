@@ -190,7 +190,8 @@ fn render_pr_table(state: &AppState, area: Rect, f: &mut Frame) {
                 Cell::from(row_vm.author.clone()),
                 Cell::from(delta_line),
                 Cell::from(format!("{:^8}", row_vm.comments)), // Center comments in 8-char column
-                Cell::from(row_vm.status_text.clone()).style(Style::default().fg(row_vm.status_color)),
+                Cell::from(row_vm.status_text.clone())
+                    .style(Style::default().fg(row_vm.status_color)),
             ])
             .style(style)
             .height(1)

@@ -6,8 +6,8 @@
 use crate::client::GitHubClient;
 use crate::types::{
     CheckConclusion, CheckRun, CheckRunStatus, CheckState, CheckStatus, CiState, CiStatus,
-    CommitStatus, MergeMethod, MergeResult, MergeableState, PullRequest, ReviewComment, ReviewEvent,
-    WorkflowRun, WorkflowRunConclusion, WorkflowRunStatus,
+    CommitStatus, MergeMethod, MergeResult, MergeableState, PullRequest, ReviewComment,
+    ReviewEvent, WorkflowRun, WorkflowRunConclusion, WorkflowRunStatus,
 };
 use async_trait::async_trait;
 use log::debug;
@@ -533,10 +533,7 @@ impl GitHubClient for OctocrabClient {
         if status.is_success() || status.as_u16() == 404 {
             Ok(())
         } else {
-            Err(anyhow::anyhow!(
-                "Failed to delete comment: HTTP {}",
-                status
-            ))
+            Err(anyhow::anyhow!("Failed to delete comment: HTTP {}", status))
         }
     }
 

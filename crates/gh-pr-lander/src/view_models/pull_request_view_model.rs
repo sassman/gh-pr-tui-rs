@@ -34,14 +34,14 @@ pub struct PrTableHeaderViewModel {
 #[derive(Debug, Clone)]
 pub struct PrRowViewModel {
     /// Pre-formatted cell texts
-    pub pr_number: String,   // "#123"
+    pub pr_number: String, // "#123"
     pub title: String,       // "Fix: broken tests"
     pub author: String,      // "sassman"
     pub comments: String,    // "5"
     pub status_text: String, // "✓ Ready"
 
     /// Pre-computed styles
-    pub bg_color: Color,     // Background (alternating, selected, etc.)
+    pub bg_color: Color, // Background (alternating, selected, etc.)
     pub fg_color: Color,     // Text color
     pub status_color: Color, // Status-specific color
     pub additions: usize,    // Raw additions count (for coloring)
