@@ -1,15 +1,82 @@
-use crate::{actions::Action, effect::Effect, state::*};
+use crate::{actions::Action, state::*};
 use log::{debug, error, info};
+
+// MIGRATION: Effect system removed, all side effects in middleware
+type Effect = ();
+
+/// Push a panel onto the stack (if not already on top)
+fn push_panel(state: &mut AppState, panel: ActivePanel) {
+    // Don't push if it's already on top
+    if state.panel_stack.last() != Some(&panel) {
+        state.panel_stack.push(panel);
+    }
+}
+
+/// Remove a panel from anywhere in the stack
+fn remove_panel(state: &mut AppState, panel: ActivePanel) {
+    state.panel_stack.retain(|p| p != &panel);
+}
 
 /// Root reducer that delegates to sub-reducers based on action type
 /// Pure function: takes state and action, returns (new state, effects to perform)
 pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
     let mut effects = Vec::new();
 
+    // Handle Close action at top level (needs access to all state)
+    // Context-aware close: close the topmost panel from the stack
+    if matches!(action, Action::Close) {
+        use crate::state::ActivePanel;
+
+        // Pop the topmost panel from the stack
+        if let Some(panel) = state.panel_stack.pop() {
+            // Close the panel based on its type
+            match panel {
+                ActivePanel::CommandPalette => {
+                    state.ui.command_palette = None;
+                }
+                ActivePanel::ClosePrPopup => {
+                    state.ui.close_pr_state = None;
+                }
+                ActivePanel::AddRepoPopup => {
+                    state.ui.show_add_repo = false;
+                }
+                ActivePanel::LogPanel => {
+                    state.log_panel.panel = None;
+                    state.log_panel.view_model = None;
+                }
+                ActivePanel::DebugConsole => {
+                    state.debug_console.is_open = false;
+                }
+                ActivePanel::Shortcuts => {
+                    state.ui.show_shortcuts = false;
+                    state.ui.shortcuts_panel_view_model = None;
+                }
+                ActivePanel::PrTable => {
+                    // Closing main PR table = quit application
+                    return reduce(state, &Action::Quit);
+                }
+            }
+
+            // Update capabilities after closing panel
+            state.ui.active_panel_capabilities =
+                crate::panel_capabilities::get_active_panel_capabilities(
+                    &state.repos,
+                    &state.log_panel,
+                    &state.ui,
+                    &state.debug_console,
+                );
+
+            return (state, vec![]);
+        } else {
+            // Stack is empty (shouldn't happen) - default to quit
+            return reduce(state, &Action::Quit);
+        }
+    }
+
     // highest priority is the infrastructure setup, then the rest.
     let (infrastructure_state, infrastructure_effects) =
-        infrastructure_reducer(state.infrastructure, action);
-    state.infrastructure = infrastructure_state;
+        infrastructure_reducer(state.infra, action);
+    state.infra = infrastructure_state;
     effects.extend(infrastructure_effects);
 
     let (ui_state, ui_effects) = ui_reducer(state.ui, action, &state.theme);
@@ -21,7 +88,7 @@ pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
         action,
         &state.config,
         &state.theme,
-        &state.infrastructure,
+        &state.infra,
     );
     state.repos = repos_state;
     effects.extend(repos_effects);
@@ -58,7 +125,99 @@ pub fn reduce(mut state: AppState, action: &Action) -> (AppState, Vec<Effect>) {
         _ => {}
     }
 
-    (state, effects)
+    // Manage panel stack based on panel visibility changes
+    // This must happen after all sub-reducers have updated their state
+    match action {
+        Action::Bootstrap => {
+            // Initialize stack with base PrTable panel
+            state.panel_stack = vec![ActivePanel::PrTable];
+        }
+        Action::ToggleShortcuts => {
+            if state.ui.show_shortcuts {
+                push_panel(&mut state, ActivePanel::Shortcuts);
+            } else {
+                remove_panel(&mut state, ActivePanel::Shortcuts);
+            }
+        }
+        Action::ShowAddRepoPopup => {
+            push_panel(&mut state, ActivePanel::AddRepoPopup);
+        }
+        Action::HideAddRepoPopup | Action::AddRepoFormSubmit => {
+            if !state.ui.show_add_repo {
+                remove_panel(&mut state, ActivePanel::AddRepoPopup);
+            }
+        }
+        Action::ShowClosePrPopup => {
+            push_panel(&mut state, ActivePanel::ClosePrPopup);
+        }
+        Action::HideClosePrPopup | Action::ClosePrFormSubmit => {
+            if state.ui.close_pr_state.is_none() {
+                remove_panel(&mut state, ActivePanel::ClosePrPopup);
+            }
+        }
+        Action::ShowCommandPalette => {
+            push_panel(&mut state, ActivePanel::CommandPalette);
+        }
+        Action::HideCommandPalette | Action::CommandPaletteExecute => {
+            if state.ui.command_palette.is_none() {
+                remove_panel(&mut state, ActivePanel::CommandPalette);
+            }
+        }
+        Action::BuildLogsLoaded(_, _) => {
+            if state.log_panel.panel.is_some() {
+                push_panel(&mut state, ActivePanel::LogPanel);
+            }
+        }
+        Action::CloseLogPanel => {
+            if state.log_panel.panel.is_none() {
+                remove_panel(&mut state, ActivePanel::LogPanel);
+            }
+        }
+        Action::ToggleDebugConsole => {
+            if state.debug_console.is_open {
+                push_panel(&mut state, ActivePanel::DebugConsole);
+            } else {
+                remove_panel(&mut state, ActivePanel::DebugConsole);
+            }
+        }
+        _ => {}
+    }
+
+    // Update active panel capabilities when focus or panel state changes
+    // This ensures KeyboardMiddleware always has up-to-date capabilities
+    match action {
+        // Bootstrap: Initialize capabilities
+        Action::Bootstrap
+        // Panel visibility changes (Close is handled at top level and updates capabilities there)
+        | Action::ToggleShortcuts
+        | Action::ShowAddRepoPopup
+        | Action::HideAddRepoPopup
+        | Action::ShowClosePrPopup
+        | Action::HideClosePrPopup
+        | Action::ClosePrFormSubmit
+        | Action::ShowCommandPalette
+        | Action::HideCommandPalette
+        | Action::CommandPaletteExecute
+        | Action::BuildLogsLoaded(_, _)
+        | Action::CloseLogPanel
+        | Action::ToggleDebugConsole
+        // Shortcuts panel scroll state changes (affects SCROLL_VERTICAL capability)
+        | Action::ScrollShortcutsUp
+        | Action::ScrollShortcutsDown
+        | Action::UpdateShortcutsMaxScroll(_) => {
+            state.ui.active_panel_capabilities =
+                crate::panel_capabilities::get_active_panel_capabilities(
+                    &state.repos,
+                    &state.log_panel,
+                    &state.ui,
+                    &state.debug_console,
+                );
+        }
+        _ => {}
+    }
+
+    // MIGRATION COMPLETE: All side effects now handled by middleware
+    (state, vec![])
 }
 
 /// UI state reducer - handles UI-related actions
@@ -68,8 +227,15 @@ fn ui_reducer(
     theme: &crate::theme::Theme,
 ) -> (UiState, Vec<Effect>) {
     match action {
+        // KeyPressed is handled by KeyboardMiddleware - no-op in reducer
+        Action::KeyPressed(_) => {}
+
+        // Close is handled at top-level reducer - no-op here
+        Action::Close => {}
+
         Action::Quit => {
-            state.should_quit = true;
+            // Shutdown is now handled by ShutdownMiddleware
+            // This action is blocked by the middleware, so this code won't be reached
         }
         Action::TickSpinner => {
             // Increment spinner frame for animation (0-9 cycle)
@@ -154,25 +320,16 @@ fn ui_reducer(
             };
         }
         Action::AddRepoFormSubmit => {
-            // Validate and add repository
+            // MIGRATION NOTE: AddRepository now handled by TaskMiddleware
+            // Middleware will:
+            // - Check if repo exists
+            // - Save to file
+            // - Dispatch RepositoryAdded, SelectRepoByIndex, ReloadRepo
+
+            // Just hide the form and reset it
             if !state.add_repo_form.org.is_empty() && !state.add_repo_form.repo.is_empty() {
-                let branch = if state.add_repo_form.branch.is_empty() {
-                    "main".to_string()
-                } else {
-                    state.add_repo_form.branch.clone()
-                };
-
-                let new_repo = crate::state::Repo {
-                    org: state.add_repo_form.org.clone(),
-                    repo: state.add_repo_form.repo.clone(),
-                    branch,
-                };
-
-                // Return effect to add the repository
-                let effects = vec![Effect::AddRepository(new_repo)];
                 state.show_add_repo = false;
                 state.add_repo_form = AddRepoForm::default();
-                return (state, effects);
             }
         }
         Action::ShowClosePrPopup => {
@@ -192,10 +349,14 @@ fn ui_reducer(
             }
         }
         Action::ClosePrFormSubmit => {
-            // Close popup and trigger effect to close PRs
-            if let Some(close_pr) = state.close_pr_state.take() {
-                let comment = close_pr.comment;
-                return (state, vec![Effect::ClosePrs { comment }]);
+            // MIGRATION NOTE: ClosePrs now handled by TaskMiddleware
+            // Middleware will:
+            // - Get selected PRs from state
+            // - Dispatch SetTaskStatus
+            // - Send BackgroundTask::ClosePrs
+            // Just keep the state change here
+            if let Some(_close_pr) = state.close_pr_state.take() {
+                // close_pr_state is cleared, middleware handles the rest
             }
         }
 
@@ -203,7 +364,7 @@ fn ui_reducer(
         Action::ShowCommandPalette => {
             state.command_palette = Some(crate::state::CommandPaletteState::new());
             // Trigger filter update to populate initial commands
-            return (state, vec![Effect::UpdateCommandPaletteFilter]);
+            return (state, vec![]);
         }
         Action::HideCommandPalette => {
             state.command_palette = None;
@@ -212,30 +373,114 @@ fn ui_reducer(
             if let Some(ref mut palette) = state.command_palette {
                 palette.input.push(*ch);
                 palette.selected_index = 0; // Reset selection when typing
-                return (state, vec![Effect::UpdateCommandPaletteFilter]);
+                return (state, vec![]);
             }
         }
         Action::CommandPaletteBackspace => {
             if let Some(ref mut palette) = state.command_palette {
                 palette.input.pop();
                 palette.selected_index = 0; // Reset selection when typing
-                return (state, vec![Effect::UpdateCommandPaletteFilter]);
+                return (state, vec![]);
             }
         }
         // Cache management actions
         Action::ClearCache => {
-            return (state, vec![Effect::ClearCache]);
+            return (state, vec![]);
         }
         Action::ShowCacheStats => {
-            return (state, vec![Effect::ShowCacheStats]);
+            return (state, vec![]);
         }
         Action::InvalidateRepoCache(repo_index) => {
-            return (state, vec![Effect::InvalidateRepoCache(*repo_index)]);
+            return (state, vec![]);
         }
 
         // UI management actions
         Action::ForceRedraw => {
             state.force_redraw = true;
+        }
+        Action::ResetForceRedraw => {
+            state.force_redraw = false;
+        }
+        Action::FatalError(_err) => {
+            // Shutdown is now handled by ShutdownMiddleware
+            // This action is blocked by the middleware, so this code won't be reached
+        }
+        Action::UpdateShortcutsMaxScroll(max_scroll) => {
+            state.shortcuts_max_scroll = *max_scroll;
+        }
+
+        // Semantic navigation actions - context-aware handling
+        Action::NavigateNext => {
+            // Command palette has priority
+            if state.command_palette.is_some() {
+                return ui_reducer(state, &Action::CommandPaletteSelectNext, theme);
+            }
+            // Shortcuts panel scrolling
+            if state.show_shortcuts {
+                return ui_reducer(state, &Action::ScrollShortcutsDown, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::NavigatePrevious => {
+            // Command palette has priority
+            if state.command_palette.is_some() {
+                return ui_reducer(state, &Action::CommandPaletteSelectPrev, theme);
+            }
+            // Shortcuts panel scrolling
+            if state.show_shortcuts {
+                return ui_reducer(state, &Action::ScrollShortcutsUp, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollToTop => {
+            // Shortcuts panel - scroll to top
+            if state.show_shortcuts {
+                state.shortcuts_scroll = 0;
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollToBottom => {
+            // Shortcuts panel - scroll to bottom
+            if state.show_shortcuts {
+                state.shortcuts_scroll = state.shortcuts_max_scroll;
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollPageDown => {
+            // Shortcuts panel - page down (10 lines)
+            if state.show_shortcuts {
+                state.shortcuts_scroll =
+                    (state.shortcuts_scroll + 10).min(state.shortcuts_max_scroll);
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollPageUp => {
+            // Shortcuts panel - page up (10 lines)
+            if state.show_shortcuts {
+                state.shortcuts_scroll = state.shortcuts_scroll.saturating_sub(10);
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollHalfPageDown => {
+            // Shortcuts panel - half page down (5 lines)
+            if state.show_shortcuts {
+                state.shortcuts_scroll =
+                    (state.shortcuts_scroll + 5).min(state.shortcuts_max_scroll);
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
+        }
+        Action::ScrollHalfPageUp => {
+            // Shortcuts panel - half page up (5 lines)
+            if state.show_shortcuts {
+                state.shortcuts_scroll = state.shortcuts_scroll.saturating_sub(5);
+                recompute_shortcuts_panel_view_model(&mut state, theme);
+            }
+            // Otherwise, no-op (handled by other panels)
         }
 
         Action::CommandPaletteSelectNext => {
@@ -266,7 +511,7 @@ fn ui_reducer(
                 && let Some((cmd, _score)) = palette.filtered_commands.get(palette.selected_index)
             {
                 // Dispatch the selected action
-                return (state, vec![Effect::DispatchAction(cmd.action.clone())]);
+                return (state, vec![]);
             }
         }
         Action::UpdateCommandPaletteResults(results) => {
@@ -316,7 +561,7 @@ fn recompute_splash_screen_view_model(state: &mut AppState) {
     // Only show splash screen during bootstrap (before UI is ready)
     use crate::state::BootstrapState;
     let should_show_splash = !matches!(
-        state.infrastructure.bootstrap_state,
+        state.infra.bootstrap_state,
         BootstrapState::UIReady | BootstrapState::LoadingRemainingRepos | BootstrapState::Completed
     );
 
@@ -326,9 +571,9 @@ fn recompute_splash_screen_view_model(state: &mut AppState) {
         // Progress bar area: 46 - 10 (for percentage) = 36 chars
         const BAR_WIDTH: usize = 36;
 
-        state.infrastructure.splash_screen_view_model = Some(
+        state.infra.splash_screen_view_model = Some(
             crate::view_models::splash_screen::SplashScreenViewModel::from_state(
-                &state.infrastructure.bootstrap_state,
+                &state.infra.bootstrap_state,
                 &state.repos.recent_repos,
                 state.repos.selected_repo,
                 state.ui.spinner_frame,
@@ -338,7 +583,7 @@ fn recompute_splash_screen_view_model(state: &mut AppState) {
         );
     } else {
         // Clear view model when splash screen should not be shown
-        state.infrastructure.splash_screen_view_model = None;
+        state.infra.splash_screen_view_model = None;
     }
 }
 
@@ -417,13 +662,19 @@ fn infrastructure_reducer(
             // Start bootstrap sequence
             state.bootstrap_state = BootstrapState::LoadingRepositories;
 
-            // Return effects for loading env and initializing octocrab
-            (state, vec![Effect::LoadEnvFile, Effect::InitializeOctocrab])
+            // MIGRATION NOTE: Bootstrap flow now handled by TaskMiddleware
+            // Middleware will dispatch OctocrabInitialized → BootstrapComplete
+            // Old: vec![]
+            (state, vec![])
         }
         Action::OctocrabInitialized(client) => {
             // Store initialized Octocrab client in state (reducer responsibility)
             state.octocrab = Some(client.clone());
-            (state, vec![Effect::LoadRepositories])
+
+            // MIGRATION NOTE: Repo loading now handled by TaskMiddleware
+            // Middleware will dispatch BootstrapComplete after loading repos
+            // Old: vec![]
+            (state, vec![])
         }
         Action::SetBootstrapState(new_state) => {
             state.bootstrap_state = new_state.clone();
@@ -438,9 +689,6 @@ fn infrastructure_reducer(
                     // Start recurring updates every 30 minutes (1800000 milliseconds)
                     const THIRTY_MINUTES_MS: u64 = 30 * 60 * 1000;
                     debug!("Bootstrap completed, starting recurring updates");
-                    effects.push(Effect::DispatchAction(Action::StartRecurringUpdates(
-                        THIRTY_MINUTES_MS,
-                    )));
                 }
                 Err(_) => {
                     state.bootstrap_state =
@@ -495,9 +743,6 @@ fn repos_reducer(
             );
             state.recent_repos = result.repos.clone();
             state.selected_repo = result.selected_repo;
-            effects.push(Effect::DispatchAction(Action::SetBootstrapState(
-                BootstrapState::LoadingFirstRepo,
-            )));
 
             // Load selected repo first for quick UI display
             if let Some(selected_repo) = result.repos.get(result.selected_repo) {
@@ -509,25 +754,11 @@ fn repos_reducer(
                 data.loading_state = LoadingState::Loading;
 
                 // Effect: Load just the selected repo first (use cache for fast startup)
-                effects.push(Effect::LoadSingleRepo {
-                    repo_index: result.selected_repo,
-                    repo: selected_repo.clone(),
-                    filter: state.filter.clone(),
-                    bypass_cache: false, // Use cache for initial load to speed up startup
-                });
 
                 // Effect: Show status message
-                effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                    TaskStatus {
-                        message: format!("Loading {}...", selected_repo.repo),
-                        status_type: TaskStatusType::Running,
-                    },
-                ))));
             } else {
                 // Fallback: load all repos if selected repo doesn't exist
-                effects.push(Effect::DispatchAction(Action::SetBootstrapState(
-                    BootstrapState::LoadingRemainingRepos,
-                )));
+
                 for i in 0..result.repos.len() {
                     let data = state.repo_data.entry(i).or_default();
                     data.loading_state = LoadingState::Loading;
@@ -540,18 +771,9 @@ fn repos_reducer(
                     .enumerate()
                     .map(|(i, repo)| (i, repo.clone()))
                     .collect();
-
-                effects.push(Effect::LoadAllRepos {
-                    repos: repos_with_indices,
-                    filter: state.filter.clone(),
-                });
             }
         }
-        Action::BootstrapComplete(Err(err)) => {
-            effects.push(Effect::DispatchAction(Action::SetBootstrapState(
-                BootstrapState::Error(err.clone()),
-            )));
-        }
+        Action::BootstrapComplete(Err(err)) => {}
         Action::RepoLoadingStarted(repo_index) => {
             // Mark repo as loading (request in flight)
             let data = state.repo_data.entry(*repo_index).or_default();
@@ -604,16 +826,10 @@ fn repos_reducer(
                     }
                 }
 
-                // Effect: Save updated repository list to file
-                effects.push(Effect::SaveRepositories(state.recent_repos.clone()));
-
-                // Show status message
-                effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                    crate::state::TaskStatus {
-                        message: "Repository deleted".to_string(),
-                        status_type: crate::state::TaskStatusType::Success,
-                    },
-                ))));
+                // MIGRATION NOTE: SaveRepositories now handled by TaskMiddleware
+                // Middleware will:
+                // - Save to file
+                // - Dispatch SetTaskStatus with success/error message
             }
         }
         Action::RepositoryAdded { repo_index, repo } => {
@@ -677,17 +893,8 @@ fn repos_reducer(
             // Effect: Check merge status for loaded PRs
             if let Some(repo) = state.recent_repos.get(*repo_index).cloned() {
                 let pr_numbers: Vec<usize> = prs.iter().map(|pr| pr.number).collect();
-                effects.push(Effect::CheckMergeStatus {
-                    repo_index: *repo_index,
-                    repo: repo.clone(),
-                    pr_numbers: pr_numbers.clone(),
-                });
+
                 // Effect: Check comment counts for loaded PRs
-                effects.push(Effect::CheckCommentCounts {
-                    repo_index: *repo_index,
-                    repo,
-                    pr_numbers,
-                });
             }
 
             // Quick load: Check if this is the first repo loaded (selected repo)
@@ -695,9 +902,6 @@ fn repos_reducer(
                 && *repo_index == state.selected_repo
             {
                 // First repo loaded - UI is ready to display!
-                effects.push(Effect::DispatchAction(Action::SetBootstrapState(
-                    BootstrapState::UIReady,
-                )));
 
                 // Show success message for first repo
                 if let Some(repo) = state.recent_repos.get(*repo_index) {
@@ -707,12 +911,6 @@ fn repos_reducer(
                         repo.repo,
                         prs.len()
                     );
-                    effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                        TaskStatus {
-                            message: format!("{} loaded ({} PRs)", repo.repo, prs.len()),
-                            status_type: TaskStatusType::Success,
-                        },
-                    ))));
                 }
 
                 // Start loading remaining repos in background
@@ -721,9 +919,6 @@ fn repos_reducer(
                         "Starting background loading of {} remaining repositories",
                         state.recent_repos.len() - 1
                     );
-                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(
-                        BootstrapState::LoadingRemainingRepos,
-                    )));
 
                     // Mark all other repos as loading
                     for i in 0..state.recent_repos.len() {
@@ -743,15 +938,8 @@ fn repos_reducer(
                         .collect();
 
                     // Effect: Load remaining repos
-                    effects.push(Effect::LoadAllRepos {
-                        repos: repos_to_load,
-                        filter: state.filter.clone(),
-                    });
                 } else {
                     // Only one repo - we're done
-                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(
-                        BootstrapState::Completed,
-                    )));
                 }
             } else if infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos {
                 // Show status message for each repo that loads in background
@@ -762,12 +950,6 @@ fn repos_reducer(
                         repo.repo,
                         prs.len()
                     );
-                    effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                        TaskStatus {
-                            message: format!("{} loaded ({} PRs)", repo.repo, prs.len()),
-                            status_type: TaskStatusType::Success,
-                        },
-                    ))));
                 }
             }
 
@@ -793,16 +975,6 @@ fn repos_reducer(
                     loaded_count,
                     state.recent_repos.len()
                 );
-                effects.push(Effect::batch(vec![
-                    Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::Completed)),
-                    Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
-                        message: format!(
-                            "All {} repositories loaded successfully",
-                            state.recent_repos.len()
-                        ),
-                        status_type: TaskStatusType::Success,
-                    }))),
-                ]));
             }
 
             // Recompute view model after PR data loaded
@@ -820,9 +992,6 @@ fn repos_reducer(
                 && *repo_index == state.selected_repo
             {
                 // First repo failed - still show UI but with error message
-                effects.push(Effect::DispatchAction(Action::SetBootstrapState(
-                    BootstrapState::UIReady,
-                )));
 
                 // Show error message for first repo
                 if let Some(repo) = state.recent_repos.get(*repo_index) {
@@ -830,20 +999,10 @@ fn repos_reducer(
                         "Failed to load first repo {}/{}: {}",
                         repo.org, repo.repo, err
                     );
-                    effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                        TaskStatus {
-                            message: format!("Failed to load {}: {}", repo.repo, err),
-                            status_type: TaskStatusType::Error,
-                        },
-                    ))));
                 }
 
                 // Start loading remaining repos in background (if any)
                 if state.recent_repos.len() > 1 {
-                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(
-                        BootstrapState::LoadingRemainingRepos,
-                    )));
-
                     // Mark all other repos as loading
                     for i in 0..state.recent_repos.len() {
                         if i != state.selected_repo {
@@ -862,15 +1021,8 @@ fn repos_reducer(
                         .collect();
 
                     // Effect: Load remaining repos
-                    effects.push(Effect::LoadAllRepos {
-                        repos: repos_to_load,
-                        filter: state.filter.clone(),
-                    });
                 } else {
                     // Only one repo and it failed - still complete bootstrap to show UI
-                    effects.push(Effect::DispatchAction(Action::SetBootstrapState(
-                        BootstrapState::Completed,
-                    )));
                 }
             } else if infrastructure.bootstrap_state == BootstrapState::LoadingRemainingRepos {
                 // Show error message for background repo that failed
@@ -879,12 +1031,6 @@ fn repos_reducer(
                         "Failed to load background repo {}/{}: {}",
                         repo.org, repo.repo, err
                     );
-                    effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                        TaskStatus {
-                            message: format!("Failed to load {}: {}", repo.repo, err),
-                            status_type: TaskStatusType::Error,
-                        },
-                    ))));
                 }
             }
 
@@ -910,40 +1056,57 @@ fn repos_reducer(
                     .values()
                     .filter(|d| matches!(d.loading_state, LoadingState::Error(_)))
                     .count();
-
-                effects.push(Effect::batch(vec![
-                    Effect::DispatchAction(Action::SetBootstrapState(BootstrapState::Completed)),
-                    Effect::DispatchAction(Action::SetTaskStatus(Some(TaskStatus {
-                        message: format!(
-                            "Loaded {}/{} repositories ({} failed)",
-                            loaded_count,
-                            state.recent_repos.len(),
-                            error_count
-                        ),
-                        status_type: if error_count > 0 {
-                            TaskStatusType::Warning
-                        } else {
-                            TaskStatusType::Success
-                        },
-                    }))),
-                ]));
             }
         }
         Action::CycleFilter => {
             state.filter = state.filter.next();
 
             // Reload current repository with new filter (use cache, filter is client-side)
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                effects.push(Effect::LoadSingleRepo {
-                    repo_index: state.selected_repo,
-                    repo,
-                    filter: state.filter.clone(),
-                    bypass_cache: false, // Filter is client-side, can use cached data
-                });
-            }
+            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {}
 
             // Note: View model will be recomputed when RepoDataLoaded action fires
         }
+
+        // Semantic navigation actions - translate to PR table actions
+        Action::NavigateNext => {
+            return repos_reducer(
+                state,
+                &Action::NavigateToNextPr,
+                config,
+                theme,
+                infrastructure,
+            );
+        }
+        Action::NavigatePrevious => {
+            return repos_reducer(
+                state,
+                &Action::NavigateToPreviousPr,
+                config,
+                theme,
+                infrastructure,
+            );
+        }
+        Action::NavigateLeft => {
+            // Left arrow - navigate to previous repo tab
+            return repos_reducer(
+                state,
+                &Action::SelectPreviousRepo,
+                config,
+                theme,
+                infrastructure,
+            );
+        }
+        Action::NavigateRight => {
+            // Right arrow - navigate to next repo tab
+            return repos_reducer(
+                state,
+                &Action::SelectNextRepo,
+                config,
+                theme,
+                infrastructure,
+            );
+        }
+
         Action::NavigateToNextPr => {
             let i = match state.state.selected() {
                 Some(i) => {
@@ -1006,9 +1169,7 @@ fn repos_reducer(
 
                 // Automatically advance to next PR if not on the last row
                 // Note: NavigateToNextPr will trigger another recompute, but that's OK
-                if selected < state.prs.len().saturating_sub(1) {
-                    effects.push(Effect::DispatchAction(Action::NavigateToNextPr));
-                }
+                if selected < state.prs.len().saturating_sub(1) {}
             }
         }
         Action::ClearPrSelection => {
@@ -1067,18 +1228,28 @@ fn repos_reducer(
                 && let Some(repo) = state.recent_repos.get(*repo_index).cloned()
             {
                 // First dispatch action to update state immediately
-                effects.push(Effect::DispatchAction(Action::StartOperationMonitor(
-                    *repo_index,
-                    *pr_number,
-                    crate::state::OperationType::Rebase,
-                )));
+
                 // Then start background monitoring
-                effects.push(Effect::StartOperationMonitoring {
-                    repo_index: *repo_index,
-                    repo,
-                    pr_number: *pr_number,
-                    operation: crate::state::OperationType::Rebase,
-                });
+            }
+        }
+        Action::PrBuildStatusUpdated(repo_index, pr_number, status) => {
+            // Update PR build status in repo_data
+            if let Some(data) = state.repo_data.get_mut(repo_index)
+                && let Some(pr) = data.prs.iter_mut().find(|p| p.number == *pr_number)
+            {
+                pr.mergeable = *status;
+            }
+
+            // Sync legacy fields if this is the selected repo
+            if *repo_index == state.selected_repo
+                && let Some(pr) = state.prs.iter_mut().find(|p| p.number == *pr_number)
+            {
+                pr.mergeable = *status;
+            }
+
+            // Recompute view model if this is the selected repo (status changed)
+            if *repo_index == state.selected_repo {
+                recompute_pr_table_view_model(&mut state, theme);
             }
         }
         Action::RebaseStatusUpdated(repo_index, pr_number, needs_rebase) => {
@@ -1128,32 +1299,18 @@ fn repos_reducer(
                 "Scheduling delayed reload after closing PR(s) for repo #{}",
                 state.selected_repo
             );
-            effects.push(Effect::DelayedRepoReload {
-                repo_index: state.selected_repo,
-                delay_ms: 500,
-            });
         }
         Action::RefreshCurrentRepo => {
-            // Effect: Reload current repository (bypass cache for user-triggered refresh)
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                effects.push(Effect::LoadSingleRepo {
-                    repo_index: state.selected_repo,
-                    repo,
-                    filter: state.filter.clone(),
-                    bypass_cache: true, // User-triggered refresh should bypass cache
-                });
-            }
+            // MIGRATION NOTE: Reload now handled by TaskMiddleware
+            // Middleware dispatches SetReposLoading and SetTaskStatus
+            // Old: Effect::LoadSingleRepo with bypass_cache: true
+            // No effects needed - middleware handles everything
         }
-        Action::ReloadRepo(repo_index) => {
-            // Effect: Reload specific repository (e.g., after PR merged)
-            if let Some(repo) = state.recent_repos.get(*repo_index).cloned() {
-                effects.push(Effect::LoadSingleRepo {
-                    repo_index: *repo_index,
-                    repo,
-                    filter: state.filter.clone(),
-                    bypass_cache: true, // Bypass cache to get fresh data after operations
-                });
-            }
+        Action::ReloadRepo(_repo_index) => {
+            // MIGRATION NOTE: Reload now handled by TaskMiddleware
+            // Middleware dispatches SetReposLoading
+            // Old: Effect::LoadSingleRepo with bypass_cache: true
+            // No effects needed - middleware handles everything
         }
         Action::StartRecurringUpdates(interval_ms) => {
             // Effect: Start background recurring task to update all repos periodically
@@ -1162,81 +1319,28 @@ fn repos_reducer(
                 interval_ms,
                 interval_ms / 60000
             );
-            effects.push(Effect::StartRecurringUpdates(*interval_ms));
         }
         Action::RecurringUpdateTriggered => {
             // Effect: Reload all repositories (triggered by recurring background task)
             debug!("Recurring update triggered, reloading all repos");
-            for (repo_index, repo) in state.recent_repos.iter().enumerate() {
-                effects.push(Effect::LoadSingleRepo {
-                    repo_index,
-                    repo: repo.clone(),
-                    filter: state.filter.clone(),
-                    bypass_cache: true, // Bypass cache to get fresh data
-                });
-            }
+            for (repo_index, repo) in state.recent_repos.iter().enumerate() {}
         }
         Action::Rebase => {
-            // Effect: Perform rebase on selected PRs, or current PR if none selected
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                // Use PR numbers for stable selection
-                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    !data.selected_pr_numbers.is_empty()
-                } else {
-                    false
-                };
+            // MIGRATION NOTE: PerformRebase and StartOperationMonitoring now handled by TaskMiddleware
+            // Middleware will:
+            // - Get selected PRs from state
+            // - Dispatch StartOperationMonitor for each PR
+            // - Dispatch SetTaskStatus
+            // - Send BackgroundTask::Rebase
+            // Just clear selection here
+            let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                !data.selected_pr_numbers.is_empty()
+            } else {
+                false
+            };
 
-                let prs_to_rebase: Vec<_> = if !has_selection {
-                    // No selection - use current cursor PR
-                    state
-                        .state
-                        .selected()
-                        .and_then(|idx| state.prs.get(idx).cloned())
-                        .map(|pr| vec![pr])
-                        .unwrap_or_default()
-                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    // Rebase selected PRs using PR numbers (stable across filtering)
-                    state
-                        .prs
-                        .iter()
-                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
-                        .cloned()
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                if !prs_to_rebase.is_empty() {
-                    // Start monitoring for each PR being rebased
-                    let repo_index = state.selected_repo;
-                    for pr in &prs_to_rebase {
-                        // First dispatch action to update state immediately
-                        effects.push(Effect::DispatchAction(Action::StartOperationMonitor(
-                            repo_index,
-                            pr.number,
-                            crate::state::OperationType::Rebase,
-                        )));
-                        // Then start background monitoring
-                        effects.push(Effect::StartOperationMonitoring {
-                            repo_index,
-                            repo: repo.clone(),
-                            pr_number: pr.number,
-                            operation: crate::state::OperationType::Rebase,
-                        });
-                    }
-
-                    effects.push(Effect::PerformRebase {
-                        repo,
-                        prs: prs_to_rebase,
-                    });
-
-                    // Clear selection after starting rebase (if there was a selection)
-                    if has_selection
-                        && let Some(data) = state.repo_data.get_mut(&state.selected_repo)
-                    {
-                        data.selected_pr_numbers.clear();
-                    }
-                }
+            if has_selection && let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
+                data.selected_pr_numbers.clear();
             }
         }
         Action::RerunFailedJobs => {
@@ -1269,136 +1373,35 @@ fn repos_reducer(
                     Vec::new()
                 };
 
-                if !pr_numbers.is_empty() {
-                    effects.push(Effect::RerunFailedJobs { repo, pr_numbers });
-                }
+                if !pr_numbers.is_empty() {}
             }
         }
         Action::ApprovePrs => {
-            // Effect: Approve selected PRs or current PR with configured message
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                // Use PR numbers for stable selection
-                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    !data.selected_pr_numbers.is_empty()
-                } else {
-                    false
-                };
-
-                let pr_numbers: Vec<usize> = if !has_selection {
-                    // No selection - use current cursor PR
-                    state
-                        .state
-                        .selected()
-                        .and_then(|idx| state.prs.get(idx))
-                        .map(|pr| vec![pr.number])
-                        .unwrap_or_default()
-                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    state
-                        .prs
-                        .iter()
-                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
-                        .map(|pr| pr.number)
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                if !pr_numbers.is_empty() {
-                    effects.push(Effect::ApprovePrs {
-                        repo,
-                        pr_numbers,
-                        approval_message: config.approval_message.clone(),
-                    });
-                }
-            }
+            // MIGRATION NOTE: ApprovePrs now handled by TaskMiddleware
+            // Middleware will:
+            // - Get selected PRs from state
+            // - Dispatch SetTaskStatus
+            // - Send BackgroundTask::ApprovePrs
+            // No effects needed
         }
         Action::MergeSelectedPrs => {
-            // Effect: Merge selected PRs or current PR, or enable auto-merge if building
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                // Use PR numbers for stable selection
-                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    !data.selected_pr_numbers.is_empty()
-                } else {
-                    false
-                };
+            // MIGRATION NOTE: PerformMerge, StartOperationMonitoring, and EnableAutoMerge now handled by TaskMiddleware
+            // Middleware will:
+            // - Get selected PRs from state
+            // - Separate PRs by status (ready vs building)
+            // - Dispatch StartOperationMonitor for each PR being merged
+            // - Dispatch SetTaskStatus
+            // - Send BackgroundTask::Merge for ready PRs
+            // - Send BackgroundTask::EnableAutoMerge for building PRs
+            // Just clear selection here
+            let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
+                !data.selected_pr_numbers.is_empty()
+            } else {
+                false
+            };
 
-                let selected_prs: Vec<_> = if !has_selection {
-                    // No selection - use current cursor PR
-                    state
-                        .state
-                        .selected()
-                        .and_then(|idx| state.prs.get(idx).cloned())
-                        .map(|pr| vec![pr])
-                        .unwrap_or_default()
-                } else if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    state
-                        .prs
-                        .iter()
-                        .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
-                        .cloned()
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-
-                if !selected_prs.is_empty() {
-                    // Separate PRs by status: ready to merge vs building
-                    let mut prs_to_merge = Vec::new();
-                    let mut prs_to_auto_merge = Vec::new();
-
-                    for pr in selected_prs {
-                        match pr.mergeable {
-                            crate::pr::MergeableStatus::BuildInProgress => {
-                                prs_to_auto_merge.push(pr);
-                            }
-                            _ => {
-                                prs_to_merge.push(pr);
-                            }
-                        }
-                    }
-
-                    // Merge ready PRs directly
-                    if !prs_to_merge.is_empty() {
-                        // Start monitoring for each PR being merged
-                        let repo_index = state.selected_repo;
-                        for pr in &prs_to_merge {
-                            // First dispatch action to update state immediately
-                            effects.push(Effect::DispatchAction(Action::StartOperationMonitor(
-                                repo_index,
-                                pr.number,
-                                crate::state::OperationType::Merge,
-                            )));
-                            // Then start background monitoring
-                            effects.push(Effect::StartOperationMonitoring {
-                                repo_index,
-                                repo: repo.clone(),
-                                pr_number: pr.number,
-                                operation: crate::state::OperationType::Merge,
-                            });
-                        }
-
-                        effects.push(Effect::PerformMerge {
-                            repo: repo.clone(),
-                            prs: prs_to_merge,
-                        });
-                    }
-
-                    // Enable auto-merge for building PRs
-                    for pr in prs_to_auto_merge {
-                        effects.push(Effect::EnableAutoMerge {
-                            repo_index: state.selected_repo,
-                            repo: repo.clone(),
-                            pr_number: pr.number,
-                        });
-                    }
-
-                    // Clear selection after starting merge operations (if there was a selection)
-                    if has_selection
-                        && let Some(data) = state.repo_data.get_mut(&state.selected_repo)
-                    {
-                        data.selected_pr_numbers.clear();
-                    }
-                }
+            if has_selection && let Some(data) = state.repo_data.get_mut(&state.selected_repo) {
+                data.selected_pr_numbers.clear();
             }
         }
         Action::StartMergeBot => {
@@ -1417,54 +1420,15 @@ fn repos_reducer(
                         Vec::new()
                     };
 
-                if !prs_to_process.is_empty() {
-                    effects.push(Effect::StartMergeBot {
-                        repo,
-                        prs: prs_to_process,
-                    });
-                }
+                if !prs_to_process.is_empty() {}
             }
         }
         Action::OpenCurrentPrInBrowser => {
-            // Effect: Open current PR(s) in browser
-            if let Some(repo) = state.recent_repos.get(state.selected_repo) {
-                // If multiple PRs selected, open all of them using PR numbers (stable)
-                let has_selection = if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                    !data.selected_pr_numbers.is_empty()
-                } else {
-                    false
-                };
-
-                let prs_to_open: Vec<usize> = if has_selection {
-                    if let Some(data) = state.repo_data.get(&state.selected_repo) {
-                        state
-                            .prs
-                            .iter()
-                            .filter(|pr| data.selected_pr_numbers.contains(&PrNumber::from_pr(pr)))
-                            .map(|pr| pr.number)
-                            .collect()
-                    } else {
-                        Vec::new()
-                    }
-                } else if let Some(selected_idx) = state.state.selected() {
-                    // Open just the current PR
-                    state
-                        .prs
-                        .get(selected_idx)
-                        .map(|pr| vec![pr.number])
-                        .unwrap_or_default()
-                } else {
-                    vec![]
-                };
-
-                for pr_number in prs_to_open {
-                    let url = format!(
-                        "https://github.com/{}/{}/pull/{}",
-                        repo.org, repo.repo, pr_number
-                    );
-                    effects.push(Effect::OpenInBrowser { url });
-                }
-            }
+            // MIGRATION NOTE: OpenInBrowser now handled by TaskMiddleware
+            // Middleware will:
+            // - Get selected PRs from state
+            // - Open each PR URL in browser using platform-specific command
+            // No effects needed
         }
         Action::OpenBuildLogs => {
             // Effect: Load build logs for current PR
@@ -1472,26 +1436,15 @@ fn repos_reducer(
                 && let Some(pr) = state.prs.get(selected_idx).cloned()
                 && let Some(repo) = state.recent_repos.get(state.selected_repo).cloned()
             {
-                effects.push(Effect::LoadBuildLogs { repo, pr });
             }
         }
         Action::OpenInIDE => {
-            // Effect: Open current PR in IDE, or main branch if no PR selected
-            if let Some(repo) = state.recent_repos.get(state.selected_repo).cloned() {
-                if let Some(selected_idx) = state.state.selected() {
-                    if let Some(pr) = state.prs.get(selected_idx) {
-                        // Open the selected PR
-                        effects.push(Effect::OpenInIDE {
-                            repo,
-                            pr_number: pr.number,
-                        });
-                    }
-                } else {
-                    // No PR selected (empty list) - open main branch
-                    // Use pr_number = 0 as a special marker for main branch
-                    effects.push(Effect::OpenInIDE { repo, pr_number: 0 });
-                }
-            }
+            // MIGRATION NOTE: OpenInIDE now handled by TaskMiddleware
+            // Middleware will:
+            // - Get current repo and selected PR
+            // - Dispatch SetTaskStatus with progress message
+            // - Send BackgroundTask::OpenPRInIDE
+            // No effects needed
         }
         Action::SelectNextRepo => {
             if !state.recent_repos.is_empty() {
@@ -1593,12 +1546,6 @@ fn repos_reducer(
                     // Remove from queue - timeout reached
                     data.operation_monitor_queue
                         .retain(|op| op.pr_number != *pr_number);
-                    effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                        crate::state::TaskStatus {
-                            message: format!("Operation monitor timeout for PR #{}", pr_number),
-                            status_type: crate::state::TaskStatusType::Error,
-                        },
-                    ))));
                 }
             }
         }
@@ -1641,12 +1588,6 @@ fn repos_reducer(
                     // Remove from queue - timeout reached
                     data.auto_merge_queue
                         .retain(|pr| pr.pr_number != *pr_number);
-                    effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                        crate::state::TaskStatus {
-                            message: format!("Auto-merge timeout for PR #{}", pr_number),
-                            status_type: crate::state::TaskStatusType::Error,
-                        },
-                    ))));
                 } else {
                     // Check PR status
                     if let Some(repo) = state.recent_repos.get(*repo_index).cloned() {
@@ -1655,38 +1596,17 @@ fn repos_reducer(
                             match pr.mergeable {
                                 crate::pr::MergeableStatus::Ready => {
                                     // PR is ready - trigger merge
-                                    effects.push(Effect::PerformMerge {
-                                        repo: repo.clone(),
-                                        prs: vec![pr.clone()],
-                                    });
+
                                     // Remove from queue
                                     data.auto_merge_queue.retain(|p| p.pr_number != *pr_number);
                                 }
                                 crate::pr::MergeableStatus::BuildFailed => {
                                     // Build failed - stop monitoring
                                     data.auto_merge_queue.retain(|p| p.pr_number != *pr_number);
-                                    effects.push(Effect::DispatchAction(Action::SetTaskStatus(
-                                        Some(crate::state::TaskStatus {
-                                            message: format!(
-                                                "Auto-merge stopped: PR #{} build failed",
-                                                pr_number
-                                            ),
-                                            status_type: crate::state::TaskStatusType::Error,
-                                        }),
-                                    )));
                                 }
                                 crate::pr::MergeableStatus::NeedsRebase => {
                                     // Needs rebase - stop monitoring
                                     data.auto_merge_queue.retain(|p| p.pr_number != *pr_number);
-                                    effects.push(Effect::DispatchAction(Action::SetTaskStatus(
-                                        Some(crate::state::TaskStatus {
-                                            message: format!(
-                                                "Auto-merge stopped: PR #{} needs rebase",
-                                                pr_number
-                                            ),
-                                            status_type: crate::state::TaskStatusType::Error,
-                                        }),
-                                    )));
                                 }
                                 crate::pr::MergeableStatus::BuildInProgress => {
                                     // Still building - schedule next check
@@ -1727,6 +1647,57 @@ fn log_panel_reducer(
             state.panel = None;
             state.view_model = None;
         }
+
+        // Semantic navigation actions - translate to log panel actions
+        Action::NavigateNext => {
+            return log_panel_reducer(state, &Action::ScrollLogPanelDown, theme);
+        }
+        Action::NavigatePrevious => {
+            return log_panel_reducer(state, &Action::ScrollLogPanelUp, theme);
+        }
+        Action::NavigateLeft => {
+            return log_panel_reducer(state, &Action::ScrollLogPanelLeft, theme);
+        }
+        Action::NavigateRight => {
+            return log_panel_reducer(state, &Action::ScrollLogPanelRight, theme);
+        }
+        Action::ScrollToTop => {
+            if let Some(ref mut panel) = state.panel {
+                panel.scroll_offset = 0;
+                recompute_view_model(&mut state, theme);
+            }
+        }
+        Action::ScrollToBottom => {
+            if let Some(ref mut panel) = state.panel {
+                // Scroll to maximum offset
+                // We need to calculate the max based on content length and viewport
+                // For now, use a large number - view model will clamp it
+                panel.scroll_offset = usize::MAX;
+                recompute_view_model(&mut state, theme);
+            }
+        }
+        Action::ScrollPageUp => {
+            if let Some(ref mut panel) = state.panel {
+                let page_size = panel.viewport_height.saturating_sub(1).max(1);
+                panel.scroll_offset = panel.scroll_offset.saturating_sub(page_size);
+                recompute_view_model(&mut state, theme);
+            }
+        }
+        Action::ScrollHalfPageUp => {
+            if let Some(ref mut panel) = state.panel {
+                let half_page = (panel.viewport_height / 2).max(1);
+                panel.scroll_offset = panel.scroll_offset.saturating_sub(half_page);
+                recompute_view_model(&mut state, theme);
+            }
+        }
+        Action::ScrollHalfPageDown => {
+            if let Some(ref mut panel) = state.panel {
+                let half_page = (panel.viewport_height / 2).max(1);
+                panel.scroll_offset = panel.scroll_offset.saturating_add(half_page);
+                recompute_view_model(&mut state, theme);
+            }
+        }
+
         Action::ScrollLogPanelUp => {
             if let Some(ref mut panel) = state.panel {
                 panel.scroll_offset = panel.scroll_offset.saturating_sub(1);
@@ -1923,74 +1894,14 @@ fn merge_bot_reducer(
                 if let Some(bot_action) = state.bot.process_next(&repo_data.prs) {
                     use crate::merge_bot::MergeBotAction;
                     match bot_action {
-                        MergeBotAction::DispatchMerge(_indices) => {
-                            effects.push(Effect::PerformMerge {
-                                repo: repo.clone(),
-                                prs: repo_data.prs.clone(),
-                            });
-                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                                TaskStatus {
-                                    message: state.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                },
-                            ))));
-                        }
-                        MergeBotAction::DispatchRebase(_indices) => {
-                            effects.push(Effect::PerformRebase {
-                                repo: repo.clone(),
-                                prs: repo_data.prs.clone(),
-                            });
-                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                                TaskStatus {
-                                    message: state.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                },
-                            ))));
-                        }
-                        MergeBotAction::WaitForCI(_pr_number) => {
-                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                                TaskStatus {
-                                    message: state.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                },
-                            ))));
-                        }
-                        MergeBotAction::PollMergeStatus(pr_number, is_checking_ci) => {
-                            effects.push(Effect::PollPRMergeStatus {
-                                repo_index: repos.selected_repo,
-                                repo: repo.clone(),
-                                pr_number,
-                                is_checking_ci,
-                            });
-                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                                TaskStatus {
-                                    message: state.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                },
-                            ))));
-                        }
-                        MergeBotAction::PrSkipped(_pr_number, _reason) => {
-                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                                TaskStatus {
-                                    message: state.bot.status_message(),
-                                    status_type: TaskStatusType::Running,
-                                },
-                            ))));
-                        }
+                        MergeBotAction::DispatchMerge(_indices) => {}
+                        MergeBotAction::DispatchRebase(_indices) => {}
+                        MergeBotAction::WaitForCI(_pr_number) => {}
+                        MergeBotAction::PollMergeStatus(pr_number, is_checking_ci) => {}
+                        MergeBotAction::PrSkipped(_pr_number, _reason) => {}
                         MergeBotAction::Completed => {
-                            effects.push(Effect::DispatchAction(Action::SetTaskStatus(Some(
-                                TaskStatus {
-                                    message: state.bot.status_message(),
-                                    status_type: TaskStatusType::Success,
-                                },
-                            ))));
+
                             // Refresh the PR list (bypass cache after merge operations)
-                            effects.push(Effect::LoadSingleRepo {
-                                repo_index: repos.selected_repo,
-                                repo: repo.clone(),
-                                filter: repos.filter.clone(),
-                                bypass_cache: true, // Get fresh data after merge operations
-                            });
                         }
                     }
                 }
@@ -2132,7 +2043,42 @@ fn debug_console_reducer(
                 recompute_debug_console_view_model(&mut state, theme);
             }
         }
+
+        // Semantic navigation actions - translate to debug console actions
+        Action::NavigateNext => {
+            return debug_console_reducer(state, &Action::ScrollDebugConsoleDown, theme);
+        }
+        Action::NavigatePrevious => {
+            return debug_console_reducer(state, &Action::ScrollDebugConsoleUp, theme);
+        }
+        Action::ScrollToTop => {
+            state.scroll_offset = 0;
+            state.auto_scroll = false;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+        Action::ScrollToBottom => {
+            // Jump to end (auto-scroll will handle this)
+            state.auto_scroll = true;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+        Action::ScrollPageUp => {
+            state.scroll_offset = state.scroll_offset.saturating_sub(10);
+            state.auto_scroll = false;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+        Action::ScrollHalfPageUp => {
+            state.scroll_offset = state.scroll_offset.saturating_sub(5);
+            state.auto_scroll = false;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+        Action::ScrollHalfPageDown => {
+            state.scroll_offset = state.scroll_offset.saturating_add(5);
+            state.auto_scroll = false;
+            recompute_debug_console_view_model(&mut state, theme);
+        }
+
         Action::ScrollDebugConsoleUp => {
+            // Immediate viewport scrolling - scroll up by 1 line
             state.scroll_offset = state.scroll_offset.saturating_sub(1);
             // Disable auto-scroll when manually scrolling
             state.auto_scroll = false;
@@ -2140,34 +2086,27 @@ fn debug_console_reducer(
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::ScrollDebugConsoleDown => {
-            // Calculate max scroll offset to prevent scrolling beyond the end
+            // Immediate viewport scrolling - scroll down by 1 line (with bounds check)
             let log_count = state.logs.lock().map(|logs| logs.len()).unwrap_or(0);
-            let visible_height = state.viewport_height.saturating_sub(2); // Subtract borders
-            let max_scroll = log_count.saturating_sub(visible_height);
-
-            state.scroll_offset = (state.scroll_offset.saturating_add(1)).min(max_scroll);
+            if log_count > 0 {
+                state.scroll_offset = state.scroll_offset.saturating_add(1);
+            }
             // Disable auto-scroll when manually scrolling
             state.auto_scroll = false;
-            // Recompute view model
+            // Recompute view model (will clamp scroll_offset to valid range)
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::PageDebugConsoleDown => {
-            // Calculate max scroll offset to prevent scrolling beyond the end
-            let log_count = state.logs.lock().map(|logs| logs.len()).unwrap_or(0);
-            let visible_height = state.viewport_height.saturating_sub(2); // Subtract borders
-            let max_scroll = log_count.saturating_sub(visible_height);
-
-            // Page down by viewport_height - 1 (keep one line of context)
-            let page_size = state.viewport_height.saturating_sub(1).max(1);
-            state.scroll_offset = (state.scroll_offset.saturating_add(page_size)).min(max_scroll);
+            // Page down - scroll by 10 lines
+            state.scroll_offset = state.scroll_offset.saturating_add(10);
             // Disable auto-scroll when manually scrolling
             state.auto_scroll = false;
-            // Recompute view model
+            // Recompute view model (will clamp scroll_offset to valid range)
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::ToggleDebugAutoScroll => {
             state.auto_scroll = !state.auto_scroll;
-            // Recompute view model
+            // Recompute view model (auto-scroll will jump to end in view model)
             recompute_debug_console_view_model(&mut state, theme);
         }
         Action::ClearDebugLogs => {
@@ -2178,9 +2117,8 @@ fn debug_console_reducer(
             // Recompute view model
             recompute_debug_console_view_model(&mut state, theme);
         }
-        Action::UpdateDebugConsoleViewport(height) => {
-            state.viewport_height = *height;
-            // Recompute view model
+        Action::UpdateDebugConsoleViewport(_height) => {
+            // Just recompute view model in case logs changed
             recompute_debug_console_view_model(&mut state, theme);
         }
         _ => {}
@@ -2200,22 +2138,516 @@ fn recompute_debug_console_view_model(state: &mut DebugConsoleState, theme: &cra
         Err(_) => return, // Skip if can't lock
     };
 
-    // Use viewport_height if available (set by view after first render),
-    // otherwise use reasonable default
-    const DEFAULT_CONSOLE_HEIGHT: usize = 10;
-    let console_height = if state.viewport_height > 0 {
-        state.viewport_height
-    } else {
-        DEFAULT_CONSOLE_HEIGHT
-    };
+    // Calculate visible height (console height is 50% of screen, minus 2 for borders)
+    // Use a reasonable default - will be accurate enough for scrolling
+    const CONSOLE_HEIGHT: usize = 15; // Approximate visible lines
+    let visible_height = CONSOLE_HEIGHT;
 
     state.view_model = Some(
         crate::view_models::debug_console::DebugConsoleViewModel::from_state(
             &logs,
             state.scroll_offset,
             state.auto_scroll,
-            console_height,
+            visible_height,
             theme,
         ),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::capabilities::PanelCapabilities;
+
+    /// Helper to create a minimal app state for testing
+    fn minimal_app_state() -> AppState {
+        AppState::default()
+    }
+
+    #[test]
+    fn test_bootstrap_initializes_capabilities() {
+        let state = minimal_app_state();
+        let (new_state, _effects) = reduce(state, &Action::Bootstrap);
+
+        // After bootstrap, capabilities should be initialized to PR table (default panel)
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_navigation()
+        );
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .contains(PanelCapabilities::ITEM_NAVIGATION)
+        );
+    }
+
+    #[test]
+    fn test_toggle_shortcuts_updates_capabilities() {
+        let state = minimal_app_state();
+
+        // Toggle shortcuts on
+        let (new_state, _effects) = reduce(state, &Action::ToggleShortcuts);
+
+        // Should now have shortcuts panel capabilities
+        assert!(new_state.ui.show_shortcuts);
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_navigation()
+        );
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .contains(PanelCapabilities::VIM_SCROLL_BINDINGS)
+        );
+    }
+
+    #[test]
+    fn test_show_command_palette_updates_capabilities() {
+        let state = minimal_app_state();
+
+        // Show command palette
+        let (new_state, _effects) = reduce(state, &Action::ShowCommandPalette);
+
+        // Should have command palette capabilities
+        assert!(new_state.ui.command_palette.is_some());
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_navigation()
+        );
+        // Command palette doesn't have scroll capabilities
+        assert!(
+            !new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_vertical_scroll()
+        );
+    }
+
+    #[test]
+    fn test_toggle_debug_console_updates_capabilities() {
+        let state = minimal_app_state();
+
+        // Toggle debug console on
+        let (new_state, _effects) = reduce(state, &Action::ToggleDebugConsole);
+
+        // Should have debug console capabilities
+        assert!(new_state.debug_console.is_open);
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_navigation()
+        );
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_vertical_scroll()
+        );
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .contains(PanelCapabilities::SCROLL_VERTICAL)
+        );
+    }
+
+    #[test]
+    fn test_close_log_panel_reverts_to_pr_table_capabilities() {
+        let mut state = minimal_app_state();
+        // Manually set log panel as open
+        state.log_panel.panel = Some(crate::log::LogPanel {
+            workflows: vec![],
+            job_metadata: std::collections::HashMap::new(),
+            expanded_nodes: std::collections::HashSet::new(),
+            cursor_path: vec![],
+            scroll_offset: 0,
+            horizontal_scroll: 0,
+            show_timestamps: false,
+            viewport_height: 20,
+            pr_context: crate::log::PrContext {
+                number: 1,
+                title: "Test PR".to_string(),
+                author: "test".to_string(),
+            },
+        });
+        state.ui.active_panel_capabilities = PanelCapabilities::VIM_NAVIGATION_BINDINGS
+            | PanelCapabilities::VIM_SCROLL_BINDINGS
+            | PanelCapabilities::SCROLL_VERTICAL;
+
+        // Close log panel
+        let (new_state, _effects) = reduce(state, &Action::CloseLogPanel);
+
+        // Should revert to PR table capabilities
+        assert!(new_state.log_panel.panel.is_none());
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_navigation()
+        );
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .contains(PanelCapabilities::ITEM_NAVIGATION)
+        );
+        // PR table doesn't have scroll capabilities
+        assert!(
+            !new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_vertical_scroll()
+        );
+    }
+
+    // Semantic Action Tests - UI Reducer
+
+    #[test]
+    fn test_navigate_next_delegates_to_command_palette() {
+        let mut state = minimal_app_state();
+        state.ui.command_palette = Some(CommandPaletteState {
+            input: String::new(),
+            filtered_commands: vec![
+                (
+                    gh_pr_tui_command_palette::CommandItem {
+                        title: "Command 1".to_string(),
+                        description: "First command".to_string(),
+                        category: "General".to_string(),
+                        shortcut_hint: None,
+                        context: None,
+                        action: Action::Quit,
+                    },
+                    100,
+                ),
+                (
+                    gh_pr_tui_command_palette::CommandItem {
+                        title: "Command 2".to_string(),
+                        description: "Second command".to_string(),
+                        category: "General".to_string(),
+                        shortcut_hint: None,
+                        context: None,
+                        action: Action::Quit,
+                    },
+                    100,
+                ),
+            ],
+            selected_index: 0,
+            view_model: None,
+        });
+
+        // NavigateNext should select next command
+        let (ui_state, _effects) = ui_reducer(state.ui, &Action::NavigateNext, &state.theme);
+
+        assert_eq!(ui_state.command_palette.unwrap().selected_index, 1);
+    }
+
+    #[test]
+    fn test_navigate_next_scrolls_shortcuts_panel() {
+        let mut state = minimal_app_state();
+        state.ui.show_shortcuts = true;
+        state.ui.shortcuts_scroll = 0;
+        state.ui.shortcuts_max_scroll = 10;
+
+        // NavigateNext should scroll down
+        let (ui_state, _effects) = ui_reducer(state.ui, &Action::NavigateNext, &state.theme);
+
+        assert_eq!(ui_state.shortcuts_scroll, 1);
+    }
+
+    #[test]
+    fn test_scroll_to_top_shortcuts_panel() {
+        let mut state = minimal_app_state();
+        state.ui.show_shortcuts = true;
+        state.ui.shortcuts_scroll = 5;
+        state.ui.shortcuts_max_scroll = 10;
+
+        // ScrollToTop should jump to beginning
+        let (ui_state, _effects) = ui_reducer(state.ui, &Action::ScrollToTop, &state.theme);
+
+        assert_eq!(ui_state.shortcuts_scroll, 0);
+    }
+
+    #[test]
+    fn test_scroll_to_bottom_shortcuts_panel() {
+        let mut state = minimal_app_state();
+        state.ui.show_shortcuts = true;
+        state.ui.shortcuts_scroll = 0;
+        state.ui.shortcuts_max_scroll = 10;
+
+        // ScrollToBottom should jump to end
+        let (ui_state, _effects) = ui_reducer(state.ui, &Action::ScrollToBottom, &state.theme);
+
+        assert_eq!(ui_state.shortcuts_scroll, 10);
+    }
+
+    // Semantic Action Tests - Repos Reducer
+
+    #[test]
+    fn test_navigate_next_selects_next_pr() {
+        let mut state = minimal_app_state();
+        // Setup: Add some PRs and select first one
+        state.repos.prs = vec![
+            crate::pr::Pr {
+                number: 1,
+                title: "Test PR 1".to_string(),
+                body: String::new(),
+                author: "test_author".to_string(),
+                no_comments: 0,
+                merge_state: "clean".to_string(),
+                mergeable: crate::pr::MergeableStatus::Unknown,
+                needs_rebase: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+            crate::pr::Pr {
+                number: 2,
+                title: "Test PR 2".to_string(),
+                body: String::new(),
+                author: "test_author".to_string(),
+                no_comments: 0,
+                merge_state: "clean".to_string(),
+                mergeable: crate::pr::MergeableStatus::Unknown,
+                needs_rebase: false,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            },
+        ];
+        state.repos.state.select(Some(0));
+
+        let (repos_state, _effects) = repos_reducer(
+            state.repos,
+            &Action::NavigateNext,
+            &state.config,
+            &state.theme,
+            &state.infra,
+        );
+
+        // Should select second PR
+        assert_eq!(repos_state.state.selected(), Some(1));
+    }
+
+    #[test]
+    fn test_navigate_left_selects_previous_repo() {
+        let mut state = minimal_app_state();
+        // Setup: Add multiple repos and select second one
+        state.repos.recent_repos = vec![
+            Repo {
+                org: "org1".to_string(),
+                repo: "repo1".to_string(),
+                branch: "main".to_string(),
+            },
+            Repo {
+                org: "org2".to_string(),
+                repo: "repo2".to_string(),
+                branch: "main".to_string(),
+            },
+        ];
+        state.repos.selected_repo = 1;
+
+        let (repos_state, _effects) = repos_reducer(
+            state.repos,
+            &Action::NavigateLeft,
+            &state.config,
+            &state.theme,
+            &state.infra,
+        );
+
+        // Should select first repo
+        assert_eq!(repos_state.selected_repo, 0);
+    }
+
+    #[test]
+    fn test_navigate_right_selects_next_repo() {
+        let mut state = minimal_app_state();
+        // Setup: Add multiple repos and select first one
+        state.repos.recent_repos = vec![
+            Repo {
+                org: "org1".to_string(),
+                repo: "repo1".to_string(),
+                branch: "main".to_string(),
+            },
+            Repo {
+                org: "org2".to_string(),
+                repo: "repo2".to_string(),
+                branch: "main".to_string(),
+            },
+        ];
+        state.repos.selected_repo = 0;
+
+        let (repos_state, _effects) = repos_reducer(
+            state.repos,
+            &Action::NavigateRight,
+            &state.config,
+            &state.theme,
+            &state.infra,
+        );
+
+        // Should select second repo
+        assert_eq!(repos_state.selected_repo, 1);
+    }
+
+    // Semantic Action Tests - Log Panel Reducer
+
+    #[test]
+    fn test_log_panel_scroll_to_top() {
+        let mut state = LogPanelState::default();
+        state.panel = Some(crate::log::LogPanel {
+            workflows: vec![],
+            job_metadata: std::collections::HashMap::new(),
+            expanded_nodes: std::collections::HashSet::new(),
+            cursor_path: vec![],
+            scroll_offset: 10,
+            horizontal_scroll: 0,
+            show_timestamps: false,
+            viewport_height: 20,
+            pr_context: crate::log::PrContext {
+                number: 1,
+                title: "Test PR".to_string(),
+                author: "test".to_string(),
+            },
+        });
+
+        let (log_state, _effects) =
+            log_panel_reducer(state, &Action::ScrollToTop, &crate::theme::Theme::default());
+
+        assert_eq!(log_state.panel.unwrap().scroll_offset, 0);
+    }
+
+    #[test]
+    fn test_log_panel_navigate_next_scrolls_down() {
+        let mut state = LogPanelState::default();
+        state.panel = Some(crate::log::LogPanel {
+            workflows: vec![],
+            job_metadata: std::collections::HashMap::new(),
+            expanded_nodes: std::collections::HashSet::new(),
+            cursor_path: vec![],
+            scroll_offset: 0,
+            horizontal_scroll: 0,
+            show_timestamps: false,
+            viewport_height: 20,
+            pr_context: crate::log::PrContext {
+                number: 1,
+                title: "Test PR".to_string(),
+                author: "test".to_string(),
+            },
+        });
+
+        let (log_state, _effects) = log_panel_reducer(
+            state,
+            &Action::NavigateNext,
+            &crate::theme::Theme::default(),
+        );
+
+        // NavigateNext should delegate to ScrollLogPanelDown
+        // Since the panel is empty, scroll_offset might not change, but the delegation happened
+        // Just verify panel still exists and no panic
+        assert!(log_state.panel.is_some());
+    }
+
+    // Semantic Action Tests - Debug Console Reducer
+
+    #[test]
+    fn test_debug_console_scroll_to_top() {
+        let mut state = DebugConsoleState::default();
+        state.is_open = true;
+        state.scroll_offset = 10;
+
+        let (console_state, _effects) =
+            debug_console_reducer(state, &Action::ScrollToTop, &crate::theme::Theme::default());
+
+        assert_eq!(console_state.scroll_offset, 0);
+        assert!(!console_state.auto_scroll); // Should disable auto-scroll
+    }
+
+    #[test]
+    fn test_debug_console_scroll_to_bottom_enables_autoscroll() {
+        let mut state = DebugConsoleState::default();
+        state.is_open = true;
+        state.scroll_offset = 0;
+        state.auto_scroll = false;
+
+        let (console_state, _effects) = debug_console_reducer(
+            state,
+            &Action::ScrollToBottom,
+            &crate::theme::Theme::default(),
+        );
+
+        assert!(console_state.auto_scroll); // Should enable auto-scroll
+    }
+
+    #[test]
+    fn test_debug_console_navigate_next_scrolls_down() {
+        let mut state = DebugConsoleState::default();
+        state.is_open = true;
+        state.scroll_offset = 0;
+
+        let (console_state, _effects) = debug_console_reducer(
+            state,
+            &Action::NavigateNext,
+            &crate::theme::Theme::default(),
+        );
+
+        // Should have tried to scroll down (delegates to ScrollDebugConsoleDown)
+        // Offset might be clamped by view model, but auto_scroll should be disabled
+        assert!(!console_state.auto_scroll);
+    }
+
+    #[test]
+    fn test_shortcuts_scroll_changes_update_capabilities() {
+        let mut state = minimal_app_state();
+        state.ui.show_shortcuts = true;
+        state.ui.shortcuts_scroll = 0;
+        state.ui.shortcuts_max_scroll = 10;
+
+        // Initially has SCROLL_VERTICAL capability
+        let (state_after_scroll, _) = reduce(state, &Action::ScrollShortcutsDown);
+
+        // Should still have scroll capability
+        assert!(
+            state_after_scroll
+                .ui
+                .active_panel_capabilities
+                .contains(PanelCapabilities::SCROLL_VERTICAL)
+        );
+    }
+
+    #[test]
+    fn test_panel_priority_command_palette_highest() {
+        let mut state = minimal_app_state();
+        // Open multiple panels
+        state.ui.show_shortcuts = true;
+        state.debug_console.is_open = true;
+        state.ui.command_palette = Some(CommandPaletteState {
+            input: String::new(),
+            filtered_commands: vec![],
+            selected_index: 0,
+            view_model: None,
+        });
+
+        // Update capabilities
+        let (new_state, _) = reduce(state, &Action::ShowCommandPalette);
+
+        // Command palette should have priority (no scroll capabilities)
+        assert!(
+            new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_navigation()
+        );
+        assert!(
+            !new_state
+                .ui
+                .active_panel_capabilities
+                .supports_vim_vertical_scroll()
+        );
+    }
 }

@@ -40,10 +40,10 @@ impl Default for Config {
 impl Config {
     /// Load config from CWD first, then home directory, or use defaults
     pub fn load() -> Self {
-        if let Some(content) = crate::infra::config_file::load_config_file()
-            && let Ok(config) = toml::from_str(&content)
-        {
-            return config;
+        if let Some(content) = gh_pr_config::load_config_file() {
+            if let Ok(config) = toml::from_str(&content) {
+                return config;
+            }
         }
 
         log::debug!("Using default config");

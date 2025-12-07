@@ -7,12 +7,8 @@ pub struct DebugConsoleViewModel {
     pub title: String,
     /// Pre-formatted footer text
     pub footer: String,
-    /// Pre-formatted visible log lines
+    /// Visible log lines for current viewport (scroll_offset applied)
     pub visible_logs: Vec<LogLine>,
-    /// Current scroll offset (for informational purposes)
-    pub scroll_offset: usize,
-    /// Visible height (for page down calculations)
-    pub visible_height: usize,
 }
 
 /// A single log line with pre-formatted text and color
@@ -26,34 +22,31 @@ pub struct LogLine {
 
 impl DebugConsoleViewModel {
     /// Build view model from debug console state
+    /// Returns only the visible logs for the current viewport
     pub fn from_state(
         logs: &[crate::log_capture::LogEntry],
         scroll_offset: usize,
         auto_scroll: bool,
-        console_height: usize,
+        visible_height: usize,
         theme: &crate::theme::Theme,
     ) -> Self {
         use ::log::Level;
 
         let log_count = logs.len();
 
-        // Calculate visible range
-        // Subtract 2 for top and bottom borders (title and footer are inside borders)
-        let visible_height = console_height.saturating_sub(2);
-        let total_logs = logs.len();
-
-        let actual_scroll_offset = if auto_scroll {
+        // Calculate viewport range
+        let actual_scroll = if auto_scroll {
             // Auto-scroll: show most recent logs
-            total_logs.saturating_sub(visible_height)
+            log_count.saturating_sub(visible_height)
         } else {
-            // Manual scroll: use provided scroll_offset
-            scroll_offset.min(total_logs.saturating_sub(visible_height))
+            // Manual scroll: use offset, clamped to valid range
+            scroll_offset.min(log_count.saturating_sub(visible_height))
         };
 
-        // Build pre-formatted log lines
+        // Build pre-formatted log lines for visible viewport only
         let visible_logs: Vec<LogLine> = logs
             .iter()
-            .skip(actual_scroll_offset)
+            .skip(actual_scroll)
             .take(visible_height)
             .map(|entry| {
                 // Determine color based on log level
@@ -90,12 +83,7 @@ impl DebugConsoleViewModel {
 
         // Pre-format title
         let mode_text = if auto_scroll { "[AUTO]" } else { "[MANUAL]" };
-        let title = format!(
-            " Debug Console ({}/{}) {} ",
-            actual_scroll_offset + visible_height.min(total_logs),
-            log_count,
-            mode_text
-        );
+        let title = format!(" Debug Console ({}) {} ", log_count, mode_text);
 
         // Pre-format footer
         let footer = " `~` Close | j/k Scroll | a Auto-scroll | c Clear ".to_string();
@@ -104,8 +92,6 @@ impl DebugConsoleViewModel {
             title,
             footer,
             visible_logs,
-            scroll_offset: actual_scroll_offset,
-            visible_height,
         }
     }
 }

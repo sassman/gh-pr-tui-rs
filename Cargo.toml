@@ -2,12 +2,23 @@
 members = [
     "crates/gh-actions-log-parser",
     "crates/gh-api-cache",
-    "crates/gh-pr-tui",
+    "crates/gh-client",
+    "crates/gh-diff-viewer",
+    "crates/gh-pr-config",
+    "crates/gh-pr-lander",
+    "crates/gh-pr-lander-theme",
+    # "crates/gh-pr-tui",
     "crates/gh-pr-tui-command-palette",
 ]
 resolver = "2"
 
 [workspace.dependencies]
+# Internal crates
+gh-client = { path = "crates/gh-client" }
+gh-diff-viewer = { path = "crates/gh-diff-viewer" }
+gh-pr-config = { path = "crates/gh-pr-config" }
+gh-pr-lander-theme = { path = "crates/gh-pr-lander-theme" }
+
 # Shared dependencies
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }

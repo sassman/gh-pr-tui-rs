@@ -1,5 +1,48 @@
 use std::time::Duration;
 
+/// Workflow run conclusion status from GitHub API
+/// Based on: https://docs.github.com/en/rest/guides/using-the-rest-api-to-interact-with-checks
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorkflowRunStatus {
+    /// Workflow completed successfully
+    Success,
+    /// Workflow failed
+    Failure,
+    /// Workflow was cancelled
+    Cancelled,
+    /// Workflow timed out
+    TimedOut,
+    /// Workflow requires action from user
+    ActionRequired,
+    /// Workflow was skipped
+    Skipped,
+    /// Workflow result is neutral (not pass/fail)
+    Neutral,
+    /// Workflow became stale (>14 days incomplete)
+    Stale,
+    /// Workflow failed to start
+    StartupFailure,
+    /// Workflow is still in progress
+    InProgress,
+    /// Status unknown or not recognized
+    Unknown,
+}
+
+impl WorkflowRunStatus {
+    /// Check if this workflow run status represents a failure
+    ///
+    /// Failures include: actual failures, timeouts, action required, cancelled runs
+    pub fn is_failed(&self) -> bool {
+        matches!(
+            self,
+            WorkflowRunStatus::Failure
+                | WorkflowRunStatus::TimedOut
+                | WorkflowRunStatus::ActionRequired
+                | WorkflowRunStatus::Cancelled
+        )
+    }
+}
+
 /// Job execution status (domain model - no presentation logic)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum JobStatus {

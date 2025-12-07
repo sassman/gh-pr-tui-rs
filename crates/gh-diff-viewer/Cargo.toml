@@ -1,0 +1,40 @@
+[package]
+name = "gh-diff-viewer"
+version = "0.1.0"
+edition = "2021"
+description = "A standalone diff viewer widget for GitHub PR code reviews"
+license = "MIT"
+
+[dependencies]
+# Diff parsing
+unidiff = "0.4"
+
+# Syntax highlighting
+syntect = { version = "5", default-features = false, features = ["default-fancy"] }
+
+# TUI
+ratatui = { workspace = true }
+
+# Data structures
+uuid = { version = "1", features = ["v4"] }
+chrono = { workspace = true, features = ["serde"] }
+
+# Async traits
+async-trait = "0.1"
+
+# Error handling
+thiserror = { workspace = true }
+
+# Caching (for syntax highlight cache)
+# Note: keeping simple HashMap for now, can add LRU later
+
+# Optional GitHub integration
+gh-client = { path = "../gh-client", optional = true }
+
+[features]
+default = []
+github = ["gh-client"]
+
+[dev-dependencies]
+tokio = { workspace = true }
+pretty_assertions = "1"

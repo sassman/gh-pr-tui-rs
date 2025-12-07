@@ -1,0 +1,12 @@
+pub mod add_repo_reducer;
+pub mod app_reducer;
+pub mod build_log_reducer;
+pub mod command_palette_reducer;
+pub mod confirmation_popup_reducer;
+pub mod debug_console_reducer;
+pub mod diff_viewer_reducer;
+pub mod key_bindings_reducer;
+pub mod pull_request_reducer;
+pub mod repository_reducer;
+pub mod splash_reducer;
+pub mod status_bar_reducer;

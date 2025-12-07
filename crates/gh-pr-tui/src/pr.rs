@@ -13,6 +13,7 @@ pub struct Pr {
     pub merge_state: String,
     pub mergeable: MergeableStatus, // Checked via background task
     pub needs_rebase: bool,         // True if PR is behind base branch
+    pub head_sha: String,           // HEAD commit SHA for CI status checks
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -83,6 +84,7 @@ impl Pr {
                 .unwrap(),
             mergeable: MergeableStatus::Unknown, // Will be checked in background
             needs_rebase: false,                 // Will be checked in background
+            head_sha: pr.head.sha.clone(),       // Store head SHA for CI checks
             created_at: pr.created_at.unwrap(),
             updated_at: pr.updated_at.unwrap(),
         }

@@ -1,0 +1,32 @@
+[package]
+name = "gh-client"
+version = "0.1.0"
+edition = "2021"
+authors = ["Sven Kanoldt <sven@d34dl0ck.me>"]
+description = "GitHub API client with caching decorator support"
+license = "MIT"
+
+[dependencies]
+# Core
+anyhow = { workspace = true }
+log = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+async-trait = "0.1"
+
+# GitHub API
+octocrab = { workspace = true }
+
+# Date/Time
+chrono = { workspace = true }
+
+# Cache
+gh-api-cache = { path = "../gh-api-cache" }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros"] }

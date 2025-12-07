@@ -7,6 +7,25 @@ use std::{
 use crate::{config::Config, log::LogPanel, merge_bot::MergeBot, pr::Pr, theme::Theme};
 use gh_pr_tui_command_palette::CommandItem;
 
+/// Identifies which panel/popup is currently active
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ActivePanel {
+    /// Main PR table (base layer)
+    PrTable,
+    /// Shortcuts help panel
+    Shortcuts,
+    /// Debug console (Quake-style drop-down)
+    DebugConsole,
+    /// Build logs panel
+    LogPanel,
+    /// Add repository popup
+    AddRepoPopup,
+    /// Close PR popup
+    ClosePrPopup,
+    /// Command palette
+    CommandPalette,
+}
+
 /// Root application state following Redux pattern
 #[derive(Debug, Clone, Default)]
 pub struct AppState {
@@ -20,7 +39,11 @@ pub struct AppState {
     pub theme: Theme,
 
     /// Infrastructure state
-    pub infrastructure: InfrastructureState,
+    pub infra: InfrastructureState,
+
+    /// Stack of active panels (topmost = currently visible/focused)
+    /// Used for context-aware Close action handling
+    pub panel_stack: Vec<ActivePanel>,
 }
 
 /// Infrastructure state (GitHub client, etc.)
@@ -44,6 +67,9 @@ pub struct PendingKeyPress {
 /// UI-specific state (shortcuts panel, spinner, quit flag)
 #[derive(Debug, Clone)]
 pub struct UiState {
+    /// Capabilities of the currently active panel (updated when focus changes or panel state changes)
+    pub active_panel_capabilities: crate::capabilities::PanelCapabilities,
+
     pub show_shortcuts: bool,
     pub shortcuts_scroll: usize,
     pub shortcuts_max_scroll: usize,
@@ -51,7 +77,6 @@ pub struct UiState {
     pub shortcuts_panel_view_model:
         Option<crate::view_models::shortcuts_panel::ShortcutsPanelViewModel>,
     pub spinner_frame: usize,
-    pub should_quit: bool,
     pub show_add_repo: bool,
     pub add_repo_form: AddRepoForm,
     /// Shared state for event handler to know if add repo popup is open
@@ -179,11 +204,10 @@ pub struct TaskState {
 #[derive(Debug, Clone)]
 pub struct DebugConsoleState {
     pub is_open: bool,
-    pub scroll_offset: usize,
-    pub auto_scroll: bool,   // Follow new logs as they arrive
-    pub height_percent: u16, // Height as percentage of screen (30-70)
+    pub scroll_offset: usize, // Viewport scroll position (first visible line)
+    pub auto_scroll: bool,    // Follow new logs as they arrive
+    pub height_percent: u16,  // Height as percentage of screen (30-70)
     pub logs: crate::log_capture::LogBuffer,
-    pub viewport_height: usize, // Updated during rendering for page down
     /// View model - pre-computed presentation data
     pub view_model: Option<crate::view_models::debug_console::DebugConsoleViewModel>,
 }
@@ -220,7 +244,7 @@ impl PrNumber {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RepoData {
     pub prs: Vec<Pr>,
     pub table_state: TableState,
@@ -234,21 +258,6 @@ pub struct RepoData {
 
     /// Timestamp when this repo was last successfully loaded/updated
     pub last_updated: Option<chrono::DateTime<chrono::Local>>,
-}
-
-impl Default for RepoData {
-    fn default() -> Self {
-        Self {
-            prs: Vec::new(),
-            table_state: TableState::default(),
-            selected_pr_numbers: HashSet::new(),
-            loading_state: LoadingState::default(),
-            auto_merge_queue: Vec::new(),
-            operation_monitor_queue: Vec::new(),
-            pr_table_view_model: None,
-            last_updated: None,
-        }
-    }
 }
 
 /// Represents a PR in the auto-merge queue
@@ -394,13 +403,19 @@ impl Default for TableColors {
 
 impl Default for UiState {
     fn default() -> Self {
+        use crate::capabilities::PanelCapabilities;
+
         Self {
+            // Default to PR table capabilities: vim navigation and item navigation
+            active_panel_capabilities: PanelCapabilities::VIM_NAVIGATION_BINDINGS
+                | PanelCapabilities::ITEM_NAVIGATION
+                | PanelCapabilities::ITEM_SELECTION,
+
             show_shortcuts: false,
             shortcuts_scroll: 0,
             shortcuts_max_scroll: 0,
             shortcuts_panel_view_model: None,
             spinner_frame: 0,
-            should_quit: false,
             show_add_repo: false,
             add_repo_form: AddRepoForm::default(),
             show_add_repo_shared: Arc::new(Mutex::new(false)),
@@ -447,7 +462,6 @@ impl Default for DebugConsoleState {
             auto_scroll: true,
             height_percent: 50, // 50% of screen height
             logs: crate::log_capture::DebugConsoleLogger::create_buffer(),
-            viewport_height: 20, // Default, updated during rendering
             view_model: None,
         }
     }
