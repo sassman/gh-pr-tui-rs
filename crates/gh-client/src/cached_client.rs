@@ -203,11 +203,14 @@ impl<C: GitHubClient + Clone> GitHubClient for CachedGitHubClient<C> {
 
         // Cache miss - fetch from API
         debug!("Cache MISS for PR #{} in {}/{}", pr_number, owner, repo);
-        let pr = self.inner.fetch_pull_request(owner, repo, pr_number).await?;
+        let pr = self
+            .inner
+            .fetch_pull_request(owner, repo, pr_number)
+            .await?;
 
         // Cache the result
         if let Ok(json) = serde_json::to_string(&pr) {
-            self.cache_set("GET", &url, &params, &json);
+            self.cache_set("GET", &url, params, &json);
         }
 
         Ok(pr)

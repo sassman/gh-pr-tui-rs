@@ -37,7 +37,6 @@ pub struct PrRowViewModel {
     pub pr_number: String,   // "#123"
     pub title: String,       // "Fix: broken tests"
     pub author: String,      // "sassman"
-    pub delta: String,       // "+225 -10"
     pub comments: String,    // "5"
     pub status_text: String, // "✓ Ready"
 
@@ -107,7 +106,6 @@ impl PrTableViewModel {
         let pr_number = format!("{} #{}", selection_indicator, pr.number);
         let title = pr.title.clone();
         let author = pr.author.clone();
-        let delta = format!("+{} -{}", pr.additions, pr.deletions);
         let comments = pr.comments.to_string();
 
         // Format status with icon and label
@@ -137,7 +135,6 @@ impl PrTableViewModel {
             pr_number,
             title,
             author,
-            delta,
             comments,
             status_text,
             bg_color,

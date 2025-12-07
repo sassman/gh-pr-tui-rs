@@ -307,6 +307,7 @@ pub trait GitHubClient: Send + Sync {
     /// # Returns
     ///
     /// The GitHub comment ID on success, error on failure
+    #[allow(clippy::too_many_arguments)]
     async fn create_review_comment(
         &self,
         owner: &str,
