@@ -185,12 +185,13 @@ impl Keymap {
 
     /// Try to match a key event against the keymap
     ///
-    /// Returns (matched_command, should_clear_pending, new_pending_key)
+    /// Returns (matched_commands, should_clear_pending, new_pending_key)
+    /// Multiple commands can match the same key (e.g., Tab can be RepositoryNext or DiffViewerSwitchPane)
     pub fn match_key(
         &self,
         key: &KeyEvent,
         pending: Option<&PendingKey>,
-    ) -> (Option<CommandId>, bool, Option<char>) {
+    ) -> (Vec<CommandId>, bool, Option<char>) {
         const SEQUENCE_TIMEOUT_SECS: u64 = 2;
 
         // Get current char if it's a simple char press (no ctrl/alt)
@@ -215,41 +216,56 @@ impl Keymap {
             for (binding, pattern) in &self.bindings {
                 if let ParsedKeyPattern::Sequence { first, second } = pattern {
                     if *first == pending.key && *second == current {
-                        return (Some(binding.command), true, None);
+                        return (vec![binding.command], true, None);
                     }
                 }
             }
             // Pending key didn't match, clear it and continue to single-key matching
         }
 
-        // Try single-key matches
+        // Collect all single-key matches
+        let mut matches = Vec::new();
+        let mut new_pending = None;
+
         for (binding, pattern) in &self.bindings {
             match pattern {
                 ParsedKeyPattern::Single { code, modifiers } => {
                     // Special case: BackTab can come with or without SHIFT modifier
                     // depending on terminal, so we match it loosely
-                    let matches = if *code == KeyCode::BackTab {
+                    let key_matches = if *code == KeyCode::BackTab {
                         key.code == KeyCode::BackTab
                     } else {
                         key.code == *code && key.modifiers == *modifiers
                     };
-                    if matches {
-                        return (Some(binding.command), true, None);
+                    if key_matches {
+                        matches.push(binding.command);
                     }
                 }
                 ParsedKeyPattern::Sequence { first, .. } => {
-                    // Check if this key starts a sequence
-                    if let Some(c) = current_char {
-                        if c == *first {
-                            return (None, false, Some(c));
+                    // Check if this key starts a sequence (only if no single-key matches yet)
+                    if new_pending.is_none() {
+                        if let Some(c) = current_char {
+                            if c == *first {
+                                new_pending = Some(c);
+                            }
                         }
                     }
                 }
             }
         }
 
+        // If we have single-key matches, return them
+        if !matches.is_empty() {
+            return (matches, true, None);
+        }
+
+        // If we're starting a sequence, return that
+        if let Some(pending) = new_pending {
+            return (vec![], false, Some(pending));
+        }
+
         // No match
-        (None, true, None)
+        (vec![], true, None)
     }
 
     /// Get all bindings (for displaying in help/command palette)
@@ -442,13 +458,13 @@ mod tests {
 
         // Shift+G should match "G" binding
         let key = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
-        let (cmd, _, _) = keymap.match_key(&key, None);
-        assert_eq!(cmd, Some(NavigateToBottom));
+        let (cmds, _, _) = keymap.match_key(&key, None);
+        assert_eq!(cmds, vec![NavigateToBottom]);
 
         // Lowercase 'g' should start a sequence, not match
         let key = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::NONE);
-        let (cmd, _, pending) = keymap.match_key(&key, None);
-        assert_eq!(cmd, None);
+        let (cmds, _, pending) = keymap.match_key(&key, None);
+        assert!(cmds.is_empty());
         assert_eq!(pending, Some('g'));
     }
 }

@@ -8,6 +8,8 @@ use uuid::Uuid;
 pub struct PendingComment {
     /// Unique identifier for this pending comment.
     pub id: Uuid,
+    /// GitHub comment ID (set after posting to GitHub).
+    pub github_id: Option<u64>,
     /// File path.
     pub path: String,
     /// Position information.
@@ -27,6 +29,24 @@ impl PendingComment {
     ) -> Self {
         Self {
             id: Uuid::new_v4(),
+            github_id: None,
+            path: path.into(),
+            position,
+            body: body.into(),
+            created_at: Utc::now(),
+        }
+    }
+
+    /// Create from an existing GitHub comment.
+    pub fn from_github(
+        github_id: u64,
+        path: impl Into<String>,
+        position: CommentPosition,
+        body: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            github_id: Some(github_id),
             path: path.into(),
             position,
             body: body.into(),

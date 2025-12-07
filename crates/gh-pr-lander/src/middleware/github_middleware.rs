@@ -8,7 +8,7 @@
 //! - Browser/IDE integration
 
 use crate::actions::{
-    Action, BootstrapAction, BuildLogAction, DiffViewerAction, Event, GlobalAction,
+    Action, BootstrapAction, BuildLogAction, DiffViewerAction, Event, GlobalAction, LoadedComment,
     PullRequestAction, RepositoryAction, StatusBarAction,
 };
 use crate::dispatcher::Dispatcher;
@@ -360,6 +360,9 @@ impl GitHubMiddleware {
                     // Then trigger CI status checks for each PR (background fetch)
                     // This must come AFTER Loaded so the PRs exist when BuildStatusUpdated arrives
                     dispatch_ci_status_checks(&repo, &domain_prs, &dispatcher);
+
+                    // Also trigger background fetch for PR stats (additions/deletions)
+                    dispatch_pr_stats_fetch(&repo, &domain_prs, &dispatcher, client);
                 }
                 Err(e) => {
                     log::error!("Failed to load PRs for {}/{}: {}", repo.org, repo.repo, e);
@@ -1424,6 +1427,264 @@ impl Middleware for GitHubMiddleware {
             }
 
             // === Diff Viewer Operations ===
+            Action::DiffViewer(DiffViewerAction::SubmitReviewRequest { pr_number, event }) => {
+                let client = match &self.client() {
+                    Some(c) => c.clone(),
+                    None => {
+                        log::error!("GitHub client not available for review submission");
+                        dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                            "GitHub client not available",
+                            "Review",
+                        )));
+                        return false;
+                    }
+                };
+
+                let repo_idx = state.main_view.selected_repository;
+                let Some(repo) = state.main_view.repositories.get(repo_idx).cloned() else {
+                    log::error!("No repository selected for review submission");
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                        "No repository selected",
+                        "Review",
+                    )));
+                    return false;
+                };
+
+                let pr_number = *pr_number;
+                let event = *event;
+                let dispatcher = dispatcher.clone();
+
+                // Convert gh_diff_viewer::ReviewEvent to gh_client::ReviewEvent
+                let api_event = match event {
+                    gh_diff_viewer::ReviewEvent::Approve => ReviewEvent::Approve,
+                    gh_diff_viewer::ReviewEvent::RequestChanges => ReviewEvent::RequestChanges,
+                    gh_diff_viewer::ReviewEvent::Comment => ReviewEvent::Comment,
+                };
+
+                let event_name = match event {
+                    gh_diff_viewer::ReviewEvent::Approve => "Approve",
+                    gh_diff_viewer::ReviewEvent::RequestChanges => "Request Changes",
+                    gh_diff_viewer::ReviewEvent::Comment => "Comment",
+                };
+
+                dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
+                    format!("Submitting {} review for PR #{}...", event_name, pr_number),
+                    "Review",
+                )));
+
+                self.runtime.spawn(async move {
+                    match client
+                        .create_review(&repo.org, &repo.repo, pr_number, api_event, None)
+                        .await
+                    {
+                        Ok(()) => {
+                            log::info!(
+                                "Successfully submitted {} review for PR #{}",
+                                event_name,
+                                pr_number
+                            );
+                            dispatcher.dispatch(Action::StatusBar(StatusBarAction::success(
+                                format!("{} review submitted for PR #{}", event_name, pr_number),
+                                "Review",
+                            )));
+                        }
+                        Err(e) => {
+                            log::error!("Review submission error: {}", e);
+                            dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                format!("Review failed: {}", e),
+                                "Review",
+                            )));
+                        }
+                    }
+                });
+
+                false // Consume action
+            }
+
+            Action::DiffViewer(DiffViewerAction::SubmitCommentRequest {
+                pr_number,
+                head_sha,
+                path,
+                line,
+                side,
+                body,
+            }) => {
+                let client = match &self.client() {
+                    Some(c) => c.clone(),
+                    None => {
+                        log::error!("GitHub client not available for comment submission");
+                        dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                            "GitHub client not available",
+                            "Comment",
+                        )));
+                        return false;
+                    }
+                };
+
+                let repo_idx = state.main_view.selected_repository;
+                let Some(repo) = state.main_view.repositories.get(repo_idx).cloned() else {
+                    log::error!("No repository selected for comment submission");
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                        "No repository selected",
+                        "Comment",
+                    )));
+                    return false;
+                };
+
+                let pr_number = *pr_number;
+                let head_sha = head_sha.clone();
+                let path = path.clone();
+                let line = *line;
+                let side = side.clone();
+                let body = body.clone();
+                let dispatcher = dispatcher.clone();
+
+                dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
+                    format!("Posting comment on PR #{}...", pr_number),
+                    "Comment",
+                )));
+
+                let path_clone = path.clone();
+                let side_clone = side.clone();
+                self.runtime.spawn(async move {
+                    match client
+                        .create_review_comment(
+                            &repo.org,
+                            &repo.repo,
+                            pr_number,
+                            &head_sha,
+                            &path,
+                            line,
+                            &side,
+                            &body,
+                        )
+                        .await
+                    {
+                        Ok(github_id) => {
+                            log::info!(
+                                "Successfully posted comment on PR #{} at {}:{} (id: {})",
+                                pr_number,
+                                path,
+                                line,
+                                github_id
+                            );
+                            dispatcher.dispatch(Action::StatusBar(StatusBarAction::success(
+                                format!("Comment posted on {}:{}", path, line),
+                                "Comment",
+                            )));
+                            // Update local state with the GitHub comment ID
+                            dispatcher.dispatch(Action::DiffViewer(
+                                DiffViewerAction::CommentPosted {
+                                    path: path_clone,
+                                    line,
+                                    side: side_clone,
+                                    github_id,
+                                },
+                            ));
+                        }
+                        Err(e) => {
+                            log::error!("Comment submission error: {}", e);
+                            dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                format!("Comment failed: {}", e),
+                                "Comment",
+                            )));
+                        }
+                    }
+                });
+
+                false // Consume action
+            }
+
+            Action::DiffViewer(DiffViewerAction::DeleteCommentRequest {
+                pr_number,
+                github_id,
+                path,
+                line,
+                side,
+            }) => {
+                let client = match &self.client() {
+                    Some(c) => c.clone(),
+                    None => {
+                        log::error!("GitHub client not available for comment deletion");
+                        dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                            "GitHub client not available",
+                            "Comment",
+                        )));
+                        return false;
+                    }
+                };
+
+                let repo_idx = state.main_view.selected_repository;
+                let Some(repo) = state.main_view.repositories.get(repo_idx).cloned() else {
+                    log::error!("No repository selected for comment deletion");
+                    dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                        "No repository selected",
+                        "Comment",
+                    )));
+                    return false;
+                };
+
+                let pr_number = *pr_number;
+                let github_id = *github_id;
+                let path = path.clone();
+                let line = *line;
+                let side = side.clone();
+                let dispatcher = dispatcher.clone();
+
+                log::info!(
+                    "Deleting comment {} on PR #{} at {}:{}",
+                    github_id,
+                    pr_number,
+                    path,
+                    line
+                );
+
+                dispatcher.dispatch(Action::StatusBar(StatusBarAction::running(
+                    format!("Deleting comment on {}:{}...", path, line),
+                    "Comment",
+                )));
+
+                let path_clone = path.clone();
+                let side_clone = side.clone();
+                self.runtime.spawn(async move {
+                    match client
+                        .delete_review_comment(&repo.org, &repo.repo, github_id)
+                        .await
+                    {
+                        Ok(()) => {
+                            log::info!(
+                                "Successfully deleted comment {} on PR #{} at {}:{}",
+                                github_id,
+                                pr_number,
+                                path,
+                                line
+                            );
+                            dispatcher.dispatch(Action::StatusBar(StatusBarAction::success(
+                                format!("Comment deleted from {}:{}", path, line),
+                                "Comment",
+                            )));
+                            // Update local state to remove the comment
+                            dispatcher.dispatch(Action::DiffViewer(
+                                DiffViewerAction::CommentDeleted {
+                                    path: path_clone,
+                                    line,
+                                    side: side_clone,
+                                },
+                            ));
+                        }
+                        Err(e) => {
+                            log::error!("Comment deletion error: {}", e);
+                            dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
+                                format!("Delete failed: {}", e),
+                                "Comment",
+                            )));
+                        }
+                    }
+                });
+
+                false // Consume action
+            }
+
             Action::DiffViewer(DiffViewerAction::Open) => {
                 let repo_idx = state.main_view.selected_repository;
 
@@ -1463,6 +1724,9 @@ impl Middleware for GitHubMiddleware {
                     return false;
                 };
 
+                // Get GitHub client for fetching comments
+                let github_client = self.client();
+
                 // Capture PR context
                 let pr_number = pr.number as u64;
                 let pr_title = pr.title.clone();
@@ -1479,20 +1743,52 @@ impl Middleware for GitHubMiddleware {
                     "Diff Viewer",
                 )));
 
-                // Spawn async task to fetch diff
+                // Spawn async task to fetch diff and comments
                 self.runtime.spawn(async move {
-                    match fetch_pr_diff(&octocrab, &repo_org, &repo_name, pr_number).await {
+                    // Fetch diff
+                    let diff_result: Result<String, String> =
+                        fetch_pr_diff(&octocrab, &repo_org, &repo_name, pr_number).await;
+
+                    // Fetch comments (non-blocking failure)
+                    let api_comments: Vec<gh_client::ReviewComment> =
+                        if let Some(client) = &github_client {
+                            client
+                                .fetch_review_comments(&repo_org, &repo_name, pr_number)
+                                .await
+                                .unwrap_or_else(|e| {
+                                    log::warn!("Failed to fetch review comments: {}", e);
+                                    vec![]
+                                })
+                        } else {
+                            vec![]
+                        };
+
+                    match diff_result {
                         Ok(diff_text) => {
                             // Parse the diff
                             match gh_diff_viewer::parse_unified_diff(
                                 &diff_text, &base_sha, &head_sha,
                             ) {
                                 Ok(diff) => {
+                                    // Convert API comments to LoadedComment
+                                    let comments: Vec<LoadedComment> = api_comments
+                                        .into_iter()
+                                        .map(|c| LoadedComment {
+                                            github_id: c.id,
+                                            path: c.path,
+                                            line: c.line,
+                                            side: c.side,
+                                            body: c.body,
+                                        })
+                                        .collect();
+
                                     dispatcher.dispatch(Action::DiffViewer(
                                         DiffViewerAction::Loaded {
                                             diff,
                                             pr_number,
                                             pr_title,
+                                            head_sha: head_sha.clone(),
+                                            comments,
                                         },
                                     ));
                                     dispatcher.dispatch(Action::StatusBar(
@@ -1793,6 +2089,50 @@ fn dispatch_ci_status_checks(repo: &Repository, prs: &[Pr], dispatcher: &Dispatc
     }
 }
 
+/// Dispatch background fetch for PR stats (additions/deletions)
+///
+/// The GitHub list PRs endpoint doesn't include additions/deletions, so we
+/// need to fetch individual PRs to get these stats.
+fn dispatch_pr_stats_fetch(
+    repo: &Repository,
+    prs: &[Pr],
+    dispatcher: &Dispatcher,
+    client: CachedGitHubClient<OctocrabClient>,
+) {
+    for pr in prs {
+        let pr_number = pr.number as u64;
+        let repo = repo.clone();
+        let dispatcher = dispatcher.clone();
+        let client = client.clone();
+
+        // Spawn async task for each PR
+        tokio::spawn(async move {
+            match client
+                .fetch_pull_request(&repo.org, &repo.repo, pr_number)
+                .await
+            {
+                Ok(pr_details) => {
+                    log::debug!(
+                        "Fetched stats for PR #{}: +{} -{}",
+                        pr_number,
+                        pr_details.additions,
+                        pr_details.deletions
+                    );
+                    dispatcher.dispatch(Action::PullRequest(PullRequestAction::StatsUpdated {
+                        repo,
+                        pr_number,
+                        additions: pr_details.additions as usize,
+                        deletions: pr_details.deletions as usize,
+                    }));
+                }
+                Err(e) => {
+                    log::warn!("Failed to fetch stats for PR #{}: {}", pr_number, e);
+                }
+            }
+        });
+    }
+}
+
 /// Fetch PR diff from GitHub API using gh CLI
 async fn fetch_pr_diff(
     _octocrab: &Octocrab, // Not used currently, but kept for potential future use
@@ -1848,5 +2188,7 @@ fn convert_to_domain_pr(pr: PullRequest) -> Pr {
         created_at: pr.created_at,
         updated_at: pr.updated_at,
         html_url: pr.html_url,
+        additions: pr.additions as usize,
+        deletions: pr.deletions as usize,
     }
 }

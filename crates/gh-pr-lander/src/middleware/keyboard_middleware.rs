@@ -151,7 +151,8 @@ impl KeyboardMiddleware {
         // ═══════════════════════════════════════════════════════════════════
 
         // Try keymap matching (handles both single keys and two-key sequences)
-        let (command_id, clear_pending, new_pending) =
+        // Returns all matching commands - we'll try each one until one is accepted
+        let (command_ids, clear_pending, new_pending) =
             state.keymap.match_key(&key, self.pending_key.as_ref());
 
         // Update pending key state
@@ -170,8 +171,8 @@ impl KeyboardMiddleware {
             return false; // Don't process further - waiting for second key
         }
 
-        // If keymap matched, check if view accepts the action (gating)
-        if let Some(cmd_id) = command_id {
+        // If keymap matched, try each command until one is accepted (gating)
+        for cmd_id in command_ids {
             let action = cmd_id.to_action();
 
             // Gating: Check if active view accepts this action
@@ -182,9 +183,10 @@ impl KeyboardMiddleware {
                         cmd_id
                     );
                     dispatcher.dispatch(action);
+                    return false;
                 } else {
                     log::debug!(
-                        "Layer 3: Command {:?} rejected by view {:?}, ignoring",
+                        "Layer 3: Command {:?} rejected by view {:?}, trying next",
                         cmd_id,
                         view.view_id()
                     );
@@ -192,8 +194,8 @@ impl KeyboardMiddleware {
             } else {
                 // No view - just dispatch (shouldn't normally happen)
                 dispatcher.dispatch(action);
+                return false;
             }
-            return false;
         }
 
         // Unhandled keys are consumed (not passed through)

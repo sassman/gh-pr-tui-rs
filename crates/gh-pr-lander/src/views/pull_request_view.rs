@@ -18,7 +18,8 @@ use crate::views::status_bar::StatusBarWidget;
 use crate::views::View;
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    text::Line,
+    style::{Color, Style},
+    text::{Line, Span},
     widgets::{Block, Cell, Paragraph, Row, Table},
     Frame,
 };
@@ -152,7 +153,7 @@ fn render_pr_table(state: &AppState, area: Rect, f: &mut Frame) {
     // Build header row
     let header_style = theme.table_header();
 
-    let header_cells = ["  #PR", "Title", "Author", "Comments", "Status"]
+    let header_cells = ["  #PR", "Title", "Author", "Delta", "Comments", "Status"]
         .iter()
         .map(|h| Cell::from(*h).style(header_style));
 
@@ -163,17 +164,22 @@ fn render_pr_table(state: &AppState, area: Rect, f: &mut Frame) {
         .rows
         .iter()
         .map(|row_vm| {
-            let style = ratatui::style::Style::default()
-                .fg(row_vm.fg_color)
-                .bg(row_vm.bg_color);
+            let style = Style::default().fg(row_vm.fg_color).bg(row_vm.bg_color);
+
+            // Build delta cell with colored additions (green) and deletions (red)
+            let delta_line = Line::from(vec![
+                Span::styled(format!("+{}", row_vm.additions), Style::default().fg(Color::Green)),
+                Span::raw(" "),
+                Span::styled(format!("-{}", row_vm.deletions), Style::default().fg(Color::Red)),
+            ]);
 
             Row::new(vec![
                 Cell::from(row_vm.pr_number.clone()),
                 Cell::from(row_vm.title.clone()),
                 Cell::from(row_vm.author.clone()),
+                Cell::from(delta_line),
                 Cell::from(row_vm.comments.clone()),
-                Cell::from(row_vm.status_text.clone())
-                    .style(ratatui::style::Style::default().fg(row_vm.status_color)),
+                Cell::from(row_vm.status_text.clone()).style(Style::default().fg(row_vm.status_color)),
             ])
             .style(style)
             .height(1)
@@ -192,9 +198,10 @@ fn render_pr_table(state: &AppState, area: Rect, f: &mut Frame) {
 
     let widths = [
         Constraint::Length(pr_number_width), // #PR - dynamic width
-        Constraint::Percentage(50),          // Title
-        Constraint::Percentage(15),          // Author
-        Constraint::Length(10),              // Comments
+        Constraint::Percentage(40),          // Title
+        Constraint::Percentage(12),          // Author
+        Constraint::Length(12),              // Delta (+123 -456)
+        Constraint::Length(8),               // Comments
         Constraint::Percentage(15),          // Status
     ];
 

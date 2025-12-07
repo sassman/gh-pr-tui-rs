@@ -34,16 +34,19 @@ pub struct PrTableHeaderViewModel {
 #[derive(Debug, Clone)]
 pub struct PrRowViewModel {
     /// Pre-formatted cell texts
-    pub pr_number: String, // "#123"
+    pub pr_number: String,   // "#123"
     pub title: String,       // "Fix: broken tests"
     pub author: String,      // "sassman"
+    pub delta: String,       // "+225 -10"
     pub comments: String,    // "5"
     pub status_text: String, // "✓ Ready"
 
     /// Pre-computed styles
-    pub bg_color: Color, // Background (alternating, selected, etc.)
+    pub bg_color: Color,     // Background (alternating, selected, etc.)
     pub fg_color: Color,     // Text color
     pub status_color: Color, // Status-specific color
+    pub additions: usize,    // Raw additions count (for coloring)
+    pub deletions: usize,    // Raw deletions count (for coloring)
 }
 
 impl PrTableViewModel {
@@ -104,6 +107,7 @@ impl PrTableViewModel {
         let pr_number = format!("{} #{}", selection_indicator, pr.number);
         let title = pr.title.clone();
         let author = pr.author.clone();
+        let delta = format!("+{} -{}", pr.additions, pr.deletions);
         let comments = pr.comments.to_string();
 
         // Format status with icon and label
@@ -133,11 +137,14 @@ impl PrTableViewModel {
             pr_number,
             title,
             author,
+            delta,
             comments,
             status_text,
             bg_color,
             fg_color,
             status_color,
+            additions: pr.additions,
+            deletions: pr.deletions,
         }
     }
 

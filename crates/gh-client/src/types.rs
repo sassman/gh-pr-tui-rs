@@ -48,6 +48,12 @@ pub struct PullRequest {
 
     /// PR URL for opening in browser
     pub html_url: String,
+
+    /// Number of lines added
+    pub additions: u64,
+
+    /// Number of lines deleted
+    pub deletions: u64,
 }
 
 /// Mergeable state as reported by GitHub
@@ -304,6 +310,31 @@ pub enum CiState {
     Unknown,
 }
 
+/// A review comment on a pull request
+///
+/// Represents a comment on a specific line in a PR diff.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewComment {
+    /// GitHub comment ID
+    pub id: u64,
+    /// File path the comment is on
+    pub path: String,
+    /// Line number in the diff (for new code)
+    pub line: Option<u32>,
+    /// Original line number (for old code)
+    pub original_line: Option<u32>,
+    /// Which side of the diff: "LEFT" (deletions) or "RIGHT" (additions)
+    pub side: Option<String>,
+    /// Comment body text
+    pub body: String,
+    /// Author's GitHub username
+    pub author: String,
+    /// When the comment was created
+    pub created_at: DateTime<Utc>,
+    /// When the comment was last updated
+    pub updated_at: DateTime<Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +360,8 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             html_url: "https://github.com/owner/repo/pull/42".to_string(),
+            additions: 100,
+            deletions: 50,
         };
 
         let json = serde_json::to_string(&pr).unwrap();

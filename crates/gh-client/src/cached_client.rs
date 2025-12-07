@@ -5,8 +5,8 @@
 
 use crate::client::{CacheMode, GitHubClient};
 use crate::types::{
-    CheckRun, CheckStatus, CiStatus, MergeMethod, MergeResult, PullRequest, ReviewEvent,
-    WorkflowRun,
+    CheckRun, CheckStatus, CiStatus, MergeMethod, MergeResult, PullRequest, ReviewComment,
+    ReviewEvent, WorkflowRun,
 };
 use async_trait::async_trait;
 use gh_api_cache::{ApiCache, CachedResponse};
@@ -113,6 +113,24 @@ impl<C: GitHubClient + Clone> CachedGitHubClient<C> {
             debug!("Failed to write to cache: {}", e);
         }
     }
+
+    /// Invalidate comment-related cache entries for a repository
+    ///
+    /// Called after mutations (POST/DELETE) to ensure comment lists are refreshed.
+    /// Uses pattern `/repos/{owner}/{repo}/pulls/` which matches:
+    /// - GET `/repos/{owner}/{repo}/pulls/{pr}/comments` (comment lists)
+    /// - But NOT `/repos/{owner}/{repo}/pulls?state=open` (PR lists)
+    fn cache_invalidate_comments(&self, owner: &str, repo: &str) {
+        // Pattern with trailing slash matches PR-specific endpoints (comments, reviews, etc.)
+        // but not the PR list endpoint (/pulls?state=open)
+        let pattern = format!("/repos/{}/{}/pulls/", owner, repo);
+        debug!(
+            "Cache invalidation for comments: invalidating pattern '{}'",
+            pattern
+        );
+        let mut cache = self.cache.lock().unwrap();
+        cache.invalidate_pattern(&pattern);
+    }
 }
 
 #[async_trait]
@@ -159,6 +177,40 @@ impl<C: GitHubClient + Clone> GitHubClient for CachedGitHubClient<C> {
         }
 
         Ok(prs)
+    }
+
+    async fn fetch_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<PullRequest> {
+        let url = format!("/repos/{}/{}/pulls/{}", owner, repo, pr_number);
+        let params: &[(&str, &str)] = &[];
+
+        // Try cache first
+        if let Some(cached_body) = self.try_cache_get("GET", &url, params) {
+            match serde_json::from_str::<PullRequest>(&cached_body) {
+                Ok(pr) => {
+                    debug!("Cache HIT for PR #{} in {}/{}", pr_number, owner, repo);
+                    return Ok(pr);
+                }
+                Err(e) => {
+                    debug!("Cache parse error for PR #{}: {}", pr_number, e);
+                }
+            }
+        }
+
+        // Cache miss - fetch from API
+        debug!("Cache MISS for PR #{} in {}/{}", pr_number, owner, repo);
+        let pr = self.inner.fetch_pull_request(owner, repo, pr_number).await?;
+
+        // Cache the result
+        if let Ok(json) = serde_json::to_string(&pr) {
+            self.cache_set("GET", &url, &params, &json);
+        }
+
+        Ok(pr)
     }
 
     async fn fetch_check_runs(
@@ -384,6 +436,94 @@ impl<C: GitHubClient + Clone> GitHubClient for CachedGitHubClient<C> {
 
         Ok(status)
     }
+
+    async fn create_review_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        commit_id: &str,
+        path: &str,
+        line: u32,
+        side: &str,
+        body: &str,
+    ) -> anyhow::Result<u64> {
+        // Execute the create
+        let result = self
+            .inner
+            .create_review_comment(owner, repo, pr_number, commit_id, path, line, side, body)
+            .await;
+
+        // On success, invalidate cached comments for this repo
+        if result.is_ok() {
+            self.cache_invalidate_comments(owner, repo);
+        }
+
+        result
+    }
+
+    async fn delete_review_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        comment_id: u64,
+    ) -> anyhow::Result<()> {
+        // Execute the delete
+        let result = self
+            .inner
+            .delete_review_comment(owner, repo, comment_id)
+            .await;
+
+        // On success, invalidate cached comments for this repo
+        if result.is_ok() {
+            self.cache_invalidate_comments(owner, repo);
+        }
+
+        result
+    }
+
+    async fn fetch_review_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<Vec<ReviewComment>> {
+        let url = format!("/repos/{}/{}/pulls/{}/comments", owner, repo, pr_number);
+        let params: &[(&str, &str)] = &[];
+
+        // Try cache first
+        if let Some(cached_body) = self.try_cache_get("GET", &url, params) {
+            match serde_json::from_str::<Vec<ReviewComment>>(&cached_body) {
+                Ok(comments) => {
+                    debug!(
+                        "Cache HIT for {}/{} PR #{} comments: {} comments",
+                        owner,
+                        repo,
+                        pr_number,
+                        comments.len()
+                    );
+                    return Ok(comments);
+                }
+                Err(e) => {
+                    debug!("Failed to parse cached comments: {}", e);
+                    // Fall through to fetch fresh data
+                }
+            }
+        }
+
+        // Fetch from API
+        let comments = self
+            .inner
+            .fetch_review_comments(owner, repo, pr_number)
+            .await?;
+
+        // Cache the result
+        if let Ok(json) = serde_json::to_string(&comments) {
+            self.cache_set("GET", &url, params, &json);
+        }
+
+        Ok(comments)
+    }
 }
 
 #[cfg(test)]
@@ -422,6 +562,20 @@ mod tests {
         ) -> anyhow::Result<Vec<PullRequest>> {
             *self.call_count.lock().unwrap() += 1;
             Ok(self.prs.clone())
+        }
+
+        async fn fetch_pull_request(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            pr_number: u64,
+        ) -> anyhow::Result<PullRequest> {
+            *self.call_count.lock().unwrap() += 1;
+            self.prs
+                .iter()
+                .find(|pr| pr.number == pr_number)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("PR not found"))
         }
 
         async fn fetch_check_runs(
@@ -532,6 +686,41 @@ mod tests {
                 pending: 0,
             })
         }
+
+        async fn create_review_comment(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+            _commit_id: &str,
+            _path: &str,
+            _line: u32,
+            _side: &str,
+            _body: &str,
+        ) -> anyhow::Result<u64> {
+            *self.call_count.lock().unwrap() += 1;
+            Ok(12345) // Mock comment ID
+        }
+
+        async fn delete_review_comment(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _comment_id: u64,
+        ) -> anyhow::Result<()> {
+            *self.call_count.lock().unwrap() += 1;
+            Ok(())
+        }
+
+        async fn fetch_review_comments(
+            &self,
+            _owner: &str,
+            _repo: &str,
+            _pr_number: u64,
+        ) -> anyhow::Result<Vec<ReviewComment>> {
+            *self.call_count.lock().unwrap() += 1;
+            Ok(vec![]) // Empty list by default
+        }
     }
 
     fn create_test_pr(number: u64) -> PullRequest {
@@ -549,6 +738,8 @@ mod tests {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             html_url: "https://github.com/test/repo/pull/1".to_string(),
+            additions: 100,
+            deletions: 50,
         }
     }
 

@@ -4,6 +4,21 @@
 
 use gh_diff_viewer::{DiffEvent, PullRequestDiff};
 
+/// A review comment loaded from GitHub
+#[derive(Debug, Clone)]
+pub struct LoadedComment {
+    /// GitHub comment ID
+    pub github_id: u64,
+    /// File path
+    pub path: String,
+    /// Line number (may be None for outdated comments)
+    pub line: Option<u32>,
+    /// Side: "LEFT" or "RIGHT"
+    pub side: Option<String>,
+    /// Comment body
+    pub body: String,
+}
+
 /// Tagged actions for the diff viewer panel
 #[derive(Debug, Clone)]
 pub enum DiffViewerAction {
@@ -17,6 +32,9 @@ pub enum DiffViewerAction {
         diff: PullRequestDiff,
         pr_number: u64,
         pr_title: String,
+        head_sha: String,
+        /// Review comments loaded from GitHub
+        comments: Vec<LoadedComment>,
     },
     /// Loading failed
     LoadError(String),
@@ -94,8 +112,43 @@ pub enum DiffViewerAction {
     ReviewOptionNext,
     /// Navigate review popup options
     ReviewOptionPrev,
-    /// Submit review with selected option
+    /// Submit review with selected option (updates inner state, closes popup)
     SubmitReview,
+    /// Request to submit review via API (handled by GitHub middleware)
+    SubmitReviewRequest {
+        pr_number: u64,
+        event: gh_diff_viewer::ReviewEvent,
+    },
+    /// Request to submit a single line comment via API (handled by GitHub middleware)
+    SubmitCommentRequest {
+        pr_number: u64,
+        head_sha: String,
+        path: String,
+        line: u32,
+        side: String,
+        body: String,
+    },
+    /// Comment was successfully posted to GitHub (updates local state with github_id)
+    CommentPosted {
+        path: String,
+        line: u32,
+        side: String,
+        github_id: u64,
+    },
+    /// Request to delete a comment via API (handled by GitHub middleware)
+    DeleteCommentRequest {
+        pr_number: u64,
+        github_id: u64,
+        path: String,
+        line: u32,
+        side: String,
+    },
+    /// Comment was successfully deleted from GitHub
+    CommentDeleted {
+        path: String,
+        line: u32,
+        side: String,
+    },
 
     // === Events from DiffViewerState ===
     /// Forward an event from the diff viewer state

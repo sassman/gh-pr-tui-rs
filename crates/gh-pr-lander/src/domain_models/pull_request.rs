@@ -32,6 +32,10 @@ pub struct Pr {
     pub updated_at: DateTime<Utc>,
     /// HTML URL for viewing the PR in browser
     pub html_url: String,
+    /// Number of lines added
+    pub additions: usize,
+    /// Number of lines deleted
+    pub deletions: usize,
 }
 
 impl Pr {
@@ -55,6 +59,8 @@ impl Pr {
             created_at: Utc::now(),
             updated_at: Utc::now(),
             html_url: String::new(),
+            additions: 0,
+            deletions: 0,
         }
     }
 

@@ -6,8 +6,8 @@
 use crate::client::GitHubClient;
 use crate::types::{
     CheckConclusion, CheckRun, CheckRunStatus, CheckState, CheckStatus, CiState, CiStatus,
-    CommitStatus, MergeMethod, MergeResult, MergeableState, PullRequest, ReviewEvent, WorkflowRun,
-    WorkflowRunConclusion, WorkflowRunStatus,
+    CommitStatus, MergeMethod, MergeResult, MergeableState, PullRequest, ReviewComment, ReviewEvent,
+    WorkflowRun, WorkflowRunConclusion, WorkflowRunStatus,
 };
 use async_trait::async_trait;
 use log::debug;
@@ -93,6 +93,19 @@ impl GitHubClient for OctocrabClient {
 
         debug!("Fetched {} PRs for {}/{}", prs.len(), owner, repo);
         Ok(prs)
+    }
+
+    async fn fetch_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<PullRequest> {
+        debug!("Fetching PR #{} for {}/{}", pr_number, owner, repo);
+
+        let pr = self.octocrab.pulls(owner, repo).get(pr_number).await?;
+
+        Ok(convert_pull_request(&pr))
     }
 
     async fn fetch_check_runs(
@@ -448,6 +461,142 @@ impl GitHubClient for OctocrabClient {
             pending,
         })
     }
+
+    async fn create_review_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        commit_id: &str,
+        path: &str,
+        line: u32,
+        side: &str,
+        body: &str,
+    ) -> anyhow::Result<u64> {
+        debug!(
+            "Creating review comment on PR #{} in {}/{} at {}:{}",
+            pr_number, owner, repo, path, line
+        );
+
+        let route = format!("/repos/{}/{}/pulls/{}/comments", owner, repo, pr_number);
+
+        let payload = serde_json::json!({
+            "body": body,
+            "commit_id": commit_id,
+            "path": path,
+            "line": line,
+            "side": side,
+        });
+
+        let response: serde_json::Value = self
+            .octocrab
+            .post(route, Some(&payload))
+            .await
+            .map_err(format_octocrab_error)?;
+
+        // Extract comment ID from response
+        let comment_id = response["id"]
+            .as_u64()
+            .ok_or_else(|| anyhow::anyhow!("Missing comment ID in response"))?;
+
+        Ok(comment_id)
+    }
+
+    async fn delete_review_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        comment_id: u64,
+    ) -> anyhow::Result<()> {
+        debug!(
+            "Deleting review comment {} in {}/{}",
+            comment_id, owner, repo
+        );
+
+        // DELETE returns 204 No Content on success - use _delete to get raw response
+        // since the body is empty and can't be parsed as JSON
+        // Note: _delete requires full URL since it bypasses parameterized_uri
+        let url = format!(
+            "https://api.github.com/repos/{}/{}/pulls/comments/{}",
+            owner, repo, comment_id
+        );
+
+        let response = self
+            .octocrab
+            ._delete(&url, None::<&()>)
+            .await
+            .map_err(format_octocrab_error)?;
+
+        // 204 No Content = successfully deleted
+        // 404 Not Found = already deleted (treat as success)
+        let status = response.status();
+        if status.is_success() || status.as_u16() == 404 {
+            Ok(())
+        } else {
+            Err(anyhow::anyhow!(
+                "Failed to delete comment: HTTP {}",
+                status
+            ))
+        }
+    }
+
+    async fn fetch_review_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<Vec<ReviewComment>> {
+        debug!(
+            "Fetching review comments for PR #{} in {}/{}",
+            pr_number, owner, repo
+        );
+
+        let route = format!("/repos/{}/{}/pulls/{}/comments", owner, repo, pr_number);
+
+        // Fetch all comments (paginated)
+        let response: Vec<serde_json::Value> = self
+            .octocrab
+            .get(route, None::<&()>)
+            .await
+            .map_err(format_octocrab_error)?;
+
+        let comments = response
+            .into_iter()
+            .filter_map(|c| {
+                let id = c["id"].as_u64()?;
+                let path = c["path"].as_str()?.to_string();
+                let body = c["body"].as_str()?.to_string();
+                let author = c["user"]["login"].as_str()?.to_string();
+                let created_at = c["created_at"]
+                    .as_str()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc))?;
+                let updated_at = c["updated_at"]
+                    .as_str()
+                    .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                    .map(|dt| dt.with_timezone(&chrono::Utc))?;
+
+                // line can be null for outdated comments
+                let line = c["line"].as_u64().map(|l| l as u32);
+                let original_line = c["original_line"].as_u64().map(|l| l as u32);
+                let side = c["side"].as_str().map(|s| s.to_string());
+
+                Some(ReviewComment {
+                    id,
+                    path,
+                    line,
+                    original_line,
+                    side,
+                    body,
+                    author,
+                    created_at,
+                    updated_at,
+                })
+            })
+            .collect();
+
+        Ok(comments)
+    }
 }
 
 /// Convert workflow run status string to enum
@@ -501,6 +650,8 @@ fn convert_pull_request(pr: &octocrab::models::pulls::PullRequest) -> PullReques
             .as_ref()
             .map(|u| u.to_string())
             .unwrap_or_default(),
+        additions: pr.additions.unwrap_or(0),
+        deletions: pr.deletions.unwrap_or(0),
     }
 }
 

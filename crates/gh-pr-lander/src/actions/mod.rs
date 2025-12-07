@@ -38,7 +38,7 @@ pub use command_palette::CommandPaletteAction;
 pub use confirmation_popup::ConfirmationPopupAction;
 pub use context_action::ContextAction;
 pub use debug_console::DebugConsoleAction;
-pub use diff_viewer::DiffViewerAction;
+pub use diff_viewer::{DiffViewerAction, LoadedComment};
 pub use event::Event;
 pub use global::GlobalAction;
 pub use key_bindings::KeyBindingsAction;

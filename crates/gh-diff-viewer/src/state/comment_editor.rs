@@ -15,6 +15,8 @@ pub struct CommentEditor {
     pub cursor: usize,
     /// Whether we're editing an existing pending comment.
     pub editing_index: Option<usize>,
+    /// GitHub comment ID if editing a posted comment (for delete support).
+    pub github_id: Option<u64>,
 }
 
 impl CommentEditor {
@@ -26,6 +28,7 @@ impl CommentEditor {
             body: String::new(),
             cursor: 0,
             editing_index: None,
+            github_id: None,
         }
     }
 
@@ -37,6 +40,7 @@ impl CommentEditor {
             body: String::new(),
             cursor: 0,
             editing_index: None,
+            github_id: None,
         }
     }
 
@@ -46,6 +50,7 @@ impl CommentEditor {
         position: CommentPosition,
         body: impl Into<String>,
         index: usize,
+        github_id: Option<u64>,
     ) -> Self {
         let body = body.into();
         let cursor = body.len();
@@ -55,6 +60,7 @@ impl CommentEditor {
             body,
             cursor,
             editing_index: Some(index),
+            github_id,
         }
     }
 

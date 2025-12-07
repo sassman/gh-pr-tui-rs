@@ -31,6 +31,8 @@ pub struct DiffViewerState {
     /// PR context
     pub pr_number: Option<u64>,
     pub pr_title: Option<String>,
+    /// Head SHA for API calls (comments)
+    pub head_sha: Option<String>,
 }
 
 impl Default for DiffViewerState {
@@ -41,6 +43,7 @@ impl Default for DiffViewerState {
             loading: DiffViewerLoadingState::default(),
             pr_number: None,
             pr_title: None,
+            head_sha: None,
         }
     }
 }
@@ -53,6 +56,7 @@ impl Clone for DiffViewerState {
             loading: self.loading.clone(),
             pr_number: self.pr_number,
             pr_title: self.pr_title.clone(),
+            head_sha: self.head_sha.clone(),
         }
     }
 }
@@ -64,11 +68,18 @@ impl DiffViewerState {
     }
 
     /// Load a diff into the viewer
-    pub fn load(&mut self, diff: PullRequestDiff, pr_number: u64, pr_title: String) {
+    pub fn load(
+        &mut self,
+        diff: PullRequestDiff,
+        pr_number: u64,
+        pr_title: String,
+        head_sha: String,
+    ) {
         self.inner = Some(InnerState::new(diff));
         self.loading = DiffViewerLoadingState::Loaded;
         self.pr_number = Some(pr_number);
         self.pr_title = Some(pr_title);
+        self.head_sha = Some(head_sha);
     }
 
     /// Set loading state
@@ -106,5 +117,6 @@ impl DiffViewerState {
         self.loading = DiffViewerLoadingState::Idle;
         self.pr_number = None;
         self.pr_title = None;
+        self.head_sha = None;
     }
 }

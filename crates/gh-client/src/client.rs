@@ -87,6 +87,27 @@ pub trait GitHubClient: Send + Sync {
         base_branch: Option<&str>,
     ) -> anyhow::Result<Vec<PullRequest>>;
 
+    /// Fetch a single pull request by number
+    ///
+    /// This returns full PR details including additions/deletions
+    /// which are not available in the list endpoint.
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - Repository owner
+    /// * `repo` - Repository name
+    /// * `pr_number` - Pull request number
+    ///
+    /// # Returns
+    ///
+    /// The pull request details, or an error if not found.
+    async fn fetch_pull_request(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<PullRequest>;
+
     /// Fetch CI check runs for a specific commit
     ///
     /// # Arguments
@@ -269,6 +290,72 @@ pub trait GitHubClient: Send + Sync {
         repo: &str,
         head_sha: &str,
     ) -> anyhow::Result<CiStatus>;
+
+    /// Create a review comment on a specific line of a pull request
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - Repository owner
+    /// * `repo` - Repository name
+    /// * `pr_number` - Pull request number
+    /// * `commit_id` - The SHA of the commit to comment on (usually head SHA)
+    /// * `path` - File path relative to repository root
+    /// * `line` - Line number in the file
+    /// * `side` - Which side of the diff ("LEFT" for deletions, "RIGHT" for additions)
+    /// * `body` - Comment body text
+    ///
+    /// # Returns
+    ///
+    /// The GitHub comment ID on success, error on failure
+    async fn create_review_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+        commit_id: &str,
+        path: &str,
+        line: u32,
+        side: &str,
+        body: &str,
+    ) -> anyhow::Result<u64>;
+
+    /// Delete a review comment
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - Repository owner
+    /// * `repo` - Repository name
+    /// * `comment_id` - The GitHub comment ID to delete
+    ///
+    /// # Returns
+    ///
+    /// Ok(()) on success, error on failure
+    async fn delete_review_comment(
+        &self,
+        owner: &str,
+        repo: &str,
+        comment_id: u64,
+    ) -> anyhow::Result<()>;
+
+    /// Fetch review comments for a pull request
+    ///
+    /// Returns all review comments (line comments) on a PR.
+    ///
+    /// # Arguments
+    ///
+    /// * `owner` - Repository owner
+    /// * `repo` - Repository name
+    /// * `pr_number` - Pull request number
+    ///
+    /// # Returns
+    ///
+    /// List of review comments on the PR
+    async fn fetch_review_comments(
+        &self,
+        owner: &str,
+        repo: &str,
+        pr_number: u64,
+    ) -> anyhow::Result<Vec<crate::types::ReviewComment>>;
 }
 
 #[cfg(test)]

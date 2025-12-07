@@ -118,6 +118,13 @@ pub enum PullRequestAction {
         pr_number: u64,
         status: MergeableStatus,
     },
+    /// Update PR stats (additions/deletions) after fetching individual PR details
+    StatsUpdated {
+        repo: Repository,
+        pr_number: u64,
+        additions: usize,
+        deletions: usize,
+    },
     /// Request to rerun failed jobs for the current PR
     RerunFailedJobs,
     /// Rerun started for a workflow run

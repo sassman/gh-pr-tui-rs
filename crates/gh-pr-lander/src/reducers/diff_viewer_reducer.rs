@@ -5,6 +5,7 @@
 
 use crate::actions::DiffViewerAction;
 use crate::state::DiffViewerState;
+use gh_diff_viewer::model::{CommentPosition, DiffSide, PendingComment};
 use gh_diff_viewer::DiffAction;
 
 /// Reducer for diff viewer actions.
@@ -31,8 +32,35 @@ pub fn reduce_diff_viewer(
             diff,
             pr_number,
             pr_title,
+            head_sha,
+            comments,
         } => {
-            state.load(diff.clone(), *pr_number, pr_title.clone());
+            state.load(diff.clone(), *pr_number, pr_title.clone(), head_sha.clone());
+
+            // Add existing comments from GitHub as pending comments
+            if let Some(ref mut inner) = state.inner {
+                for comment in comments {
+                    // Only add comments with valid line numbers
+                    if let Some(line) = comment.line {
+                        let side = match comment.side.as_deref() {
+                            Some("LEFT") => DiffSide::Left,
+                            _ => DiffSide::Right, // Default to RIGHT
+                        };
+                        let mut pending = PendingComment::new(
+                            &comment.path,
+                            CommentPosition::single(side, line),
+                            &comment.body,
+                        );
+                        pending.github_id = Some(comment.github_id);
+                        inner.pending_comments.push(pending);
+                    }
+                }
+                log::debug!(
+                    "Loaded {} existing comments from GitHub",
+                    inner.pending_comments.len()
+                );
+            }
+
             state
         }
 
@@ -255,6 +283,66 @@ pub fn reduce_diff_viewer(
 
         DiffViewerAction::SubmitReview => {
             forward_action(&mut state, DiffAction::SubmitReview);
+            state
+        }
+
+        DiffViewerAction::SubmitReviewRequest { .. } => {
+            // Handled by middleware (GitHub API call), not by reducer
+            state
+        }
+
+        DiffViewerAction::SubmitCommentRequest { .. } => {
+            // Handled by middleware (GitHub API call), not by reducer
+            state
+        }
+
+        DiffViewerAction::CommentPosted {
+            path,
+            line,
+            side,
+            github_id,
+        } => {
+            // Update the pending comment with its GitHub ID
+            if let Some(ref mut inner) = state.inner {
+                // Find the comment by path/line/side and update github_id
+                for comment in &mut inner.pending_comments {
+                    if comment.path == *path
+                        && comment.position.line == *line
+                        && comment.position.side.as_github_str() == side
+                    {
+                        comment.github_id = Some(*github_id);
+                        log::debug!(
+                            "Updated pending comment with github_id {} at {}:{}",
+                            github_id,
+                            path,
+                            line
+                        );
+                        break;
+                    }
+                }
+            }
+            state
+        }
+
+        DiffViewerAction::DeleteCommentRequest { .. } => {
+            // Handled by middleware (GitHub API call), not by reducer
+            state
+        }
+
+        DiffViewerAction::CommentDeleted { path, line, side } => {
+            // Remove the pending comment from local state
+            if let Some(ref mut inner) = state.inner {
+                // Find and remove the comment by path/line/side
+                let idx = inner.pending_comments.iter().position(|c| {
+                    c.path == *path
+                        && c.position.line == *line
+                        && c.position.side.as_github_str() == side
+                });
+                if let Some(idx) = idx {
+                    inner.pending_comments.remove(idx);
+                    log::debug!("Removed pending comment at {}:{}", path, line);
+                }
+            }
             state
         }
 

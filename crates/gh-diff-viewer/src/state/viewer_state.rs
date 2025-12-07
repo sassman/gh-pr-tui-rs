@@ -573,6 +573,7 @@ impl DiffViewerState {
                 comment.position.clone(),
                 &comment.body,
                 idx,
+                comment.github_id,
             ))
         } else if let Some((start_idx, end_idx)) = visual_selection {
             // New multi-line comment
