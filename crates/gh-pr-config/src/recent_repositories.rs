@@ -2,6 +2,7 @@
 //!
 //! Handles loading and saving recently used repositories.
 
+use crate::DEFAULT_HOST;
 #[allow(deprecated)] // Intentionally using legacy path until migration complete
 use crate::files::{create_recent_repositories_file, open_recent_repositories_file};
 use serde::{Deserialize, Serialize};
@@ -43,7 +44,7 @@ impl RecentRepository {
         host: Option<String>,
     ) -> Self {
         // Normalize github.com to None
-        let host = host.filter(|h| h != "github.com" && !h.is_empty());
+        let host = host.filter(|h| h != DEFAULT_HOST && !h.is_empty());
         Self {
             org: org.into(),
             repo: repo.into(),
@@ -54,7 +55,7 @@ impl RecentRepository {
 
     /// Get the effective host (defaults to github.com)
     pub fn effective_host(&self) -> &str {
-        self.host.as_deref().unwrap_or("github.com")
+        self.host.as_deref().unwrap_or(DEFAULT_HOST)
     }
 
     /// Check if this is a github.com repository

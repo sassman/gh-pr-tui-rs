@@ -2,6 +2,7 @@
 //!
 //! Domain model for GitHub repositories.
 
+use gh_pr_config::DEFAULT_HOST;
 use serde::{Deserialize, Serialize};
 
 /// A tracked GitHub repository
@@ -37,7 +38,7 @@ impl Repository {
         host: Option<String>,
     ) -> Self {
         // Normalize github.com to None
-        let host = host.filter(|h| h != "github.com" && !h.is_empty());
+        let host = host.filter(|h| h != DEFAULT_HOST && !h.is_empty());
         Self {
             org: org.into(),
             repo: repo.into(),
@@ -48,7 +49,7 @@ impl Repository {
 
     /// Get the effective host (defaults to github.com)
     pub fn effective_host(&self) -> &str {
-        self.host.as_deref().unwrap_or("github.com")
+        self.host.as_deref().unwrap_or(DEFAULT_HOST)
     }
 
     /// Check if this is a github.com repository

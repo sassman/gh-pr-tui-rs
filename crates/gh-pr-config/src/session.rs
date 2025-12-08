@@ -16,6 +16,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::paths;
+use crate::DEFAULT_HOST;
 
 const SESSION_VERSION: u32 = 1;
 
@@ -131,7 +132,7 @@ impl Session {
         self.session.selected_repo_branch = Some(branch.to_string());
         // Normalize github.com to None
         self.session.selected_repo_host = host
-            .filter(|h| *h != "github.com" && !h.is_empty())
+            .filter(|h| *h != DEFAULT_HOST && !h.is_empty())
             .map(|h| h.to_string());
     }
 

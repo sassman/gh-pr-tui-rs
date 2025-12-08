@@ -28,5 +28,8 @@ chrono = { workspace = true }
 # Cache
 gh-api-cache = { path = "../gh-api-cache" }
 
+# Config (for shared constants)
+gh-pr-config = { path = "../gh-pr-config" }
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros"] }
