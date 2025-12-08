@@ -43,7 +43,7 @@ pub fn load_recent_repositories() -> Vec<RecentRepository> {
             let reader = BufReader::new(file);
             match serde_json::from_reader(reader) {
                 Ok(repos) => {
-                    log::info!("Loaded recent repositories from .recent-repositories.json");
+                    log::info!("Loaded recent repositories from .gh-pr-lander.repos.json");
                     repos
                 }
                 Err(e) => {
@@ -67,7 +67,7 @@ pub fn save_recent_repositories(repos: &[RecentRepository]) -> anyhow::Result<()
     let file = create_recent_repositories_file()?;
     serde_json::to_writer_pretty(file, repos)?;
     log::info!(
-        "Saved {} recent repositories to .recent-repositories.json",
+        "Saved {} recent repositories to .gh-pr-lander.repos.json",
         repos.len()
     );
     Ok(())

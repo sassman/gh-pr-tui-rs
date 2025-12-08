@@ -13,8 +13,8 @@ use std::path::PathBuf;
     note = "Use paths::recent_repositories_path() instead"
 )]
 pub fn open_recent_repositories_file() -> Result<File> {
-    File::open(".recent-repositories.json")
-        .context("Failed to open recent repositories file (.recent-repositories.json)")
+    File::open(".gh-pr-lander.repos.json")
+        .context("Failed to open recent repositories file (.gh-pr-lander.repos.json)")
 }
 
 /// Create the recent repositories file for writing
@@ -23,8 +23,8 @@ pub fn open_recent_repositories_file() -> Result<File> {
     note = "Use paths::recent_repositories_path() instead"
 )]
 pub fn create_recent_repositories_file() -> Result<File> {
-    File::create(".recent-repositories.json")
-        .context("Failed to create recent repositories file (.recent-repositories.json)")
+    File::create(".gh-pr-lander.repos.json")
+        .context("Failed to create recent repositories file (.gh-pr-lander.repos.json)")
 }
 
 /// Open the session state file for reading

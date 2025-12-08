@@ -287,7 +287,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     if app.store.state().repos.recent_repos.is_empty() {
         f.render_widget(
             Paragraph::new(
-                "No repositories configured. Add repositories to .recent-repositories.json",
+                "No repositories configured. Add repositories to .gh-pr-lander.repos.json",
             )
             .centered(),
             f.area(),

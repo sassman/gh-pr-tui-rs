@@ -150,7 +150,7 @@ Example format:
 
 ### Repositories
 
-Tracked repositories are stored in `.recent-repositories.json`:
+Tracked repositories are stored in `.gh-pr-lander.repos.json`:
 
 ```json
 [

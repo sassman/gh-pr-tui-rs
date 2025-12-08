@@ -1,4 +1,6 @@
 .env
 .claude
-target/
 .planning/
+.gh-pr-lander.repos.json
+
+target/

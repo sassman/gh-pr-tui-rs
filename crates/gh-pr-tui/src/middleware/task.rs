@@ -232,7 +232,7 @@ impl Middleware for TaskMiddleware {
                                     Ok(repos) => {
                                         if repos.is_empty() {
                                             dispatcher.dispatch(Action::BootstrapComplete(Err(
-                                                "No repositories configured. Add repositories to .recent-repositories.json".to_string()
+                                                "No repositories configured. Add repositories to .gh-pr-lander.repos.json".to_string()
                                             )));
                                             return true;
                                         }
