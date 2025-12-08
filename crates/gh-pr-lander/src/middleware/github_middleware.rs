@@ -42,8 +42,8 @@ impl GitHubMiddleware {
         let runtime = Runtime::new().expect("Failed to create tokio runtime");
 
         // Initialize cache from config path
-        let cache_file = gh_pr_config::get_cache_file_path()
-            .unwrap_or_else(|_| std::env::temp_dir().join("gh-api-cache.json"));
+        let cache_file =
+            gh_pr_config::api_cache_path().expect("API Cache path should always exist.");
         let cache = Arc::new(Mutex::new(ApiCache::new(cache_file).unwrap_or_default()));
 
         Self {

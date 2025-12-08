@@ -6,6 +6,8 @@ description = "Configuration and file management for gh-pr-tui"
 
 [dependencies]
 anyhow = { workspace = true }
+chrono = { workspace = true }
+dirs = "6"
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

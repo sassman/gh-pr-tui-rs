@@ -8,5 +8,6 @@ pub mod diff_viewer_reducer;
 pub mod key_bindings_reducer;
 pub mod pull_request_reducer;
 pub mod repository_reducer;
+pub mod session_reducer;
 pub mod splash_reducer;
 pub mod status_bar_reducer;

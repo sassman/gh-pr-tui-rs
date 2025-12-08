@@ -2,6 +2,7 @@
 //!
 //! Handles loading and saving recently used repositories.
 
+#[allow(deprecated)] // Intentionally using legacy path until migration complete
 use crate::files::open_recent_repositories_file;
 use serde::{Deserialize, Serialize};
 use std::io::BufReader;
@@ -36,6 +37,7 @@ impl RecentRepository {
 ///
 /// Returns an empty vector if the file doesn't exist or can't be parsed.
 pub fn load_recent_repositories() -> Vec<RecentRepository> {
+    #[allow(deprecated)] // Intentionally using legacy path until migration complete
     match open_recent_repositories_file() {
         Ok(file) => {
             let reader = BufReader::new(file);

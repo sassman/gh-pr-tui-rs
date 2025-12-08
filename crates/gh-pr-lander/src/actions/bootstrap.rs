@@ -6,6 +6,9 @@
 ///
 /// Note: `ClientReady` has been moved to `Event` enum as it's a fact that middleware
 /// should observe. See `src/actions/event.rs` for events that re-enter middleware.
+///
+/// Session-related actions have been moved to `SessionAction` to maintain
+/// proper separation of concerns.
 #[derive(Debug, Clone)]
 pub enum BootstrapAction {
     /// Bootstrap process started

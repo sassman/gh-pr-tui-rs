@@ -241,7 +241,7 @@ impl<T: ThemeProvider> DiffViewer<'_, T> {
                 if line.is_empty() {
                     visual_line += 1;
                 } else {
-                    visual_line += (line.len() + max_width - 1) / max_width;
+                    visual_line += line.len().div_ceil(max_width);
                 }
             } else {
                 // This is the cursor's logical line - find visual position

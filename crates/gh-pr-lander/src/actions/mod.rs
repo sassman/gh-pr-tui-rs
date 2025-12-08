@@ -26,6 +26,7 @@ pub mod key_bindings;
 pub mod merge_bot;
 pub mod pull_request;
 pub mod repository;
+pub mod session;
 pub mod splash;
 pub mod status_bar;
 
@@ -46,6 +47,7 @@ pub use merge_bot::MergeBotAction;
 pub use navigation::NavigationAction;
 pub use pull_request::PullRequestAction;
 pub use repository::RepositoryAction;
+pub use session::SessionAction;
 pub use splash::SplashAction;
 pub use status_bar::StatusBarAction;
 pub use text_input::TextInputAction;
@@ -104,6 +106,8 @@ pub enum Action {
     DiffViewer(DiffViewerAction),
     /// Repository management actions
     Repository(RepositoryAction),
+    /// Session management actions
+    Session(SessionAction),
 
     /// No-op action
     None,

@@ -40,8 +40,8 @@ use middleware::{
     debug_console_middleware::DebugConsoleMiddleware, diff_viewer_middleware::DiffViewerMiddleware,
     github_middleware::GitHubMiddleware, keyboard_middleware::KeyboardMiddleware,
     navigation_middleware::NavigationMiddleware, pull_request_middleware::PullRequestMiddleware,
-    repository_middleware::RepositoryMiddleware, text_input_middleware::TextInputMiddleware,
-    Middleware,
+    repository_middleware::RepositoryMiddleware, session_middleware::SessionMiddleware,
+    text_input_middleware::TextInputMiddleware, Middleware,
 };
 use state::AppState;
 use store::Store;
@@ -73,8 +73,9 @@ fn main() -> io::Result<()> {
     // Build middleware list (will run on background thread)
     let middleware: Vec<Box<dyn Middleware + Send>> = vec![
         Box::new(BootstrapMiddleware::new()),
+        Box::new(SessionMiddleware::new()), // Session load/save - early in chain
         Box::new(AppConfigMiddleware::new()), // Load app config early
-        Box::new(GitHubMiddleware::new()),    // GitHub client & API operations
+        Box::new(GitHubMiddleware::new()),  // GitHub client & API operations
         Box::new(KeyboardMiddleware::new()),
         // Translation middlewares - convert generic actions to view-specific actions
         Box::new(NavigationMiddleware::new()),
@@ -176,7 +177,7 @@ fn run_app(
         }
 
         if processed > 0 {
-            log::debug!(
+            log::trace!(
                 "Main loop: processed {} results in {:?}",
                 processed,
                 start.elapsed()

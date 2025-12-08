@@ -1,0 +1,13 @@
+[package]
+name = "gh-pr-config-migrate"
+version = "0.1.0"
+edition = "2021"
+description = "Migration utilities for gh-pr-lander configuration files"
+# This crate can be removed once all users have migrated
+
+[dependencies]
+anyhow = { workspace = true }
+gh-pr-config = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

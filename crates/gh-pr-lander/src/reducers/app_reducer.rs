@@ -12,7 +12,7 @@ use crate::actions::{
 use crate::reducers::{
     add_repo_reducer, build_log_reducer, command_palette_reducer, confirmation_popup_reducer,
     debug_console_reducer, diff_viewer_reducer, key_bindings_reducer, pull_request_reducer,
-    splash_reducer, status_bar_reducer,
+    session_reducer, splash_reducer, status_bar_reducer,
 };
 use crate::state::AppState;
 use crate::views::DiffViewerView;
@@ -227,6 +227,12 @@ pub fn reduce(mut state: AppState, action: &Action) -> AppState {
                     // Handled by middleware
                 }
             }
+            state
+        }
+
+        // Session actions - delegate to session reducer
+        Action::Session(sub) => {
+            state.main_view = session_reducer::reduce_session(state.main_view, sub);
             state
         }
 

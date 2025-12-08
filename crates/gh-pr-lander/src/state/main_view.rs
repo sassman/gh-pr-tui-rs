@@ -8,6 +8,12 @@ pub struct MainViewState {
     pub selected_repository: usize, // Currently selected repository index
     pub repositories: Vec<Repository>, // List of tracked repositories
     pub repo_data: std::collections::HashMap<usize, RepositoryData>, // PR data per repository
+
+    // Session restoration - pending selection to apply after repositories load
+    /// Pending repository selection from session (org, name, branch)
+    pub pending_session_repo: Option<(String, String, String)>,
+    /// Pending PR number from session (not index)
+    pub pending_session_pr_no: Option<usize>,
 }
 
 /// Data for a single repository (PRs, loading state, etc.)

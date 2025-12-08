@@ -8,6 +8,7 @@ gh-actions-log-parser = { path = "../gh-actions-log-parser" }
 gh-diff-viewer = { path = "../gh-diff-viewer" }
 gh-client.workspace = true
 gh-pr-config.workspace = true
+gh-pr-config-migrate.workspace = true
 gh-pr-lander-theme.workspace = true
 ratatui = { version = "0.29", features = ["crossterm"] }
 tokio = { workspace = true }

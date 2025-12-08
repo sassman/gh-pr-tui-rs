@@ -13,6 +13,7 @@ pub mod keyboard_middleware;
 pub mod navigation_middleware;
 pub mod pull_request_middleware;
 pub mod repository_middleware;
+pub mod session_middleware;
 pub mod text_input_middleware;
 
 /// Middleware trait - intercepts actions before they reach the reducer
