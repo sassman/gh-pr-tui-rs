@@ -272,7 +272,12 @@ impl GitHubMiddleware {
                 .cloned()
                 .collect();
 
-            dispatch_ci_status_checks(repo, &prs_needing_status, dispatcher, self.client_manager_arc());
+            dispatch_ci_status_checks(
+                repo,
+                &prs_needing_status,
+                dispatcher,
+                self.client_manager_arc(),
+            );
         }
     }
 
@@ -313,7 +318,13 @@ impl GitHubMiddleware {
             let client = {
                 let mut manager = client_manager.lock().await;
                 match manager.clone_client(repo.host.as_deref()).await {
-                    Ok(c) => if force_refresh { c.with_mode(CacheMode::WriteOnly) } else { c },
+                    Ok(c) => {
+                        if force_refresh {
+                            c.with_mode(CacheMode::WriteOnly)
+                        } else {
+                            c
+                        }
+                    }
                     Err(e) => {
                         log::error!("Failed to get client for host {:?}: {}", repo.host, e);
                         dispatcher.dispatch(Action::StatusBar(StatusBarAction::error(
@@ -359,10 +370,21 @@ impl GitHubMiddleware {
 
                     // Then trigger CI status checks for each PR (background fetch)
                     // This must come AFTER Loaded so the PRs exist when BuildStatusUpdated arrives
-                    dispatch_ci_status_checks(&repo, &domain_prs, &dispatcher, Arc::clone(&client_manager));
+                    dispatch_ci_status_checks(
+                        &repo,
+                        &domain_prs,
+                        &dispatcher,
+                        Arc::clone(&client_manager),
+                    );
 
                     // Also trigger background fetch for PR stats (additions/deletions)
-                    dispatch_pr_stats_fetch(&repo, &domain_prs, &dispatcher, client, Arc::clone(&client_manager));
+                    dispatch_pr_stats_fetch(
+                        &repo,
+                        &domain_prs,
+                        &dispatcher,
+                        client,
+                        Arc::clone(&client_manager),
+                    );
                 }
                 Err(e) => {
                     log::error!("Failed to load PRs for {}/{}: {}", repo.org, repo.repo, e);
@@ -1084,10 +1106,7 @@ impl Middleware for GitHubMiddleware {
                 log::info!("Opening build logs for {} PR(s)", targets.len());
 
                 for (repo, _pr_number, _head_sha, head_branch) in targets {
-                    let url = format!(
-                        "{}/actions?query=branch%3A{}",
-                        repo.web_url(), head_branch
-                    );
+                    let url = format!("{}/actions?query=branch%3A{}", repo.web_url(), head_branch);
                     self.runtime.spawn(open_url(url));
                 }
                 false // Consume action
@@ -1135,7 +1154,8 @@ impl Middleware for GitHubMiddleware {
                             }
                             _ => String::new(),
                         };
-                        let dir_name = format!("{}{}-{}-pr-{}", host_prefix, org, repo_name, pr_number);
+                        let dir_name =
+                            format!("{}{}-{}-pr-{}", host_prefix, org, repo_name, pr_number);
                         let pr_dir = temp_dir.join(dir_name);
 
                         // Remove existing directory if present
@@ -1161,9 +1181,7 @@ impl Middleware for GitHubMiddleware {
                                 clone_args.push(host.clone());
                             }
                         }
-                        let clone_output = Command::new("gh")
-                            .args(&clone_args)
-                            .output();
+                        let clone_output = Command::new("gh").args(&clone_args).output();
 
                         match clone_output {
                             Err(err) => {
@@ -1831,9 +1849,9 @@ impl Middleware for GitHubMiddleware {
                                     format!("Failed to load diff: {}", e),
                                     "Diff Viewer",
                                 )));
-                                dispatcher.dispatch(Action::DiffViewer(DiffViewerAction::LoadError(
-                                    e.to_string(),
-                                )));
+                                dispatcher.dispatch(Action::DiffViewer(
+                                    DiffViewerAction::LoadError(e.to_string()),
+                                ));
                                 return;
                             }
                         }
@@ -1842,8 +1860,14 @@ impl Middleware for GitHubMiddleware {
                     let octocrab = client.inner().octocrab_arc();
 
                     // Fetch diff
-                    let diff_result: Result<String, String> =
-                        fetch_pr_diff(&octocrab, &repo_org, &repo_name, pr_number, repo_host.as_deref()).await;
+                    let diff_result: Result<String, String> = fetch_pr_diff(
+                        &octocrab,
+                        &repo_org,
+                        &repo_name,
+                        pr_number,
+                        repo_host.as_deref(),
+                    )
+                    .await;
 
                     // Fetch comments (non-blocking failure)
                     let api_comments: Vec<gh_client::ReviewComment> = client

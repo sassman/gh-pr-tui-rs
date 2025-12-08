@@ -75,7 +75,12 @@ impl<'a> DebugConsoleViewModel<'a> {
         // start is the index of the first visible line
         let start = end.saturating_sub(available_height);
 
-        self.state.lines.iter().skip(start).take(end - start).collect()
+        self.state
+            .lines
+            .iter()
+            .skip(start)
+            .take(end - start)
+            .collect()
     }
 
     /// Get the title for the debug console with scroll indicator

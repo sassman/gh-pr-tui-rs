@@ -59,12 +59,22 @@ impl Repository {
 
     /// Get the web URL for this repository
     pub fn web_url(&self) -> String {
-        format!("https://{}/{}/{}", self.effective_host(), self.org, self.repo)
+        format!(
+            "https://{}/{}/{}",
+            self.effective_host(),
+            self.org,
+            self.repo
+        )
     }
 
     /// Get the SSH clone URL
     pub fn ssh_url(&self) -> String {
-        format!("git@{}:{}/{}.git", self.effective_host(), self.org, self.repo)
+        format!(
+            "git@{}:{}/{}.git",
+            self.effective_host(),
+            self.org,
+            self.repo
+        )
     }
 
     /// Get the API base URL for this host
@@ -86,7 +96,13 @@ impl Repository {
         if self.is_github_com() {
             format!("{}/{}@{}", self.org, self.repo, self.branch)
         } else {
-            format!("{}:{}/{}@{}", self.effective_host(), self.org, self.repo, self.branch)
+            format!(
+                "{}:{}/{}@{}",
+                self.effective_host(),
+                self.org,
+                self.repo,
+                self.branch
+            )
         }
     }
 }
@@ -104,7 +120,8 @@ mod tests {
 
     #[test]
     fn test_with_host() {
-        let repo = Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
+        let repo =
+            Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
         assert!(!repo.is_github_com());
         assert_eq!(repo.effective_host(), "ghe.example.com");
     }
@@ -114,7 +131,8 @@ mod tests {
         let repo = Repository::new("rust-lang", "rust", "main");
         assert_eq!(repo.web_url(), "https://github.com/rust-lang/rust");
 
-        let repo = Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
+        let repo =
+            Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
         assert_eq!(repo.web_url(), "https://ghe.example.com/org/repo");
     }
 
@@ -123,7 +141,8 @@ mod tests {
         let repo = Repository::new("rust-lang", "rust", "main");
         assert_eq!(repo.ssh_url(), "git@github.com:rust-lang/rust.git");
 
-        let repo = Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
+        let repo =
+            Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
         assert_eq!(repo.ssh_url(), "git@ghe.example.com:org/repo.git");
     }
 
@@ -132,7 +151,8 @@ mod tests {
         let repo = Repository::new("org", "repo", "main");
         assert_eq!(repo.api_base_url(), "https://api.github.com");
 
-        let repo = Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
+        let repo =
+            Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
         assert_eq!(repo.api_base_url(), "https://ghe.example.com/api/v3");
     }
 
@@ -141,7 +161,8 @@ mod tests {
         let repo = Repository::new("org", "repo", "main");
         assert_eq!(repo.full_display_name(), "org/repo@main");
 
-        let repo = Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
+        let repo =
+            Repository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
         assert_eq!(repo.full_display_name(), "ghe.example.com:org/repo@main");
     }
 

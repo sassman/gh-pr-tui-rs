@@ -38,7 +38,11 @@ pub fn reduce_session(mut state: MainViewState, action: &SessionAction) -> MainV
                         _ => false,
                     };
 
-                    if repo.org == *org && repo.repo == *name && repo.branch == *branch && host_matches {
+                    if repo.org == *org
+                        && repo.repo == *name
+                        && repo.branch == *branch
+                        && host_matches
+                    {
                         log::info!(
                             "Session: Restoring repository selection to index {} ({}/{})",
                             idx,
@@ -51,10 +55,8 @@ pub fn reduce_session(mut state: MainViewState, action: &SessionAction) -> MainV
                         if let Some(pr_no) = state.pending_session_pr_no {
                             if let Some(repo_data) = state.repo_data.get_mut(&idx) {
                                 // Find the PR by number and get its index
-                                if let Some(pr_idx) = repo_data
-                                    .prs
-                                    .iter()
-                                    .position(|pr| pr.number == pr_no)
+                                if let Some(pr_idx) =
+                                    repo_data.prs.iter().position(|pr| pr.number == pr_no)
                                 {
                                     repo_data.selected_pr = pr_idx;
                                     log::info!(

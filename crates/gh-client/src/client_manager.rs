@@ -239,9 +239,7 @@ impl ClientManager {
         let base_url = if let Some(h) = host {
             if h != DEFAULT_HOST {
                 let uri = format!("https://{}/api/v3", h);
-                builder = builder
-                    .base_uri(&uri)
-                    .context("Failed to set base URI")?;
+                builder = builder.base_uri(&uri).context("Failed to set base URI")?;
                 uri
             } else {
                 "https://api.github.com".to_string()
@@ -252,7 +250,8 @@ impl ClientManager {
 
         let octocrab = builder.build().context("Failed to build Octocrab client")?;
         let octocrab_client = OctocrabClient::with_base_url(Arc::new(octocrab), base_url);
-        let cached = CachedGitHubClient::new(octocrab_client, Arc::clone(&self.cache), self.cache_mode);
+        let cached =
+            CachedGitHubClient::new(octocrab_client, Arc::clone(&self.cache), self.cache_mode);
 
         info!("GitHub client created for host: {}", effective_host);
         Ok(cached)
@@ -269,7 +268,10 @@ mod tests {
         let hosts = [
             ("github.com", "GITHUB_TOKEN_GITHUB_COM"),
             ("ghe.example.com", "GITHUB_TOKEN_GHE_EXAMPLE_COM"),
-            ("github-enterprise.corp.com", "GITHUB_TOKEN_GITHUB_ENTERPRISE_CORP_COM"),
+            (
+                "github-enterprise.corp.com",
+                "GITHUB_TOKEN_GITHUB_ENTERPRISE_CORP_COM",
+            ),
         ];
 
         for (host, expected_key) in hosts {
@@ -277,7 +279,11 @@ mod tests {
                 "GITHUB_TOKEN_{}",
                 host.replace(['.', '-'], "_").to_uppercase()
             );
-            assert_eq!(env_key, expected_key, "Host '{}' should produce key '{}'", host, expected_key);
+            assert_eq!(
+                env_key, expected_key,
+                "Host '{}' should produce key '{}'",
+                host, expected_key
+            );
         }
     }
 

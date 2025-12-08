@@ -85,7 +85,12 @@ impl Middleware for SessionMiddleware {
 
                     // Dispatch session loaded action with selected repo info
                     let selected_repo = session.selected_repo().map(|(org, name, branch, host)| {
-                        (org.to_string(), name.to_string(), branch.to_string(), host.map(|h| h.to_string()))
+                        (
+                            org.to_string(),
+                            name.to_string(),
+                            branch.to_string(),
+                            host.map(|h| h.to_string()),
+                        )
                     });
                     let selected_pr_no = session.selected_pr_no();
 

@@ -27,8 +27,12 @@ pub fn reduce_repository(mut state: MainViewState, action: &RepositoryAction) ->
                 state.repo_data.remove(&idx);
 
                 // Re-index repo_data for indices above the removed one
-                let keys_to_update: Vec<usize> =
-                    state.repo_data.keys().filter(|&&k| k > idx).copied().collect();
+                let keys_to_update: Vec<usize> = state
+                    .repo_data
+                    .keys()
+                    .filter(|&&k| k > idx)
+                    .copied()
+                    .collect();
                 for old_key in keys_to_update {
                     if let Some(data) = state.repo_data.remove(&old_key) {
                         state.repo_data.insert(old_key - 1, data);
@@ -64,70 +68,64 @@ pub fn reduce_add_repo_form(
     action: &RepositoryAction,
 ) -> AddRepoFormState {
     match action {
-        RepositoryAction::FormChar(c) => {
-            match state.focused_field {
-                AddRepoField::Url => {
-                    state.url.push(*c);
-                    state.parse_url_and_update();
-                }
-                AddRepoField::Host => {
-                    state.host.push(*c);
-                }
-                AddRepoField::Org => {
-                    state.org.push(*c);
-                }
-                AddRepoField::Repo => {
-                    state.repo.push(*c);
-                }
-                AddRepoField::Branch => {
-                    state.branch.push(*c);
-                }
+        RepositoryAction::FormChar(c) => match state.focused_field {
+            AddRepoField::Url => {
+                state.url.push(*c);
+                state.parse_url_and_update();
             }
-        }
+            AddRepoField::Host => {
+                state.host.push(*c);
+            }
+            AddRepoField::Org => {
+                state.org.push(*c);
+            }
+            AddRepoField::Repo => {
+                state.repo.push(*c);
+            }
+            AddRepoField::Branch => {
+                state.branch.push(*c);
+            }
+        },
 
-        RepositoryAction::FormBackspace => {
-            match state.focused_field {
-                AddRepoField::Url => {
-                    state.url.pop();
-                    state.parse_url_and_update();
-                }
-                AddRepoField::Host => {
-                    state.host.pop();
-                }
-                AddRepoField::Org => {
-                    state.org.pop();
-                }
-                AddRepoField::Repo => {
-                    state.repo.pop();
-                }
-                AddRepoField::Branch => {
-                    state.branch.pop();
-                }
+        RepositoryAction::FormBackspace => match state.focused_field {
+            AddRepoField::Url => {
+                state.url.pop();
+                state.parse_url_and_update();
             }
-        }
+            AddRepoField::Host => {
+                state.host.pop();
+            }
+            AddRepoField::Org => {
+                state.org.pop();
+            }
+            AddRepoField::Repo => {
+                state.repo.pop();
+            }
+            AddRepoField::Branch => {
+                state.branch.pop();
+            }
+        },
 
-        RepositoryAction::FormClearField => {
-            match state.focused_field {
-                AddRepoField::Url => {
-                    state.url.clear();
-                    state.host.clear();
-                    state.org.clear();
-                    state.repo.clear();
-                }
-                AddRepoField::Host => {
-                    state.host.clear();
-                }
-                AddRepoField::Org => {
-                    state.org.clear();
-                }
-                AddRepoField::Repo => {
-                    state.repo.clear();
-                }
-                AddRepoField::Branch => {
-                    state.branch.clear();
-                }
+        RepositoryAction::FormClearField => match state.focused_field {
+            AddRepoField::Url => {
+                state.url.clear();
+                state.host.clear();
+                state.org.clear();
+                state.repo.clear();
             }
-        }
+            AddRepoField::Host => {
+                state.host.clear();
+            }
+            AddRepoField::Org => {
+                state.org.clear();
+            }
+            AddRepoField::Repo => {
+                state.repo.clear();
+            }
+            AddRepoField::Branch => {
+                state.branch.clear();
+            }
+        },
 
         RepositoryAction::FormNextField => {
             state.focused_field = state.focused_field.next();

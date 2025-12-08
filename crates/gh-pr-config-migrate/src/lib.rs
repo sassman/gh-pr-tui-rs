@@ -61,14 +61,10 @@ fn migrate_session() -> Result<()> {
     let old_content = fs::read_to_string(old_path)
         .with_context(|| format!("Failed to read old session file: {:?}", old_path))?;
 
-    let old_session: OldSessionJson = serde_json::from_str(&old_content)
-        .with_context(|| "Failed to parse old session JSON")?;
+    let old_session: OldSessionJson =
+        serde_json::from_str(&old_content).with_context(|| "Failed to parse old session JSON")?;
 
-    log::info!(
-        "Migrating session from {:?} to {:?}",
-        old_path,
-        new_path
-    );
+    log::info!("Migrating session from {:?} to {:?}", old_path, new_path);
 
     // Create new session with migrated data
     // Note: We can only migrate the PR index, not the repository selection

@@ -2,9 +2,9 @@
 //!
 //! Handles loading and saving recently used repositories.
 
-use crate::DEFAULT_HOST;
 #[allow(deprecated)] // Intentionally using legacy path until migration complete
 use crate::files::{create_recent_repositories_file, open_recent_repositories_file};
+use crate::DEFAULT_HOST;
 use serde::{Deserialize, Serialize};
 use std::io::BufReader;
 
@@ -135,7 +135,12 @@ mod tests {
 
     #[test]
     fn test_with_host() {
-        let repo = RecentRepository::with_host("org", "repo", "main", Some("github.example.com".to_string()));
+        let repo = RecentRepository::with_host(
+            "org",
+            "repo",
+            "main",
+            Some("github.example.com".to_string()),
+        );
         assert_eq!(repo.host, Some("github.example.com".to_string()));
         assert_eq!(repo.effective_host(), "github.example.com");
         assert!(!repo.is_github_com());
@@ -144,7 +149,8 @@ mod tests {
     #[test]
     fn test_host_normalization() {
         // github.com should be normalized to None
-        let repo = RecentRepository::with_host("org", "repo", "main", Some("github.com".to_string()));
+        let repo =
+            RecentRepository::with_host("org", "repo", "main", Some("github.com".to_string()));
         assert!(repo.host.is_none());
         assert!(repo.is_github_com());
 
@@ -163,7 +169,8 @@ mod tests {
 
     #[test]
     fn test_host_serde_with_value() {
-        let repo = RecentRepository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
+        let repo =
+            RecentRepository::with_host("org", "repo", "main", Some("ghe.example.com".to_string()));
         let json = serde_json::to_string(&repo).unwrap();
         assert!(json.contains("ghe.example.com"));
 

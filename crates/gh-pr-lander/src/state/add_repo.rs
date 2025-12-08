@@ -103,7 +103,12 @@ impl AddRepoFormState {
 
     /// Create a Repository from this form
     pub fn to_repository(&self) -> Repository {
-        Repository::with_host(&self.org, &self.repo, self.effective_branch(), self.effective_host())
+        Repository::with_host(
+            &self.org,
+            &self.repo,
+            self.effective_branch(),
+            self.effective_host(),
+        )
     }
 }
 
@@ -120,11 +125,18 @@ fn parse_github_url(url: &str) -> Option<(Option<String>, String, String)> {
     let url = url.trim();
 
     // Try HTTPS format: https://host/org/repo[.git]
-    if let Some(rest) = url.strip_prefix("https://").or_else(|| url.strip_prefix("http://")) {
+    if let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    {
         // Split host from path
         if let Some((host, path)) = rest.split_once('/') {
             if let Some((org, repo)) = parse_org_repo_path(path) {
-                let host = if host == DEFAULT_HOST { None } else { Some(host.to_string()) };
+                let host = if host == DEFAULT_HOST {
+                    None
+                } else {
+                    Some(host.to_string())
+                };
                 return Some((host, org, repo));
             }
         }
@@ -134,7 +146,11 @@ fn parse_github_url(url: &str) -> Option<(Option<String>, String, String)> {
     if let Some(rest) = url.strip_prefix("git@") {
         if let Some((host, path)) = rest.split_once(':') {
             if let Some((org, repo)) = parse_org_repo_path(path) {
-                let host = if host == DEFAULT_HOST { None } else { Some(host.to_string()) };
+                let host = if host == DEFAULT_HOST {
+                    None
+                } else {
+                    Some(host.to_string())
+                };
                 return Some((host, org, repo));
             }
         }
@@ -145,7 +161,11 @@ fn parse_github_url(url: &str) -> Option<(Option<String>, String, String)> {
     if parts.len() >= 3 && parts[0].contains('.') {
         let host = parts[0];
         if let Some((org, repo)) = parse_org_repo_path(&parts[1..].join("/")) {
-            let host = if host == DEFAULT_HOST { None } else { Some(host.to_string()) };
+            let host = if host == DEFAULT_HOST {
+                None
+            } else {
+                Some(host.to_string())
+            };
             return Some((host, org, repo));
         }
     }
@@ -178,14 +198,21 @@ mod tests {
         let result = parse_github_url("https://github.com/cargo-generate/cargo-generate.git");
         assert_eq!(
             result,
-            Some((None, "cargo-generate".to_string(), "cargo-generate".to_string()))
+            Some((
+                None,
+                "cargo-generate".to_string(),
+                "cargo-generate".to_string()
+            ))
         );
     }
 
     #[test]
     fn test_parse_https_url_without_git() {
         let result = parse_github_url("https://github.com/rust-lang/rust");
-        assert_eq!(result, Some((None, "rust-lang".to_string(), "rust".to_string())));
+        assert_eq!(
+            result,
+            Some((None, "rust-lang".to_string(), "rust".to_string()))
+        );
     }
 
     #[test]
@@ -193,14 +220,21 @@ mod tests {
         let result = parse_github_url("git@github.com:cargo-generate/cargo-generate.git");
         assert_eq!(
             result,
-            Some((None, "cargo-generate".to_string(), "cargo-generate".to_string()))
+            Some((
+                None,
+                "cargo-generate".to_string(),
+                "cargo-generate".to_string()
+            ))
         );
     }
 
     #[test]
     fn test_parse_ssh_url_without_git() {
         let result = parse_github_url("git@github.com:rust-lang/rust");
-        assert_eq!(result, Some((None, "rust-lang".to_string(), "rust".to_string())));
+        assert_eq!(
+            result,
+            Some((None, "rust-lang".to_string(), "rust".to_string()))
+        );
     }
 
     #[test]
@@ -217,7 +251,11 @@ mod tests {
         let result = parse_github_url("https://github.example.com/org/repo");
         assert_eq!(
             result,
-            Some((Some("github.example.com".to_string()), "org".to_string(), "repo".to_string()))
+            Some((
+                Some("github.example.com".to_string()),
+                "org".to_string(),
+                "repo".to_string()
+            ))
         );
     }
 
@@ -226,7 +264,11 @@ mod tests {
         let result = parse_github_url("git@ghe.mycompany.com:team/project.git");
         assert_eq!(
             result,
-            Some((Some("ghe.mycompany.com".to_string()), "team".to_string(), "project".to_string()))
+            Some((
+                Some("ghe.mycompany.com".to_string()),
+                "team".to_string(),
+                "project".to_string()
+            ))
         );
     }
 
@@ -235,7 +277,11 @@ mod tests {
         let result = parse_github_url("ghe.example.com/org/repo");
         assert_eq!(
             result,
-            Some((Some("ghe.example.com".to_string()), "org".to_string(), "repo".to_string()))
+            Some((
+                Some("ghe.example.com".to_string()),
+                "org".to_string(),
+                "repo".to_string()
+            ))
         );
     }
 

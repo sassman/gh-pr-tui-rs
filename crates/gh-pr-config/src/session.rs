@@ -148,9 +148,12 @@ impl Session {
             &self.session.selected_repo_name,
             &self.session.selected_repo_branch,
         ) {
-            (Some(org), Some(name), Some(branch)) => {
-                Some((org, name, branch, self.session.selected_repo_host.as_deref()))
-            }
+            (Some(org), Some(name), Some(branch)) => Some((
+                org,
+                name,
+                branch,
+                self.session.selected_repo_host.as_deref(),
+            )),
             _ => None,
         }
     }

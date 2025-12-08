@@ -152,8 +152,8 @@ impl NavigationState {
 
         // Only scroll if cursor would be in lower half of viewport or above it
         let cursor_position_in_view = self.cursor_line.saturating_sub(self.scroll_offset);
-        let should_scroll = cursor_position_in_view > visible_height / 3
-            || self.cursor_line < self.scroll_offset;
+        let should_scroll =
+            cursor_position_in_view > visible_height / 3 || self.cursor_line < self.scroll_offset;
 
         if should_scroll {
             self.scroll_offset = desired_offset;
