@@ -11,7 +11,7 @@ members = [
     # "crates/gh-pr-tui",
     "crates/gh-pr-tui-command-palette",
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.dependencies]
 # Internal crates

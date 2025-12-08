@@ -10,8 +10,9 @@ pub struct MainViewState {
     pub repo_data: std::collections::HashMap<usize, RepositoryData>, // PR data per repository
 
     // Session restoration - pending selection to apply after repositories load
-    /// Pending repository selection from session (org, name, branch)
-    pub pending_session_repo: Option<(String, String, String)>,
+    /// Pending repository selection from session (org, name, branch, host)
+    /// host is None for github.com repositories
+    pub pending_session_repo: Option<(String, String, String, Option<String>)>,
     /// Pending PR number from session (not index)
     pub pending_session_pr_no: Option<usize>,
 }

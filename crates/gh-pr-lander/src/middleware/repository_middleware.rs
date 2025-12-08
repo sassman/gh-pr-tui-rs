@@ -43,7 +43,7 @@ impl RepositoryMiddleware {
             .main_view
             .repositories
             .get(repo_idx)
-            .map(|repo| format!("https://github.com/{}/{}", repo.org, repo.repo))
+            .map(|repo| repo.web_url())
     }
     /// Mark a repository as done loading and check if bulk load is complete
     fn mark_bulk_load_done(&mut self, repo: Repository, dispatcher: &Dispatcher) {
@@ -81,7 +81,7 @@ impl Middleware for RepositoryMiddleware {
                 if !recent_repos.is_empty() {
                     let repositories: Vec<Repository> = recent_repos
                         .into_iter()
-                        .map(|r| Repository::new(r.org, r.repo, r.branch))
+                        .map(|r| Repository::with_host(r.org, r.repo, r.branch, r.host))
                         .collect();
                     log::info!(
                         "RepositoryMiddleware: Found {} recent repositories",

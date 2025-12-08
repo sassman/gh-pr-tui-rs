@@ -37,7 +37,7 @@ impl SessionMiddleware {
 
         // Save current selection
         if let Some(repo) = state.main_view.repositories.get(selected_idx) {
-            session.set_selected_repo(&repo.org, &repo.repo, &repo.branch);
+            session.set_selected_repo(&repo.org, &repo.repo, &repo.branch, repo.host.as_deref());
 
             // Save selected PR number (not index) for this repository
             if let Some(repo_data) = state.main_view.repo_data.get(&selected_idx) {
@@ -57,7 +57,7 @@ impl SessionMiddleware {
             .main_view
             .repositories
             .iter()
-            .map(|r| RecentRepository::new(&r.org, &r.repo, &r.branch))
+            .map(|r| RecentRepository::with_host(&r.org, &r.repo, &r.branch, r.host.clone()))
             .collect();
 
         if let Err(e) = save_recent_repositories(&repos) {
@@ -84,8 +84,8 @@ impl Middleware for SessionMiddleware {
                     let session = Session::load();
 
                     // Dispatch session loaded action with selected repo info
-                    let selected_repo = session.selected_repo().map(|(org, name, branch)| {
-                        (org.to_string(), name.to_string(), branch.to_string())
+                    let selected_repo = session.selected_repo().map(|(org, name, branch, host)| {
+                        (org.to_string(), name.to_string(), branch.to_string(), host.map(|h| h.to_string()))
                     });
                     let selected_pr_no = session.selected_pr_no();
 

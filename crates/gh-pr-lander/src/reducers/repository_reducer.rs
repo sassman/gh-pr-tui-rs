@@ -70,6 +70,9 @@ pub fn reduce_add_repo_form(
                     state.url.push(*c);
                     state.parse_url_and_update();
                 }
+                AddRepoField::Host => {
+                    state.host.push(*c);
+                }
                 AddRepoField::Org => {
                     state.org.push(*c);
                 }
@@ -88,6 +91,9 @@ pub fn reduce_add_repo_form(
                     state.url.pop();
                     state.parse_url_and_update();
                 }
+                AddRepoField::Host => {
+                    state.host.pop();
+                }
                 AddRepoField::Org => {
                     state.org.pop();
                 }
@@ -104,8 +110,12 @@ pub fn reduce_add_repo_form(
             match state.focused_field {
                 AddRepoField::Url => {
                     state.url.clear();
+                    state.host.clear();
                     state.org.clear();
                     state.repo.clear();
+                }
+                AddRepoField::Host => {
+                    state.host.clear();
                 }
                 AddRepoField::Org => {
                     state.org.clear();

@@ -101,7 +101,7 @@ fn render(form: &AddRepoFormState, theme: &Theme, area: Rect, f: &mut Frame) {
 
     // Calculate centered area (65% width, fixed height)
     let popup_width = (area.width * 65 / 100).clamp(55, 80);
-    let popup_height = 16; // Fixed height for the form
+    let popup_height = 17; // Fixed height for the form (includes host field)
     let popup_x = (area.width.saturating_sub(popup_width)) / 2;
     let popup_y = (area.height.saturating_sub(popup_height)) / 2;
 
@@ -156,6 +156,7 @@ fn render(form: &AddRepoFormState, theme: &Theme, area: Rect, f: &mut Frame) {
             Constraint::Length(1), // Spacing
             Constraint::Length(1), // URL field
             Constraint::Length(1), // Spacing/separator
+            Constraint::Length(1), // Host field
             Constraint::Length(1), // Org field
             Constraint::Length(1), // Repo field
             Constraint::Length(1), // Branch field
@@ -191,10 +192,21 @@ fn render(form: &AddRepoFormState, theme: &Theme, area: Rect, f: &mut Frame) {
         chunks[3],
     );
 
-    // Org field
+    // Host field
     render_field(
         f,
         chunks[4],
+        "Host",
+        &form.host,
+        form.focused_field == AddRepoField::Host,
+        theme,
+        Some("leave empty for github.com"),
+    );
+
+    // Org field
+    render_field(
+        f,
+        chunks[5],
         "Organization",
         &form.org,
         form.focused_field == AddRepoField::Org,
@@ -205,7 +217,7 @@ fn render(form: &AddRepoFormState, theme: &Theme, area: Rect, f: &mut Frame) {
     // Repo field
     render_field(
         f,
-        chunks[5],
+        chunks[6],
         "Repository",
         &form.repo,
         form.focused_field == AddRepoField::Repo,
@@ -216,7 +228,7 @@ fn render(form: &AddRepoFormState, theme: &Theme, area: Rect, f: &mut Frame) {
     // Branch field
     render_field(
         f,
-        chunks[6],
+        chunks[7],
         "Branch",
         &form.branch,
         form.focused_field == AddRepoField::Branch,

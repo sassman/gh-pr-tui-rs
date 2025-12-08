@@ -8,8 +8,9 @@ pub enum SessionAction {
     /// Session state loaded from disk
     /// Contains the previously selected repository and PR number
     Loaded {
-        /// Selected repository as (org, name, branch)
-        selected_repo: Option<(String, String, String)>,
+        /// Selected repository as (org, name, branch, host)
+        /// host is None for github.com repositories
+        selected_repo: Option<(String, String, String, Option<String>)>,
         /// Selected PR number (not index)
         selected_pr_no: Option<usize>,
     },

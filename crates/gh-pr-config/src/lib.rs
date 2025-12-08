@@ -7,6 +7,9 @@
 //! - Session persistence (Session)
 //! - Recent repositories persistence
 
+/// Default GitHub host (public GitHub)
+pub const DEFAULT_HOST: &str = "github.com";
+
 pub mod app_config;
 pub mod config_file;
 pub mod files; // Deprecated: use `paths` module instead

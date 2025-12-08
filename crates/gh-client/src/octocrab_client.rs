@@ -21,12 +21,30 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct OctocrabClient {
     octocrab: Arc<Octocrab>,
+    /// API base URL (e.g., "https://api.github.com" or "https://ghe.example.com/api/v3")
+    api_base_url: String,
 }
 
 impl OctocrabClient {
-    /// Create a new client with the given octocrab instance
+    /// Create a new client with the given octocrab instance (defaults to github.com)
     pub fn new(octocrab: Arc<Octocrab>) -> Self {
-        Self { octocrab }
+        Self {
+            octocrab,
+            api_base_url: "https://api.github.com".to_string(),
+        }
+    }
+
+    /// Create a new client with a custom API base URL (for GitHub Enterprise)
+    pub fn with_base_url(octocrab: Arc<Octocrab>, api_base_url: impl Into<String>) -> Self {
+        Self {
+            octocrab,
+            api_base_url: api_base_url.into(),
+        }
+    }
+
+    /// Get the API base URL
+    pub fn api_base_url(&self) -> &str {
+        &self.api_base_url
     }
 
     /// Get a reference to the underlying octocrab instance
@@ -517,8 +535,8 @@ impl GitHubClient for OctocrabClient {
         // since the body is empty and can't be parsed as JSON
         // Note: _delete requires full URL since it bypasses parameterized_uri
         let url = format!(
-            "https://api.github.com/repos/{}/{}/pulls/comments/{}",
-            owner, repo, comment_id
+            "{}/repos/{}/{}/pulls/comments/{}",
+            self.api_base_url, owner, repo, comment_id
         );
 
         let response = self

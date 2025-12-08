@@ -16,6 +16,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::paths;
+use crate::DEFAULT_HOST;
 
 const SESSION_VERSION: u32 = 1;
 
@@ -32,6 +33,9 @@ pub struct SessionData {
     pub selected_repo_org: Option<String>,
     pub selected_repo_name: Option<String>,
     pub selected_repo_branch: Option<String>,
+    /// GitHub host (None = github.com)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_repo_host: Option<String>,
     /// Selected PR number (not index) - more stable across refreshes
     pub selected_pr_no: Option<usize>,
 }
@@ -121,11 +125,15 @@ impl Session {
         Ok(())
     }
 
-    /// Update selected repository
-    pub fn set_selected_repo(&mut self, org: &str, name: &str, branch: &str) {
+    /// Update selected repository (with optional host)
+    pub fn set_selected_repo(&mut self, org: &str, name: &str, branch: &str, host: Option<&str>) {
         self.session.selected_repo_org = Some(org.to_string());
         self.session.selected_repo_name = Some(name.to_string());
         self.session.selected_repo_branch = Some(branch.to_string());
+        // Normalize github.com to None
+        self.session.selected_repo_host = host
+            .filter(|h| *h != DEFAULT_HOST && !h.is_empty())
+            .map(|h| h.to_string());
     }
 
     /// Update selected PR number
@@ -133,14 +141,16 @@ impl Session {
         self.session.selected_pr_no = Some(pr_no);
     }
 
-    /// Get selected repository as tuple (org, name, branch)
-    pub fn selected_repo(&self) -> Option<(&str, &str, &str)> {
+    /// Get selected repository as tuple (org, name, branch, host)
+    pub fn selected_repo(&self) -> Option<(&str, &str, &str, Option<&str>)> {
         match (
             &self.session.selected_repo_org,
             &self.session.selected_repo_name,
             &self.session.selected_repo_branch,
         ) {
-            (Some(org), Some(name), Some(branch)) => Some((org, name, branch)),
+            (Some(org), Some(name), Some(branch)) => {
+                Some((org, name, branch, self.session.selected_repo_host.as_deref()))
+            }
             _ => None,
         }
     }
@@ -165,27 +175,65 @@ mod tests {
     #[test]
     fn test_set_selected_repo() {
         let mut session = Session::default();
-        session.set_selected_repo("owner", "repo", "main");
+        session.set_selected_repo("owner", "repo", "main", None);
 
-        let (org, name, branch) = session.selected_repo().unwrap();
+        let (org, name, branch, host) = session.selected_repo().unwrap();
         assert_eq!(org, "owner");
         assert_eq!(name, "repo");
         assert_eq!(branch, "main");
+        assert!(host.is_none());
+    }
+
+    #[test]
+    fn test_set_selected_repo_with_host() {
+        let mut session = Session::default();
+        session.set_selected_repo("owner", "repo", "main", Some("ghe.example.com"));
+
+        let (org, name, branch, host) = session.selected_repo().unwrap();
+        assert_eq!(org, "owner");
+        assert_eq!(name, "repo");
+        assert_eq!(branch, "main");
+        assert_eq!(host, Some("ghe.example.com"));
+    }
+
+    #[test]
+    fn test_host_normalization() {
+        let mut session = Session::default();
+        // github.com should be normalized to None
+        session.set_selected_repo("owner", "repo", "main", Some("github.com"));
+        let (_, _, _, host) = session.selected_repo().unwrap();
+        assert!(host.is_none());
     }
 
     #[test]
     fn test_session_serialization() {
         let mut session = Session::default();
-        session.set_selected_repo("cargo-generate", "cargo-generate", "main");
+        session.set_selected_repo("cargo-generate", "cargo-generate", "main", None);
         session.set_selected_pr_no(42);
 
         let toml_str = toml::to_string_pretty(&session).unwrap();
         assert!(toml_str.contains("[meta]"));
         assert!(toml_str.contains("[session]"));
         assert!(toml_str.contains("cargo-generate"));
+        // host should not be serialized when None
+        assert!(!toml_str.contains("selected_repo_host"));
 
         // Round-trip
         let parsed: Session = toml::from_str(&toml_str).unwrap();
         assert_eq!(parsed.selected_pr_no(), Some(42));
+    }
+
+    #[test]
+    fn test_session_serialization_with_host() {
+        let mut session = Session::default();
+        session.set_selected_repo("org", "repo", "main", Some("ghe.example.com"));
+
+        let toml_str = toml::to_string_pretty(&session).unwrap();
+        assert!(toml_str.contains("ghe.example.com"));
+
+        // Round-trip
+        let parsed: Session = toml::from_str(&toml_str).unwrap();
+        let (_, _, _, host) = parsed.selected_repo().unwrap();
+        assert_eq!(host, Some("ghe.example.com"));
     }
 }
