@@ -3,7 +3,7 @@
 //! Manages GitHub API clients for different hosts (github.com, GitHub Enterprise).
 //! Clients are lazily initialized and cached per host.
 
-use crate::{ApiCache, CacheMode, CachedGitHubClient, OctocrabClient};
+use crate::{ApiCache, CacheMode, CachedGitHubClient, OctocrabClient, DEFAULT_HOST};
 use anyhow::{Context, Result};
 use log::{debug, info};
 use octocrab::Octocrab;
@@ -50,12 +50,12 @@ impl TokenResolver {
     /// 2. `gh auth token --hostname {host}` command
     /// 3. `GITHUB_TOKEN` or `GH_TOKEN` (github.com only)
     pub async fn get_token(&self, host: Option<&str>) -> Result<String> {
-        let host = host.unwrap_or("github.com");
+        let host = host.unwrap_or(DEFAULT_HOST);
 
         // Try host-specific env var
         let env_key = format!(
             "GITHUB_TOKEN_{}",
-            host.replace('.', "_").replace('-', "_").to_uppercase()
+            host.replace(['.', '-'], "_").to_uppercase()
         );
         if let Ok(token) = std::env::var(&env_key) {
             debug!("Using token from env var {} for host {}", env_key, host);
@@ -82,7 +82,7 @@ impl TokenResolver {
         }
 
         // Fallback to default token (for github.com only)
-        if host == "github.com" {
+        if host == DEFAULT_HOST {
             if let Some(ref token) = self.default_token {
                 debug!("Using default token (GITHUB_TOKEN/GH_TOKEN) for github.com");
                 return Ok(token.clone());
@@ -164,7 +164,7 @@ impl ClientManager {
         &mut self,
         host: Option<&str>,
     ) -> Result<&CachedGitHubClient<OctocrabClient>> {
-        let key = host.unwrap_or("github.com").to_string();
+        let key = host.unwrap_or(DEFAULT_HOST).to_string();
 
         if !self.clients.contains_key(&key) {
             let client = self.create_client(host).await?;
@@ -179,7 +179,7 @@ impl ClientManager {
         &mut self,
         host: Option<&str>,
     ) -> Result<&mut CachedGitHubClient<OctocrabClient>> {
-        let key = host.unwrap_or("github.com").to_string();
+        let key = host.unwrap_or(DEFAULT_HOST).to_string();
 
         if !self.clients.contains_key(&key) {
             let client = self.create_client(host).await?;
@@ -191,7 +191,7 @@ impl ClientManager {
 
     /// Check if a client exists for the given host (without creating one)
     pub fn has_client(&self, host: Option<&str>) -> bool {
-        let key = host.unwrap_or("github.com");
+        let key = host.unwrap_or(DEFAULT_HOST);
         self.clients.contains_key(key)
     }
 
@@ -199,7 +199,7 @@ impl ClientManager {
     ///
     /// This can be useful for forcing re-authentication after token changes.
     pub fn remove_client(&mut self, host: Option<&str>) {
-        let key = host.unwrap_or("github.com");
+        let key = host.unwrap_or(DEFAULT_HOST);
         self.clients.remove(key);
     }
 
@@ -213,7 +213,7 @@ impl ClientManager {
     ) -> Result<CachedGitHubClient<OctocrabClient>> {
         // Ensure client exists
         let _ = self.get_client(host).await?;
-        let key = host.unwrap_or("github.com");
+        let key = host.unwrap_or(DEFAULT_HOST);
         Ok(self.clients.get(key).unwrap().clone())
     }
 
@@ -227,7 +227,7 @@ impl ClientManager {
         &self,
         host: Option<&str>,
     ) -> Result<CachedGitHubClient<OctocrabClient>> {
-        let effective_host = host.unwrap_or("github.com");
+        let effective_host = host.unwrap_or(DEFAULT_HOST);
         info!("Creating GitHub client for host: {}", effective_host);
 
         // Get token for this host
@@ -237,7 +237,7 @@ impl ClientManager {
         let mut builder = Octocrab::builder().personal_token(token);
 
         let base_url = if let Some(h) = host {
-            if h != "github.com" {
+            if h != DEFAULT_HOST {
                 let uri = format!("https://{}/api/v3", h);
                 builder = builder
                     .base_uri(&uri)
@@ -275,7 +275,7 @@ mod tests {
         for (host, expected_key) in hosts {
             let env_key = format!(
                 "GITHUB_TOKEN_{}",
-                host.replace('.', "_").replace('-', "_").to_uppercase()
+                host.replace(['.', '-'], "_").to_uppercase()
             );
             assert_eq!(env_key, expected_key, "Host '{}' should produce key '{}'", host, expected_key);
         }
@@ -287,7 +287,7 @@ mod tests {
         let manager = ClientManager::new(cache);
 
         assert!(!manager.has_client(None));
-        assert!(!manager.has_client(Some("github.com")));
+        assert!(!manager.has_client(Some(DEFAULT_HOST)));
         assert!(!manager.has_client(Some("ghe.example.com")));
     }
 

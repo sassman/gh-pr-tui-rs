@@ -1,6 +1,7 @@
 //! Add Repository Form State
 
 use crate::domain_models::Repository;
+use gh_pr_config::DEFAULT_HOST;
 
 /// Form field for the add repository dialog
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -93,7 +94,7 @@ impl AddRepoFormState {
 
     /// Get the host as Option (None for github.com or empty)
     pub fn effective_host(&self) -> Option<String> {
-        if self.host.is_empty() || self.host == "github.com" {
+        if self.host.is_empty() || self.host == DEFAULT_HOST {
             None
         } else {
             Some(self.host.clone())
@@ -123,7 +124,7 @@ fn parse_github_url(url: &str) -> Option<(Option<String>, String, String)> {
         // Split host from path
         if let Some((host, path)) = rest.split_once('/') {
             if let Some((org, repo)) = parse_org_repo_path(path) {
-                let host = if host == "github.com" { None } else { Some(host.to_string()) };
+                let host = if host == DEFAULT_HOST { None } else { Some(host.to_string()) };
                 return Some((host, org, repo));
             }
         }
@@ -133,7 +134,7 @@ fn parse_github_url(url: &str) -> Option<(Option<String>, String, String)> {
     if let Some(rest) = url.strip_prefix("git@") {
         if let Some((host, path)) = rest.split_once(':') {
             if let Some((org, repo)) = parse_org_repo_path(path) {
-                let host = if host == "github.com" { None } else { Some(host.to_string()) };
+                let host = if host == DEFAULT_HOST { None } else { Some(host.to_string()) };
                 return Some((host, org, repo));
             }
         }
@@ -144,7 +145,7 @@ fn parse_github_url(url: &str) -> Option<(Option<String>, String, String)> {
     if parts.len() >= 3 && parts[0].contains('.') {
         let host = parts[0];
         if let Some((org, repo)) = parse_org_repo_path(&parts[1..].join("/")) {
-            let host = if host == "github.com" { None } else { Some(host.to_string()) };
+            let host = if host == DEFAULT_HOST { None } else { Some(host.to_string()) };
             return Some((host, org, repo));
         }
     }
@@ -246,10 +247,12 @@ mod tests {
 
     #[test]
     fn test_to_repository_github_com() {
-        let mut state = AddRepoFormState::default();
-        state.org = "rust-lang".to_string();
-        state.repo = "rust".to_string();
-        state.branch = "master".to_string();
+        let state = AddRepoFormState {
+            org: "rust-lang".to_string(),
+            repo: "rust".to_string(),
+            branch: "master".to_string(),
+            ..Default::default()
+        };
 
         let repo = state.to_repository();
         assert_eq!(repo.org, "rust-lang");
@@ -260,10 +263,12 @@ mod tests {
 
     #[test]
     fn test_to_repository_enterprise() {
-        let mut state = AddRepoFormState::default();
-        state.host = "ghe.example.com".to_string();
-        state.org = "team".to_string();
-        state.repo = "project".to_string();
+        let state = AddRepoFormState {
+            host: "ghe.example.com".to_string(),
+            org: "team".to_string(),
+            repo: "project".to_string(),
+            ..Default::default()
+        };
 
         let repo = state.to_repository();
         assert_eq!(repo.org, "team");
