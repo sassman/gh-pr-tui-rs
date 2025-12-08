@@ -139,6 +139,27 @@ impl NavigationState {
         }
     }
 
+    /// Scroll viewport so cursor is near the top (within first ~5 lines).
+    ///
+    /// Used for hunk navigation where we want the target to be clearly visible
+    /// at the top of the viewport, not at the bottom.
+    pub fn scroll_cursor_near_top(&mut self, visible_height: usize) {
+        // Position cursor in the first few lines of the viewport
+        // Use a small margin (5 lines) to give context above if possible
+        const TOP_MARGIN: usize = 5;
+
+        let desired_offset = self.cursor_line.saturating_sub(TOP_MARGIN);
+
+        // Only scroll if cursor would be in lower half of viewport or above it
+        let cursor_position_in_view = self.cursor_line.saturating_sub(self.scroll_offset);
+        let should_scroll = cursor_position_in_view > visible_height / 3
+            || self.cursor_line < self.scroll_offset;
+
+        if should_scroll {
+            self.scroll_offset = desired_offset;
+        }
+    }
+
     /// Scroll down by half page.
     pub fn scroll_half_down(&mut self, visible_height: usize, max_lines: usize) {
         let half = visible_height / 2;
@@ -247,5 +268,31 @@ mod tests {
 
         nav.ensure_cursor_visible(20);
         assert_eq!(nav.scroll_offset, 31); // 50 - 20 + 1
+    }
+
+    #[test]
+    fn test_scroll_cursor_near_top() {
+        let mut nav = NavigationState::new();
+        nav.cursor_line = 100;
+        nav.scroll_offset = 0;
+
+        // When jumping to line 100, should scroll so it's near top
+        nav.scroll_cursor_near_top(30);
+        // cursor_line (100) - TOP_MARGIN (5) = 95
+        assert_eq!(nav.scroll_offset, 95);
+        // Cursor should now be at position 5 in the viewport
+        assert_eq!(nav.cursor_line - nav.scroll_offset, 5);
+    }
+
+    #[test]
+    fn test_scroll_cursor_near_top_already_visible() {
+        let mut nav = NavigationState::new();
+        nav.cursor_line = 10;
+        nav.scroll_offset = 5;
+
+        // Cursor at line 10 with offset 5 means it's at position 5 in viewport
+        // This is in the upper third, so no scroll should happen
+        nav.scroll_cursor_near_top(30);
+        assert_eq!(nav.scroll_offset, 5); // Should not change
     }
 }

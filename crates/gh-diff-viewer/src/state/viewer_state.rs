@@ -204,7 +204,8 @@ impl DiffViewerState {
         // Find first header after current cursor
         if let Some(&next) = headers.iter().find(|&&idx| idx > self.nav.cursor_line) {
             self.nav.cursor_line = next;
-            self.nav.ensure_cursor_visible(self.viewport_height);
+            // Scroll so hunk header is near top of viewport for better visibility
+            self.nav.scroll_cursor_near_top(self.viewport_height);
             true
         } else {
             false
@@ -221,7 +222,8 @@ impl DiffViewerState {
             .find(|&&idx| idx < self.nav.cursor_line)
         {
             self.nav.cursor_line = prev;
-            self.nav.ensure_cursor_visible(self.viewport_height);
+            // Scroll so hunk header is near top of viewport for better visibility
+            self.nav.scroll_cursor_near_top(self.viewport_height);
             true
         } else {
             false
