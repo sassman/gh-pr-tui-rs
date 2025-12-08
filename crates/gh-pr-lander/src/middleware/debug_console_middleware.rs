@@ -48,24 +48,23 @@ impl DebugConsoleMiddleware {
             return;
         }
 
-        // Initialize reader
+        // Initialize reader and dispatch initial lines
         {
             let mut reader_guard = self.reader.lock().unwrap();
             if reader_guard.is_none() {
                 let mut reader = FileLogReader::new(self.log_file.clone(), 10_000);
-                if let Err(e) = reader.read_initial() {
-                    log::warn!("Failed to read log file: {}", e);
+                match reader.read_initial() {
+                    Ok(initial_lines) if !initial_lines.is_empty() => {
+                        dispatcher.dispatch(Action::DebugConsole(
+                            DebugConsoleAction::LinesUpdated(initial_lines),
+                        ));
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to read log file: {}", e);
+                    }
+                    _ => {}
                 }
                 *reader_guard = Some(reader);
-            }
-        }
-
-        // Dispatch initial lines
-        if let Ok(reader_guard) = self.reader.lock() {
-            if let Some(reader) = reader_guard.as_ref() {
-                dispatcher.dispatch(Action::DebugConsole(DebugConsoleAction::LinesUpdated(
-                    reader.lines().to_vec(),
-                )));
             }
         }
 
@@ -78,7 +77,7 @@ impl DebugConsoleMiddleware {
         let dispatcher = dispatcher.clone();
 
         self.poll_thread = Some(thread::spawn(move || {
-            let poll_interval = Duration::from_millis(100);
+            let poll_interval = Duration::from_millis(400);
 
             loop {
                 // Check if we should stop
@@ -86,14 +85,11 @@ impl DebugConsoleMiddleware {
                     break;
                 }
 
-                // Poll for new lines
-                let lines = {
+                // Poll for new lines (returns only delta)
+                let new_lines = {
                     if let Ok(mut reader_guard) = reader.lock() {
                         if let Some(reader) = reader_guard.as_mut() {
-                            match reader.poll_new_lines() {
-                                Ok(new_count) if new_count > 0 => Some(reader.lines().to_vec()),
-                                _ => None,
-                            }
+                            reader.poll_new_lines().ok()
                         } else {
                             None
                         }
@@ -102,10 +98,13 @@ impl DebugConsoleMiddleware {
                     }
                 };
 
-                if let Some(lines) = lines {
-                    dispatcher.dispatch(Action::DebugConsole(DebugConsoleAction::LinesUpdated(
-                        lines,
-                    )));
+                // Only dispatch if we have new lines
+                if let Some(lines) = new_lines {
+                    if !lines.is_empty() {
+                        dispatcher.dispatch(Action::DebugConsole(
+                            DebugConsoleAction::LinesUpdated(lines),
+                        ));
+                    }
                 }
 
                 thread::sleep(poll_interval);

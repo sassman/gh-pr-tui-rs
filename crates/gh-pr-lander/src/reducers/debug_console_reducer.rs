@@ -44,8 +44,9 @@ pub fn reduce_debug_console(
         DebugConsoleAction::SetVisibleHeight(height) => {
             state.visible_height = *height;
         }
-        DebugConsoleAction::LinesUpdated(lines) => {
-            state.lines = lines.clone();
+        DebugConsoleAction::LinesUpdated(new_lines) => {
+            // Append delta to ring buffer (handles capacity internally)
+            state.append_lines(new_lines.clone());
             // Keep scroll position valid
             let new_max = state.lines.len().saturating_sub(state.visible_height);
             state.scroll_offset = state.scroll_offset.min(new_max);

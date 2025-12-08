@@ -58,11 +58,11 @@ impl<'a> DebugConsoleViewModel<'a> {
     ///
     /// scroll_offset = 0 means we're at the bottom (showing newest logs)
     /// scroll_offset > 0 means we've scrolled up (showing older logs)
-    pub fn visible_lines(&self, available_height: usize) -> &[String] {
+    pub fn visible_lines(&self, available_height: usize) -> Vec<&String> {
         let total = self.state.lines.len();
 
         if total == 0 || available_height == 0 {
-            return &[];
+            return Vec::new();
         }
 
         // Cap scroll_offset to valid range
@@ -75,7 +75,7 @@ impl<'a> DebugConsoleViewModel<'a> {
         // start is the index of the first visible line
         let start = end.saturating_sub(available_height);
 
-        &self.state.lines[start..end]
+        self.state.lines.iter().skip(start).take(end - start).collect()
     }
 
     /// Get the title for the debug console with scroll indicator

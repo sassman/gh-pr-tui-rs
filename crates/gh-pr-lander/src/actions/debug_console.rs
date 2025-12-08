@@ -2,8 +2,10 @@
 //!
 //! Actions specific to the debug console overlay.
 
+use std::fmt;
+
 /// Actions for the Debug Console screen
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum DebugConsoleAction {
     // Navigation (translated from NavigationAction)
     /// Scroll to next log entry
@@ -22,4 +24,19 @@ pub enum DebugConsoleAction {
     SetVisibleHeight(usize),
     /// Batch update of lines from middleware
     LinesUpdated(Vec<String>),
+}
+
+// Custom Debug to avoid logging full line contents (prevents feedback loop)
+impl fmt::Debug for DebugConsoleAction {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NavigateNext => write!(f, "NavigateNext"),
+            Self::NavigatePrevious => write!(f, "NavigatePrevious"),
+            Self::NavigateToTop => write!(f, "NavigateToTop"),
+            Self::NavigateToBottom => write!(f, "NavigateToBottom"),
+            Self::Clear => write!(f, "Clear"),
+            Self::SetVisibleHeight(h) => write!(f, "SetVisibleHeight({})", h),
+            Self::LinesUpdated(lines) => write!(f, "LinesUpdated(<{} lines>)", lines.len()),
+        }
+    }
 }

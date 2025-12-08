@@ -129,8 +129,8 @@ fn render(state: &DebugConsoleState, theme: &Theme, keymap: &Keymap, area: Rect,
     // Get visible lines and format them
     let visible_lines = view_model.visible_lines(available_height);
     let formatted_lines: Vec<Line> = visible_lines
-        .iter()
-        .map(|line| Line::from(Span::styled(line.clone(), theme.text())))
+        .into_iter()
+        .map(|line| Line::from(Span::styled(line.as_str(), theme.text())))
         .collect();
 
     let paragraph = Paragraph::new(formatted_lines)
