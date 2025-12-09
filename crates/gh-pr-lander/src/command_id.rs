@@ -282,9 +282,7 @@ impl CommandId {
             Self::DiffViewerPageDown => {
                 Action::DiffViewer(crate::actions::DiffViewerAction::PageDown)
             }
-            Self::DiffViewerPageUp => {
-                Action::DiffViewer(crate::actions::DiffViewerAction::PageUp)
-            }
+            Self::DiffViewerPageUp => Action::DiffViewer(crate::actions::DiffViewerAction::PageUp),
 
             // General
             Self::GlobalClose => Action::Global(GlobalAction::Close),
