@@ -1,19 +1,37 @@
 //! File-based logging using simplelog
 //!
-//! Logs are written to a timestamped file in the current working directory.
+//! Log file location depends on build type:
+//! - Debug builds: current working directory (for development convenience)
+//! - Release builds: cache directory (~/.cache/gh-pr-lander/ on Linux)
+//!
 //! The debug console reads from this file when opened.
 
 use simplelog::{ConfigBuilder, LevelFilter, WriteLogger};
 use std::fs::File;
 use std::path::PathBuf;
 
+/// Get the log file path based on build type
+fn log_file_path() -> PathBuf {
+    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let filename = format!("debug-{}.log", timestamp);
+
+    if cfg!(debug_assertions) {
+        // Debug build: log in current directory for convenience
+        PathBuf::from(filename)
+    } else {
+        // Release build: log in cache directory
+        gh_pr_config::cache_dir()
+            .map(|dir| dir.join(&filename))
+            .unwrap_or_else(|_| PathBuf::from(filename))
+    }
+}
+
 /// Initialize file-based logging
 ///
-/// Creates a log file with timestamp in the current directory.
+/// Creates a log file with timestamp.
 /// Returns the path to the log file for use by the debug console.
 pub fn init() -> PathBuf {
-    let timestamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-    let log_file = PathBuf::from(format!("debug-{}.log", timestamp));
+    let log_file = log_file_path();
 
     let level = std::env::var("RUST_LOG")
         .map(|v| match v.to_lowercase().as_str() {
