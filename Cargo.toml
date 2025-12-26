@@ -26,7 +26,7 @@ anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
-zip = "6.0"
+zip = "7.0"
 bytes = "1.11"
 tokio = { version = "1", features = ["full"] }
 log = "0.4"
