@@ -38,7 +38,7 @@ ansi-parser = "0.9"
 octocrab = "0.48.0"
 
 # TUI
-ratatui = "0.29.0"
+ratatui = "0.30.0"
 
 # Date/Time
 chrono = { version = "0.4", features = ["serde"] }
